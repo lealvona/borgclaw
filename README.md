@@ -42,6 +42,8 @@ BorgClaw is a secure, modular personal AI assistant built in Rust. It combines t
 
 ## Quick Start
 
+For a full step-by-step setup, see `docs/quickstart.md`.
+
 ### Prerequisites
 - Rust 1.75+
 - SQLite (for memory)
@@ -59,6 +61,19 @@ cargo build --release
 # Run
 cargo run --release --bin borgclaw repl
 ```
+
+### Convenience Scripts
+
+- Bash:
+  - `./scripts/bootstrap.sh`
+  - `./scripts/repl.sh`
+  - `./scripts/gateway.sh`
+  - `./scripts/doctor.sh`
+- PowerShell:
+  - `./scripts/bootstrap.ps1`
+  - `./scripts/repl.ps1`
+  - `./scripts/gateway.ps1`
+  - `./scripts/doctor.ps1`
 
 ### Configuration
 
