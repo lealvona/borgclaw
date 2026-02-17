@@ -1,0 +1,40 @@
+[workspace]
+members = [
+    "borgclaw-core",
+    "borgclaw-cli",
+    "borgclaw-gateway",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["BorgClaw Team"]
+license = "MIT"
+
+[workspace.dependencies]
+borgclaw-core = { path = "borgclaw-core" }
+borgclaw-cli = { path = "borgclaw-cli" }
+borgclaw-gateway = { path = "borgclaw-gateway" }
+
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+thiserror = "1"
+async-trait = "0.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio", "chrono"] }
+clap = { version = "4", features = ["derive", "env"] }
+axum = { version = "0.7", features = ["ws"] }
+tokio-tungstenite = "0.21"
+futures-util = "0.3"
+regex = "1"
+cron = "0.15"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
