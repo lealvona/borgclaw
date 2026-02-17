@@ -1,0 +1,21 @@
+[package]
+name = "borgclaw-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "borgclaw"
+path = "src/main.rs"
+
+[dependencies]
+borgclaw-core.workspace = true
+tokio.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+dirs = "5"
+toml = "0.8"

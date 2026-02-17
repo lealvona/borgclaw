@@ -1,0 +1,25 @@
+[package]
+name = "borgclaw-gateway"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "borgclaw-gateway"
+path = "src/main.rs"
+
+[dependencies]
+borgclaw-core.workspace = true
+tokio.workspace = true
+axum.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
