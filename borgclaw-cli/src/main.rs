@@ -1,16 +1,16 @@
 //! BorgClaw CLI - Command-line interface with REPL
 
+mod onboarding;
+
+use crate::onboarding::{run_init, InitArgs, StartTarget};
 use borgclaw_core::{
-    agent::{Agent, AgentContext, AgentResponse, SimpleAgent, builtin_tools},
-    channel::{create_cli_message, CliChannel},
+    agent::{Agent, AgentContext, SimpleAgent},
     config::{load_config, save_config, AppConfig},
     security::SecurityLayer,
     AppState,
 };
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 use tracing::{error, info};
 
 /// BorgClaw CLI
@@ -20,14 +20,10 @@ use tracing::{error, info};
 struct Cli {
     #[command(subcommand)]
     command: Commands,
-    
+
     /// Config file path
     #[arg(short, long, global = true)]
     config: Option<PathBuf>,
-    
-    /// Verbose output
-    #[arg(short, long, global = true)]
-    verbose: bool,
 }
 
 #[derive(Subcommand)]
@@ -36,8 +32,8 @@ enum Commands {
     Repl,
     /// Send a message
     Send { message: String },
-    /// Initialize configuration
-    Init,
+    /// Interactive onboarding and initialization
+    Init(InitArgs),
     /// Configure settings
     Config {
         #[command(subcommand)]
@@ -58,7 +54,7 @@ enum Commands {
 enum ConfigAction {
     /// Show current config
     Show,
-    /// Set a config value
+    /// Set a config value (dot notation, e.g. agent.model)
     Set { key: String, value: String },
     /// Reset to defaults
     Reset,
@@ -74,30 +70,26 @@ enum SkillsAction {
 
 #[tokio::main]
 async fn main() {
-    // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive(tracing::Level::INFO.into()),
         )
         .init();
-    
+
     let cli = Cli::parse();
-    
-    // Get config path
+
     let config_path = cli.config.unwrap_or_else(|| {
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("borgclaw")
             .join("config.toml")
     });
-    
-    // Ensure config directory exists
+
     if let Some(parent) = config_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    
-    // Load or create config
+
     let config = if config_path.exists() {
         load_config(&config_path).unwrap_or_else(|e| {
             error!("Failed to load config: {}", e);
@@ -106,64 +98,69 @@ async fn main() {
     } else {
         AppConfig::default()
     };
-    
-    // Handle commands
+
     match cli.command {
         Commands::Repl => repl(config, config_path).await,
         Commands::Send { message } => send_message(config, message).await,
-        Commands::Init => init_config(&config_path, config).await,
+        Commands::Init(args) => {
+            match run_init(&config_path, config, &args).await {
+                Ok(outcome) => {
+                    if let Err(e) = save_config(&outcome.config, &config_path) {
+                        error!("Failed to save config: {}", e);
+                        return;
+                    }
+                    println!("Saved config to {:?}", config_path);
+                    if outcome.start == StartTarget::Repl {
+                        repl(outcome.config, config_path).await;
+                    }
+                }
+                Err(e) => error!("Init failed: {}", e),
+            }
+        }
         Commands::Config { action } => config_action(&config_path, config, action).await,
-        Commands::Skills { action } => skills_action(config, action).await,
+        Commands::Skills { action } => skills_action(action).await,
         Commands::Status => status(config).await,
         Commands::Doctor => doctor(config).await,
     }
 }
 
-async fn repl(mut config: AppConfig, config_path: PathBuf) {
+async fn repl(config: AppConfig, _config_path: PathBuf) {
     info!("Starting BorgClaw REPL...");
-    
-    // Initialize agent
+
     let mut agent = SimpleAgent::new(config.agent.clone());
-    
-    // Register built-in tools
     for tool in borgclaw_core::agent::builtin_tools() {
         agent.register_tool(tool);
     }
-    
-    // Create app state
+
     let state = AppState::new(config.clone());
-    
-    // Replace agent in state
     *state.agent.write().await = Some(Box::new(agent));
-    
+
     println!("🦞 BorgClaw REPL (type 'exit' to quit, 'help' for commands)\n");
-    
-    // Simple REPL loop
+
     loop {
         print!("> ");
         std::io::Write::flush(&mut std::io::stdout()).unwrap();
-        
+
         let mut input = String::new();
         if std::io::stdin().read_line(&mut input).unwrap() == 0 {
             break;
         }
-        
+
         let input = input.trim();
         if input.is_empty() {
             continue;
         }
-        
+
         if input == "exit" || input == "quit" {
             println!("Goodbye!");
             break;
         }
-        
+
         if input == "help" {
             print_help();
             continue;
         }
-        
-        // Create message context
+
         let ctx = AgentContext {
             session_id: borgclaw_core::agent::SessionId::new(),
             message: input.to_string(),
@@ -174,8 +171,7 @@ async fn repl(mut config: AppConfig, config_path: PathBuf) {
             },
             metadata: std::collections::HashMap::new(),
         };
-        
-        // Process message
+
         if let Some(ref mut agent) = *state.agent.write().await {
             let response = agent.process(&ctx).await;
             println!("{}", response.text);
@@ -185,7 +181,6 @@ async fn repl(mut config: AppConfig, config_path: PathBuf) {
 
 async fn send_message(config: AppConfig, message: String) {
     let mut agent = SimpleAgent::new(config.agent.clone());
-    
     let ctx = AgentContext {
         session_id: borgclaw_core::agent::SessionId::new(),
         message,
@@ -196,24 +191,8 @@ async fn send_message(config: AppConfig, message: String) {
         },
         metadata: std::collections::HashMap::new(),
     };
-    
     let response = agent.process(&ctx).await;
     println!("{}", response.text);
-}
-
-async fn init_config(path: &PathBuf, config: AppConfig) {
-    if path.exists() {
-        println!("Config already exists at {:?}", path);
-        return;
-    }
-    
-    if let Err(e) = save_config(&config, &path.to_owned()) {
-        error!("Failed to save config: {}", e);
-        return;
-    }
-    
-    println!("Initialized config at {:?}", path);
-    println!("\nEdit the config file to customize your setup, then run 'borgclaw repl' to start.");
 }
 
 async fn config_action(path: &PathBuf, mut config: AppConfig, action: ConfigAction) {
@@ -223,11 +202,19 @@ async fn config_action(path: &PathBuf, mut config: AppConfig, action: ConfigActi
             println!("{}", toml);
         }
         ConfigAction::Set { key, value } => {
-            println!("Setting {} = {} (not implemented)", key, value);
+            if set_config_key(&mut config, &key, &value) {
+                if let Err(e) = save_config(&config, path) {
+                    error!("Failed to save config: {}", e);
+                    return;
+                }
+                println!("Updated {}", key);
+            } else {
+                println!("Unsupported key: {}", key);
+            }
         }
         ConfigAction::Reset => {
             config = AppConfig::default();
-            if let Err(e) = save_config(&config, &path) {
+            if let Err(e) = save_config(&config, path) {
                 error!("Failed to save config: {}", e);
                 return;
             }
@@ -236,19 +223,56 @@ async fn config_action(path: &PathBuf, mut config: AppConfig, action: ConfigActi
     }
 }
 
-async fn skills_action(config: AppConfig, action: SkillsAction) {
+fn set_config_key(config: &mut AppConfig, key: &str, value: &str) -> bool {
+    match key {
+        "agent.provider" => config.agent.provider = value.to_string(),
+        "agent.model" => config.agent.model = value.to_string(),
+        "agent.max_tokens" => {
+            if let Ok(v) = value.parse::<u32>() {
+                config.agent.max_tokens = v;
+            } else {
+                return false;
+            }
+        }
+        "agent.temperature" => {
+            if let Ok(v) = value.parse::<f32>() {
+                config.agent.temperature = v;
+            } else {
+                return false;
+            }
+        }
+        "security.wasm_sandbox" => {
+            if let Ok(v) = value.parse::<bool>() {
+                config.security.wasm_sandbox = v;
+            } else {
+                return false;
+            }
+        }
+        "security.docker_sandbox" => {
+            if let Ok(v) = value.parse::<bool>() {
+                config.security.docker_sandbox = v;
+            } else {
+                return false;
+            }
+        }
+        _ => return false,
+    }
+    true
+}
+
+async fn skills_action(action: SkillsAction) {
     match action {
         SkillsAction::List => {
             println!("Built-in skills:");
-            println!("  - memory_store: Store information in memory");
-            println!("  - memory_recall: Recall information from memory");
-            println!("  - execute_command: Execute a shell command");
-            println!("  - read_file: Read a file");
-            println!("  - list_directory: List directory contents");
-            println!("  - web_search: Search the web");
-            println!("  - fetch_url: Fetch URL content");
-            println!("  - message: Send a message");
-            println!("  - schedule_task: Schedule a task");
+            println!("  - memory_store");
+            println!("  - memory_recall");
+            println!("  - execute_command");
+            println!("  - read_file");
+            println!("  - list_directory");
+            println!("  - web_search");
+            println!("  - fetch_url");
+            println!("  - message");
+            println!("  - schedule_task");
         }
         SkillsAction::Install { name } => {
             println!("Installing skill '{}' (not implemented)", name);
@@ -263,8 +287,7 @@ async fn status(config: AppConfig) {
     println!("Provider: {}", config.agent.provider);
     println!("Workspace: {:?}", config.agent.workspace);
     println!("Heartbeat: {} minutes", config.agent.heartbeat_interval);
-    println!("");
-    println!("Channels:");
+    println!("\nChannels:");
     for (name, channel) in &config.channels {
         println!("  - {}: {}", name, if channel.enabled { "enabled" } else { "disabled" });
     }
@@ -272,29 +295,19 @@ async fn status(config: AppConfig) {
 
 async fn doctor(config: AppConfig) {
     println!("Running diagnostics...");
-    
-    // Check workspace
     if config.agent.workspace.exists() {
         println!("✓ Workspace exists");
     } else {
         println!("✗ Workspace does not exist: {:?}", config.agent.workspace);
     }
-    
-    // Check config
     println!("✓ Config loaded");
-    
-    // Check security
+
     let security = SecurityLayer::new();
     let check = security.check_command("rm -rf /");
     match check {
-        borgclaw_core::security::CommandCheck::Blocked(_) => {
-            println!("✓ Command blocklist working");
-        }
-        _ => {
-            println!("✗ Command blocklist not working");
-        }
+        borgclaw_core::security::CommandCheck::Blocked(_) => println!("✓ Command blocklist working"),
+        _ => println!("✗ Command blocklist not working"),
     }
-    
     println!("\nDiagnostics complete.");
 }
 

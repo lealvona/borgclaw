@@ -66,14 +66,37 @@ cargo run --release --bin borgclaw repl
 
 - Bash:
   - `./scripts/bootstrap.sh`
+  - `./scripts/onboarding.sh`
   - `./scripts/repl.sh`
   - `./scripts/gateway.sh`
   - `./scripts/doctor.sh`
 - PowerShell:
   - `./scripts/bootstrap.ps1`
+  - `./scripts/onboarding.ps1`
   - `./scripts/repl.ps1`
   - `./scripts/gateway.ps1`
   - `./scripts/doctor.ps1`
+
+### Interactive Onboarding
+
+Run the onboarding wizard:
+
+```bash
+cargo run --bin borgclaw -- init
+```
+
+Useful onboarding modes:
+
+```bash
+# list configured provider registry
+cargo run --bin borgclaw -- init --list-providers
+
+# force model refresh from provider APIs (where available)
+cargo run --bin borgclaw -- init --refresh-models
+
+# repeatable component registrar (title/chapter)
+cargo run --bin borgclaw -- init --component channel --chapter telegram --action add
+```
 
 ### Configuration
 

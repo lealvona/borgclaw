@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 /// Main application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppConfig {
     /// Agent configuration
     pub agent: AgentConfig,
@@ -19,6 +20,8 @@ pub struct AppConfig {
     pub scheduler: SchedulerConfig,
     /// Skills configuration
     pub skills: SkillsConfig,
+    /// Onboarding registrar (title/chapter tracking)
+    pub registrar: RegistrarConfig,
 }
 
 impl Default for AppConfig {
@@ -30,12 +33,22 @@ impl Default for AppConfig {
             memory: MemoryConfig::default(),
             scheduler: SchedulerConfig::default(),
             skills: SkillsConfig::default(),
+            registrar: RegistrarConfig::default(),
         }
     }
 }
 
+/// Onboarding registrar for component title/chapter mapping
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RegistrarConfig {
+    /// Title -> chapters mapping
+    pub chapters: HashMap<String, Vec<String>>,
+}
+
 /// Agent configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AgentConfig {
     /// Default model to use
     pub model: String,
@@ -69,6 +82,7 @@ impl Default for AgentConfig {
 
 /// Channel configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ChannelConfig {
     /// Enable this channel
     pub enabled: bool,
@@ -111,6 +125,7 @@ impl Default for ChannelConfig {
 
 /// Security configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SecurityConfig {
     /// Enable WASM sandbox
     pub wasm_sandbox: bool,
@@ -168,6 +183,7 @@ impl Default for SecurityConfig {
 
 /// Memory configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct MemoryConfig {
     /// Enable hybrid search
     pub hybrid_search: bool,
@@ -195,6 +211,7 @@ impl Default for MemoryConfig {
 
 /// Scheduler configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SchedulerConfig {
     /// Enable scheduler
     pub enabled: bool,
@@ -216,6 +233,7 @@ impl Default for SchedulerConfig {
 
 /// Skills configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SkillsConfig {
     /// Skills directory
     pub skills_path: PathBuf,
