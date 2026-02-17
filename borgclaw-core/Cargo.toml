@@ -19,6 +19,8 @@ chrono.workspace = true
 sqlx.workspace = true
 regex.workspace = true
 cron.workspace = true
+teloxide = { version = "0.13", features = ["full"] }
+log = "0.4"
 
 [features]
 default = []

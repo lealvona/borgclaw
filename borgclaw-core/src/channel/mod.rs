@@ -1,9 +1,11 @@
 //! Channel module - handles different messaging channels
 
 mod cli;
+mod telegram;
 mod traits;
 
 pub use cli::{CliChannel, create_cli_message};
+pub use telegram::TelegramChannel;
 pub use traits::{Channel, ChannelSender, ChannelStatus};
 
 use serde::{Deserialize, Serialize};
