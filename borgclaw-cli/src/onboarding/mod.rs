@@ -330,8 +330,55 @@ fn configure_channels(config: &mut AppConfig, theme: &ColorfulTheme, quick: bool
             entry.extra.insert("port".to_string(), toml::Value::Integer(port));
         }
         if channel == "Telegram" {
+            // Telegram: offer existing token OR create new via @BotFather
+            let token_choice = Select::with_theme(theme)
+                .with_prompt("Telegram bot setup")
+                .items(&[
+                    "I already have a bot token",
+                    "Create new bot via @BotFather",
+                ])
+                .default(0)
+                .interact()
+                .map_err(|e| e.to_string())?;
+            
+            let token = match token_choice {
+                0 => {
+                    // Existing token - prompt for it
+                    Password::with_theme(theme)
+                        .with_prompt("Enter your Telegram bot token")
+                        .allow_empty_password(false)
+                        .interact()
+                        .map_err(|e| e.to_string())?
+                }
+                1 => {
+                    // Show instructions for creating new bot
+                    println!();
+                    println!("{}", paint(INFO, "To create a new Telegram bot:"));
+                    println!("{}", paint(INFO, "1. Open Telegram and search for @BotFather"));
+                    println!("{}", paint(INFO, "2. Send /newbot command"));
+                    println!("{}", paint(INFO, "3. Follow prompts to name your bot"));
+                    println!("{}", paint(INFO, "4. Copy the token provided"));
+                    println!();
+                    let _ = Confirm::with_theme(theme)
+                        .with_prompt("Press Enter when you have your token...")
+                        .default(true)
+                        .interact();
+                    
+                    Password::with_theme(theme)
+                        .with_prompt("Enter your Telegram bot token")
+                        .allow_empty_password(false)
+                        .interact()
+                        .map_err(|e| e.to_string())?
+                }
+                _ => String::new(),
+            };
+            
+            if !token.is_empty() {
+                entry.credentials = Some(token);
+            }
+            
             let bot_name: String = Input::with_theme(theme)
-                .with_prompt("Telegram bot username (optional)")
+                .with_prompt("Telegram bot username (optional, e.g., mybot)")
                 .allow_empty(true)
                 .interact_text()
                 .map_err(|e| e.to_string())?;
