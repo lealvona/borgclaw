@@ -28,6 +28,14 @@ cargo build
 cargo run --bin borgclaw -- init
 ```
 
+This launches the interactive onboarding wizard with:
+
+- color-coded required vs optional prompts
+- live provider/model discovery (with fallback defaults)
+- repeatable update/delete flows on subsequent runs
+- automatic `.env` generation
+- optional auto-start into REPL
+
 Default config path:
 
 - Linux/macOS: `~/.config/borgclaw/config.toml`
@@ -59,6 +67,7 @@ Gateway endpoint:
 Use the scripts in `scripts/`:
 
 - `scripts/bootstrap.sh` or `scripts/bootstrap.ps1`
+- `scripts/onboarding.sh` or `scripts/onboarding.ps1`
 - `scripts/repl.sh` or `scripts/repl.ps1`
 - `scripts/gateway.sh` or `scripts/gateway.ps1`
 - `scripts/doctor.sh` or `scripts/doctor.ps1`
@@ -67,12 +76,24 @@ Examples:
 
 ```bash
 ./scripts/bootstrap.sh
+./scripts/onboarding.sh
 ./scripts/repl.sh
 ```
 
 ```powershell
 ./scripts/bootstrap.ps1
+./scripts/onboarding.ps1
 ./scripts/repl.ps1
+```
+
+### Component Registrar (Title + Chapter)
+
+Use onboarding in component mode to add/update/delete specific pieces:
+
+```bash
+cargo run --bin borgclaw -- init --component channel --chapter telegram --action add
+cargo run --bin borgclaw -- init --component sandbox --chapter docker --action update
+cargo run --bin borgclaw -- init --component channel --chapter telegram --action delete
 ```
 
 ## Troubleshooting
