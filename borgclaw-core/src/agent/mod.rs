@@ -1,9 +1,14 @@
 //! Agent core module - handles agent loop, tools, and session management
 
 mod session;
+mod subagent;
 mod tools;
 
 pub use session::{Session, SessionId};
+pub use subagent::{
+    SubAgentBuilder, SubAgentCoordinator, SubAgentError, SubAgentResult, SubAgentTask,
+    MemoryAccessType, TaskPriority, TaskStatus,
+};
 pub use tools::{builtin_tools, Tool, ToolCall, ToolResult, ToolSchema};
 
 use async_trait::async_trait;
