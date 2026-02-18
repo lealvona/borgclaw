@@ -1,12 +1,16 @@
 //! Channel module - handles different messaging channels
 
 mod cli;
+mod signal;
 mod telegram;
 mod traits;
+mod webhook;
 
 pub use cli::{CliChannel, create_cli_message};
+pub use signal::{SignalChannel, SignalChannelBuilder};
 pub use telegram::TelegramChannel;
 pub use traits::{Channel, ChannelSender, ChannelStatus};
+pub use webhook::{WebhookChannel, WebhookTrigger};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -89,6 +93,8 @@ pub struct OutboundMessage {
     pub content: MessagePayload,
     /// Reply to message ID
     pub reply_to: Option<String>,
+    /// Group ID for group messages
+    pub group_id: Option<String>,
 }
 
 impl OutboundMessage {
@@ -98,11 +104,17 @@ impl OutboundMessage {
             channel,
             content,
             reply_to: None,
+            group_id: None,
         }
     }
     
     pub fn with_reply(mut self, reply_to: impl Into<String>) -> Self {
         self.reply_to = Some(reply_to.into());
+        self
+    }
+
+    pub fn with_group(mut self, group_id: impl Into<String>) -> Self {
+        self.group_id = Some(group_id.into());
         self
     }
 }
@@ -153,7 +165,7 @@ pub enum ChannelError {
 }
 
 /// Channel configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChannelConfig {
     /// Channel type
     pub channel_type: ChannelType,
@@ -165,6 +177,9 @@ pub struct ChannelConfig {
     pub allow_from: Vec<String>,
     /// DM policy
     pub dm_policy: super::config::DmPolicy,
+    /// Extra configuration (channel-specific)
+    #[serde(flatten)]
+    pub extra: std::collections::HashMap<String, toml::Value>,
 }
 
 impl ChannelConfig {
@@ -175,6 +190,7 @@ impl ChannelConfig {
             credentials: None,
             allow_from: Vec::new(),
             dm_policy: super::config::DmPolicy::Pairing,
+            extra: std::collections::HashMap::new(),
         }
     }
 }
