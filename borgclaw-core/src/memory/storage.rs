@@ -40,7 +40,8 @@ impl SqliteMemory {
                 created_at TEXT NOT NULL,
                 accessed_at TEXT NOT NULL,
                 access_count INTEGER DEFAULT 0,
-                importance REAL DEFAULT 0.5
+                importance REAL DEFAULT 0.5,
+                group_id TEXT
             )
             "#,
         )
@@ -125,8 +126,8 @@ impl Memory for SqliteMemory {
         
         sqlx::query(
             r#"
-            INSERT OR REPLACE INTO memories (id, key, content, metadata, created_at, accessed_at, access_count, importance)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO memories (id, key, content, metadata, created_at, accessed_at, access_count, importance, group_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&entry.id)
@@ -137,6 +138,7 @@ impl Memory for SqliteMemory {
         .bind(entry.accessed_at.to_rfc3339())
         .bind(entry.access_count)
         .bind(entry.importance)
+        .bind(&entry.group_id)
         .execute(pool)
         .await
         .map_err(|e| MemoryError::StorageError(e.to_string()))?;
@@ -182,6 +184,7 @@ impl Memory for SqliteMemory {
                             .unwrap_or_else(|_| chrono::Utc::now()),
                         access_count,
                         importance: 0.5,
+                        group_id: None,
                     },
                     score: score.max(query.min_score),
                 }
@@ -217,6 +220,7 @@ impl Memory for SqliteMemory {
                     .unwrap_or_else(|_| chrono::Utc::now()),
                 access_count,
                 importance,
+                group_id: None,
             }
         }))
     }
@@ -260,5 +264,30 @@ impl Memory for SqliteMemory {
             .map_err(|e| MemoryError::StorageError(e.to_string()))?;
         
         Ok(())
+    }
+    
+    async fn clear_group(&self, group_id: &str) -> Result<(), MemoryError> {
+        let conn = self.conn.read().await;
+        let pool = conn.as_ref().ok_or_else(|| MemoryError::StorageError("Not initialized".to_string()))?;
+        
+        sqlx::query("DELETE FROM memories WHERE group_id = ?")
+            .bind(group_id)
+            .execute(pool)
+            .await
+            .map_err(|e| MemoryError::StorageError(e.to_string()))?;
+        
+        Ok(())
+    }
+    
+    async fn groups(&self) -> Result<Vec<String>, MemoryError> {
+        let conn = self.conn.read().await;
+        let pool = conn.as_ref().ok_or_else(|| MemoryError::StorageError("Not initialized".to_string()))?;
+        
+        let rows: Vec<(Option<String>,)> = sqlx::query_as("SELECT DISTINCT group_id FROM memories WHERE group_id IS NOT NULL")
+            .fetch_all(pool)
+            .await
+            .map_err(|e| MemoryError::StorageError(e.to_string()))?;
+        
+        Ok(rows.into_iter().filter_map(|(g,)| g).collect())
     }
 }
