@@ -1,6 +1,108 @@
+#!/usr/bin/env pwsh
 $ErrorActionPreference = "Stop"
 
-$Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-Set-Location $Root
+$ROOT_DIR = Split-Path -Parent $PSScriptRoot
+Set-Location $ROOT_DIR
 
-cargo run --bin borgclaw -- doctor
+Write-Host "[borgclaw] System Doctor" -ForegroundColor Cyan
+Write-Host "========================"
+Write-Host ""
+
+function Test-Tool {
+    param(
+        [string]$Command,
+        [string]$Description,
+        [bool]$Required = $false
+    )
+    
+    if (Get-Command $Command -ErrorAction SilentlyContinue) {
+        $version = switch ($Command) {
+            "rustc" { rustc --version 2>$null }
+            "cargo" { cargo --version 2>$null }
+            "node" { node --version 2>$null }
+            "git" { git --version 2>$null }
+            "bw" { (bw --version 2>$null | Select-Object -First 1) }
+            "op" { op --version 2>$null }
+            "signal-cli" { signal-cli --version 2>$null }
+            default { "installed" }
+        }
+        Write-Host "✓ $Description`: $version" -ForegroundColor Green
+        return $true
+    } else {
+        if ($Required) {
+            Write-Host "✗ $Description`: NOT FOUND (required)" -ForegroundColor Red
+            return $false
+        } else {
+            Write-Host "○ $Description`: NOT FOUND (optional)" -ForegroundColor Yellow
+            return $true
+        }
+    }
+}
+
+function Test-File {
+    param(
+        [string]$Path,
+        [string]$Description
+    )
+    
+    if (Test-Path $Path) {
+        Write-Host "✓ $Description`: exists" -ForegroundColor Green
+    } else {
+        Write-Host "○ $Description`: missing" -ForegroundColor Yellow
+    }
+}
+
+$errors = 0
+
+Write-Host "=== Required Tools ===" -ForegroundColor White
+if (-not (Test-Tool "rustc" "Rust compiler" $true)) { $errors++ }
+if (-not (Test-Tool "cargo" "Cargo build tool" $true)) { $errors++ }
+if (-not (Test-Tool "git" "Git version control" $true)) { $errors++ }
+
+Write-Host ""
+Write-Host "=== Optional Tools ===" -ForegroundColor White
+Test-Tool "node" "Node.js (for Playwright)" | Out-Null
+Test-Tool "signal-cli" "Signal CLI (for Signal channel)" | Out-Null
+Test-Tool "bw" "Bitwarden CLI (vault)" | Out-Null
+Test-Tool "op" "1Password CLI (vault)" | Out-Null
+
+Write-Host ""
+Write-Host "=== Project Files ===" -ForegroundColor White
+Test-File "Cargo.toml" "Workspace manifest"
+Test-File "borgclaw-core\Cargo.toml" "Core crate manifest"
+Test-File "borgclaw-cli\Cargo.toml" "CLI crate manifest"
+Test-File "borgclaw-gateway\Cargo.toml" "Gateway crate manifest"
+Test-File "config.toml" "Configuration file"
+
+Write-Host ""
+Write-Host "=== Build Status ===" -ForegroundColor White
+cargo check --quiet 2>$null
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "✓ Code compiles successfully" -ForegroundColor Green
+} else {
+    Write-Host "✗ Code has compilation errors" -ForegroundColor Red
+    $errors++
+}
+
+Write-Host ""
+Write-Host "=== Optional Components ===" -ForegroundColor White
+if (Test-Path ".local\tools\playwright") {
+    Write-Host "✓ Playwright: installed" -ForegroundColor Green
+} else {
+    Write-Host "○ Playwright: not installed (run .\scripts\install-playwright.ps1)" -ForegroundColor Yellow
+}
+
+if (Test-Path ".local\tools\whisper.cpp") {
+    Write-Host "✓ whisper.cpp: installed" -ForegroundColor Green
+} else {
+    Write-Host "○ whisper.cpp: not installed (run .\scripts\install-whisper.ps1)" -ForegroundColor Yellow
+}
+
+Write-Host ""
+Write-Host "========================"
+if ($errors -eq 0) {
+    Write-Host "✅ All checks passed!" -ForegroundColor Green
+} else {
+    Write-Host "❌ $errors error(s) found" -ForegroundColor Red
+    exit 1
+}
