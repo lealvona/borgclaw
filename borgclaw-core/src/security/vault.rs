@@ -1,0 +1,381 @@
+//! Vault integration - Bitwarden (primary) and 1Password (secondary)
+
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use chrono::{DateTime, Utc};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VaultItem {
+    pub id: String,
+    pub name: String,
+    pub folder: Option<String>,
+    pub item_type: VaultItemType,
+    pub created_at: Option<DateTime<Utc>>,
+    pub modified_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VaultItemType {
+    Login,
+    SecureNote,
+    Card,
+    Identity,
+}
+
+#[async_trait]
+pub trait VaultClient: Send + Sync {
+    async fn get_secret(&self, name: &str) -> Result<String, VaultError>;
+    async fn list_items(&self, folder: Option<&str>) -> Result<Vec<VaultItem>, VaultError>;
+    async fn create_item(&self, name: &str, value: &str, folder: Option<&str>) -> Result<String, VaultError>;
+    async fn update_item(&self, id: &str, value: &str) -> Result<(), VaultError>;
+    async fn delete_item(&self, id: &str) -> Result<(), VaultError>;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BitwardenConfig {
+    pub server_url: Option<String>,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    pub use_cli: bool,
+}
+
+impl Default for BitwardenConfig {
+    fn default() -> Self {
+        Self {
+            server_url: None,
+            client_id: None,
+            client_secret: None,
+            use_cli: true,
+        }
+    }
+}
+
+pub struct BitwardenClient {
+    config: BitwardenConfig,
+    session_key: Arc<RwLock<Option<String>>>,
+}
+
+impl BitwardenClient {
+    pub fn new(config: BitwardenConfig) -> Self {
+        Self {
+            config,
+            session_key: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    async fn ensure_unlocked(&self) -> Result<(), VaultError> {
+        if self.session_key.read().await.is_some() {
+            return Ok(());
+        }
+
+        if !self.config.use_cli {
+            return Err(VaultError::NotAuthenticated);
+        }
+
+        let output = tokio::process::Command::new("bw")
+            .arg("unlocked")
+            .output()
+            .await
+            .map_err(|e| VaultError::CliError(e.to_string()))?;
+
+        if !output.status.success() {
+            return Err(VaultError::NotAuthenticated);
+        }
+
+        *self.session_key.write().await = Some(String::new());
+        Ok(())
+    }
+
+    async fn run_bw(&self, args: &[&str]) -> Result<String, VaultError> {
+        self.ensure_unlocked().await?;
+
+        let output = tokio::process::Command::new("bw")
+            .args(args)
+            .output()
+            .await
+            .map_err(|e| VaultError::CliError(e.to_string()))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(VaultError::CliError(stderr.to_string()));
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+}
+
+#[async_trait]
+impl VaultClient for BitwardenClient {
+    async fn get_secret(&self, name: &str) -> Result<String, VaultError> {
+        let output = self.run_bw(&["get", "item", name]).await?;
+        
+        #[derive(Deserialize)]
+        struct BwItem {
+            login: Option<Login>,
+            notes: Option<String>,
+        }
+
+        #[derive(Deserialize)]
+        struct Login {
+            password: Option<String>,
+        }
+
+        let item: BwItem = serde_json::from_str(&output)
+            .map_err(|e| VaultError::ParseFailed(e.to_string()))?;
+
+        if let Some(login) = item.login {
+            if let Some(password) = login.password {
+                return Ok(password);
+            }
+        }
+
+        if let Some(notes) = item.notes {
+            return Ok(notes);
+        }
+
+        Err(VaultError::NotFound(name.to_string()))
+    }
+
+    async fn list_items(&self, folder: Option<&str>) -> Result<Vec<VaultItem>, VaultError> {
+        let folder_arg = match folder {
+            Some(f) => vec!["--folderid", f],
+            None => vec![],
+        };
+
+        let mut args = vec!["list", "items"];
+        args.extend(folder_arg.iter().map(|s| *s));
+        
+        let output = self.run_bw(&args.iter().map(|s| *s).collect::<Vec<_>>()).await?;
+
+        #[derive(Deserialize)]
+        struct BwListItem {
+            id: String,
+            name: String,
+            #[serde(rename = "folderId")]
+            folder_id: Option<String>,
+            #[serde(rename = "type")]
+            item_type: u32,
+            #[serde(rename = "creationTime")]
+            creation_time: Option<String>,
+            #[serde(rename = "revisionTime")]
+            revision_time: Option<String>,
+        }
+
+        let items: Vec<BwListItem> = serde_json::from_str(&output)
+            .map_err(|e| VaultError::ParseFailed(e.to_string()))?;
+
+        Ok(items.into_iter().map(|i| VaultItem {
+            id: i.id,
+            name: i.name,
+            folder: i.folder_id,
+            item_type: match i.item_type {
+                1 => VaultItemType::Login,
+                2 => VaultItemType::SecureNote,
+                3 => VaultItemType::Card,
+                4 => VaultItemType::Identity,
+                _ => VaultItemType::SecureNote,
+            },
+            created_at: i.creation_time.and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))),
+            modified_at: i.revision_time.and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))),
+        }).collect())
+    }
+
+    async fn create_item(&self, name: &str, value: &str, folder: Option<&str>) -> Result<String, VaultError> {
+        let item_json = serde_json::json!({
+            "name": name,
+            "notes": value,
+            "type": 2,
+            "folderId": folder
+        });
+
+        let temp_path = std::env::temp_dir().join(format!("bw_item_{}.json", uuid::Uuid::new_v4()));
+        std::fs::write(&temp_path, item_json.to_string())
+            .map_err(|e| VaultError::IoError(e.to_string()))?;
+
+        let output = self.run_bw(&["create", "item", &temp_path.to_string_lossy()]).await;
+
+        let _ = std::fs::remove_file(&temp_path);
+
+        #[derive(Deserialize)]
+        struct BwCreateResponse {
+            id: String,
+        }
+
+        let response: BwCreateResponse = serde_json::from_str(&output?)
+            .map_err(|e| VaultError::ParseFailed(e.to_string()))?;
+
+        Ok(response.id)
+    }
+
+    async fn update_item(&self, id: &str, value: &str) -> Result<(), VaultError> {
+        let item_json = serde_json::json!({
+            "notes": value,
+        });
+
+        let temp_path = std::env::temp_dir().join(format!("bw_item_{}.json", uuid::Uuid::new_v4()));
+        std::fs::write(&temp_path, item_json.to_string())
+            .map_err(|e| VaultError::IoError(e.to_string()))?;
+
+        let output = self.run_bw(&["edit", "item", id, &temp_path.to_string_lossy()]).await;
+
+        let _ = std::fs::remove_file(&temp_path);
+
+        output.map(|_| ())
+    }
+
+    async fn delete_item(&self, id: &str) -> Result<(), VaultError> {
+        self.run_bw(&["delete", "item", id]).await?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OnePasswordConfig {
+    pub vault: Option<String>,
+    pub account: Option<String>,
+}
+
+pub struct OnePasswordClient {
+    config: OnePasswordConfig,
+}
+
+impl OnePasswordClient {
+    pub fn new(config: OnePasswordConfig) -> Self {
+        Self { config }
+    }
+}
+
+#[async_trait]
+impl VaultClient for OnePasswordClient {
+    async fn get_secret(&self, name: &str) -> Result<String, VaultError> {
+        let mut args = vec!["item", "get", name, "--format", "json"];
+        
+        if let Some(ref vault) = self.config.vault {
+            args.extend(&["--vault", vault]);
+        }
+        if let Some(ref account) = self.config.account {
+            args.extend(&["--account", account]);
+        }
+
+        let output = tokio::process::Command::new("op")
+            .args(&args)
+            .output()
+            .await
+            .map_err(|e| VaultError::CliError(e.to_string()))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(VaultError::CliError(stderr.to_string()));
+        }
+
+        #[derive(Deserialize)]
+        struct OpItem {
+            #[serde(rename = "secureNote")]
+            secure_note: Option<SecureNote>,
+            login: Option<Login>,
+        }
+
+        #[derive(Deserialize)]
+        struct SecureNote {
+            notes: String,
+        }
+
+        #[derive(Deserialize)]
+        struct Login {
+            password: Option<String>,
+        }
+
+        let item: OpItem = serde_json::from_str(&String::from_utf8_lossy(&output.stdout))
+            .map_err(|e| VaultError::ParseFailed(e.to_string()))?;
+
+        if let Some(notes) = item.secure_note.map(|n| n.notes) {
+            return Ok(notes);
+        }
+
+        if let Some(login) = item.login {
+            if let Some(password) = login.password {
+                return Ok(password);
+            }
+        }
+
+        Err(VaultError::NotFound(name.to_string()))
+    }
+
+    async fn list_items(&self, _folder: Option<&str>) -> Result<Vec<VaultItem>, VaultError> {
+        let mut args = vec!["item", "list", "--format", "json"];
+        
+        if let Some(ref vault) = self.config.vault {
+            args.extend(&["--vault", vault]);
+        }
+        if let Some(ref account) = self.config.account {
+            args.extend(&["--account", account]);
+        }
+
+        let output = tokio::process::Command::new("op")
+            .args(&args)
+            .output()
+            .await
+            .map_err(|e| VaultError::CliError(e.to_string()))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(VaultError::CliError(stderr.to_string()));
+        }
+
+        #[derive(Deserialize)]
+        struct OpListItem {
+            id: String,
+            title: String,
+            vault: Option<String>,
+            #[serde(rename = "itemType")]
+            item_type: String,
+        }
+
+        let items: Vec<OpListItem> = serde_json::from_str(&String::from_utf8_lossy(&output.stdout))
+            .map_err(|e| VaultError::ParseFailed(e.to_string()))?;
+
+        Ok(items.into_iter().map(|i| VaultItem {
+            id: i.id,
+            name: i.title,
+            folder: i.vault,
+            item_type: VaultItemType::Login,
+            created_at: None,
+            modified_at: None,
+        }).collect())
+    }
+
+    async fn create_item(&self, _name: &str, _value: &str, _folder: Option<&str>) -> Result<String, VaultError> {
+        Err(VaultError::NotSupported("1Password create not implemented".to_string()))
+    }
+
+    async fn update_item(&self, _id: &str, _value: &str) -> Result<(), VaultError> {
+        Err(VaultError::NotSupported("1Password update not implemented".to_string()))
+    }
+
+    async fn delete_item(&self, _id: &str) -> Result<(), VaultError> {
+        Err(VaultError::NotSupported("1Password delete not implemented".to_string()))
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum VaultError {
+    #[error("CLI error: {0}")]
+    CliError(String),
+    
+    #[error("Parse failed: {0}")]
+    ParseFailed(String),
+    
+    #[error("IO error: {0}")]
+    IoError(String),
+    
+    #[error("Not authenticated")]
+    NotAuthenticated,
+    
+    #[error("Not found: {0}")]
+    NotFound(String),
+    
+    #[error("Not supported: {0}")]
+    NotSupported(String),
+}
