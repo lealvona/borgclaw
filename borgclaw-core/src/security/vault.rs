@@ -346,16 +346,91 @@ impl VaultClient for OnePasswordClient {
         }).collect())
     }
 
-    async fn create_item(&self, _name: &str, _value: &str, _folder: Option<&str>) -> Result<String, VaultError> {
-        Err(VaultError::NotSupported("1Password create not implemented".to_string()))
+    async fn create_item(&self, name: &str, value: &str, folder: Option<&str>) -> Result<String, VaultError> {
+        let mut args = vec!["item", "create", "--format", "json"];
+        
+        args.push(&format!("--title={}", name));
+        args.push(&format!("notesPlain={}", value));
+        
+        if let Some(folder) = folder {
+            args.extend(&["--vault", folder]);
+        } else if let Some(ref vault) = self.config.vault {
+            args.extend(&["--vault", vault]);
+        }
+        if let Some(ref account) = self.config.account {
+            args.extend(&["--account", account]);
+        }
+
+        let output = tokio::process::Command::new("op")
+            .args(&args)
+            .output()
+            .await
+            .map_err(|e| VaultError::CliError(e.to_string()))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(VaultError::CliError(stderr.to_string()));
+        }
+
+        #[derive(Deserialize)]
+        struct CreatedItem {
+            id: String,
+        }
+
+        let item: CreatedItem = serde_json::from_str(&String::from_utf8_lossy(&output.stdout))
+            .map_err(|e| VaultError::ParseFailed(e.to_string()))?;
+
+        Ok(item.id)
     }
 
-    async fn update_item(&self, _id: &str, _value: &str) -> Result<(), VaultError> {
-        Err(VaultError::NotSupported("1Password update not implemented".to_string()))
+    async fn update_item(&self, id: &str, value: &str) -> Result<(), VaultError> {
+        let mut args = vec!["item", "edit", id, "--format", "json"];
+        
+        args.push(&format!("notesPlain={}", value));
+        
+        if let Some(ref vault) = self.config.vault {
+            args.extend(&["--vault", vault]);
+        }
+        if let Some(ref account) = self.config.account {
+            args.extend(&["--account", account]);
+        }
+
+        let output = tokio::process::Command::new("op")
+            .args(&args)
+            .output()
+            .await
+            .map_err(|e| VaultError::CliError(e.to_string()))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(VaultError::CliError(stderr.to_string()));
+        }
+
+        Ok(())
     }
 
-    async fn delete_item(&self, _id: &str) -> Result<(), VaultError> {
-        Err(VaultError::NotSupported("1Password delete not implemented".to_string()))
+    async fn delete_item(&self, id: &str) -> Result<(), VaultError> {
+        let mut args = vec!["item", "delete", id];
+        
+        if let Some(ref vault) = self.config.vault {
+            args.extend(&["--vault", vault]);
+        }
+        if let Some(ref account) = self.config.account {
+            args.extend(&["--account", account]);
+        }
+
+        let output = tokio::process::Command::new("op")
+            .args(&args)
+            .output()
+            .await
+            .map_err(|e| VaultError::CliError(e.to_string()))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(VaultError::CliError(stderr.to_string()));
+        }
+
+        Ok(())
     }
 }
 

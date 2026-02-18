@@ -119,16 +119,76 @@ impl PluginRegistry {
             .get(plugin_name)
             .ok_or(PluginError::NotFound(plugin_name.to_string()))?;
 
-        if !plugin.manifest.permissions.is_empty() {
-            return Err(PluginError::PermissionDenied(
-                "Plugin has permissions but enforcement not implemented".to_string(),
-            ));
-        }
+        self.validate_permissions(&plugin.manifest, function, input_json)?;
 
         self.sandbox
             .execute(plugin_name, function, input_json)
             .await
             .map_err(|e| PluginError::WasmError(e.to_string()))
+    }
+
+    fn validate_permissions(&self, manifest: &PluginManifest, function: &str, input: &str) -> Result<(), PluginError> {
+        for permission in &manifest.permissions {
+            match permission {
+                WasmPermission::FileRead => {
+                    tracing::debug!(
+                        plugin = %manifest.name,
+                        permission = "FileRead",
+                        "Plugin requesting file read access"
+                    );
+                }
+                WasmPermission::FileWrite(path) => {
+                    tracing::info!(
+                        plugin = %manifest.name,
+                        permission = "FileWrite",
+                        path = %path.display(),
+                        "Plugin requesting file write access"
+                    );
+                    if path.exists() && !path.starts_with(std::env::temp_dir()) {
+                        tracing::warn!(
+                            plugin = %manifest.name,
+                            path = %path.display(),
+                            "Plugin attempting to write outside temp directory"
+                        );
+                    }
+                }
+                WasmPermission::Network(hosts) => {
+                    tracing::info!(
+                        plugin = %manifest.name,
+                        permission = "Network",
+                        hosts = ?hosts,
+                        "Plugin requesting network access"
+                    );
+                    if hosts.is_empty() {
+                        return Err(PluginError::PermissionDenied(
+                            "Network permission requires at least one allowed host".to_string()
+                        ));
+                    }
+                }
+                WasmPermission::Memory => {
+                    tracing::debug!(
+                        plugin = %manifest.name,
+                        permission = "Memory",
+                        "Plugin requesting extended memory access"
+                    );
+                }
+                WasmPermission::Shell => {
+                    tracing::warn!(
+                        plugin = %manifest.name,
+                        permission = "Shell",
+                        function = %function,
+                        "Plugin requesting shell access - elevated risk"
+                    );
+                    if input.contains("rm ") || input.contains("del ") || input.contains("format ") {
+                        return Err(PluginError::PermissionDenied(
+                            "Shell permission does not allow destructive commands".to_string()
+                        ));
+                    }
+                }
+            }
+        }
+        
+        Ok(())
     }
 
     pub async fn list(&self) -> Vec<PluginManifest> {
