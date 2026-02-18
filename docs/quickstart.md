@@ -1,103 +1,152 @@
-# BorgClaw Quickstart
+# Quick Start Guide
 
-This guide gets a local dev instance running in minutes.
+Get BorgClaw running in 5 minutes.
 
-## 1) Prerequisites
+## Prerequisites
 
-- Rust toolchain (`rustup`, `cargo`)
-- Git
+| Requirement | Version | Notes |
+|-------------|---------|-------|
+| Rust | 1.75+ | Install via [rustup](https://rustup.rs) |
+| Git | 2.0+ | For cloning and updates |
 
-Verify:
+### Optional
+| Tool | Purpose |
+|------|---------|
+| Node.js 18+ | Playwright browser automation |
+| signal-cli | Signal messaging channel |
+| bw (Bitwarden CLI) | Vault integration |
+| op (1Password CLI) | Secondary vault |
+
+## Step 1: Clone
 
 ```bash
-cargo --version
-rustc --version
+git clone https://github.com/lealvona/borgclaw.git
+cd borgclaw
 ```
 
-## 2) Build
+## Step 2: Bootstrap
 
-From repo root:
-
+**Linux/macOS:**
 ```bash
-cargo build
+./scripts/bootstrap.sh
 ```
 
-## 3) Initialize config
+**Windows:**
+```powershell
+.\scripts\bootstrap.ps1
+```
+
+This will:
+- Check prerequisites
+- Build the workspace
+- Create `.local/` directory structure
+- Add `.local/` to `.gitignore`
+
+## Step 3: Configure
+
+Run the interactive onboarding wizard:
 
 ```bash
 cargo run --bin borgclaw -- init
 ```
 
-This launches the interactive onboarding wizard with:
+You'll be prompted for:
+1. **AI Provider** - OpenAI, Anthropic, Google, or Ollama
+2. **API Key** - Stored in config or vault
+3. **Model Selection** - Choose from available models
+4. **Channels** - Enable Telegram, Signal, etc.
 
-- color-coded required vs optional prompts
-- live provider/model discovery (with fallback defaults)
-- repeatable update/delete flows on subsequent runs
-- automatic `.env` generation
-- optional auto-start into REPL
-
-Default config path:
-
-- Linux/macOS: `~/.config/borgclaw/config.toml`
-- Windows: `%APPDATA%\\borgclaw\\config.toml` (via `dirs::config_dir`)
-
-## 4) Start CLI REPL
+Alternatively, create config manually:
 
 ```bash
-cargo run --bin borgclaw -- repl
+mkdir -p ~/.config/borgclaw
+cat > ~/.config/borgclaw/config.toml << 'EOF'
+[agent]
+model = "claude-sonnet-4-20250514"
+provider = "anthropic"
+
+[security]
+wasm_sandbox = true
+EOF
 ```
 
-Useful REPL commands:
-
-- `help`
-- `exit`
-
-## 5) Start WebSocket gateway
-
+Set your API key:
 ```bash
-cargo run --bin borgclaw-gateway
+export ANTHROPIC_API_KEY="sk-ant-..."
 ```
 
-Gateway endpoint:
+## Step 4: Run
 
-- `ws://localhost:18789/ws`
-
-## 6) Convenience scripts
-
-Use the scripts in `scripts/`:
-
-- `scripts/bootstrap.sh` or `scripts/bootstrap.ps1`
-- `scripts/onboarding.sh` or `scripts/onboarding.ps1`
-- `scripts/repl.sh` or `scripts/repl.ps1`
-- `scripts/gateway.sh` or `scripts/gateway.ps1`
-- `scripts/doctor.sh` or `scripts/doctor.ps1`
-
-Examples:
+### REPL Mode (Interactive)
 
 ```bash
-./scripts/bootstrap.sh
-./scripts/onboarding.sh
 ./scripts/repl.sh
+# Or: cargo run --bin borgclaw -- repl
 ```
 
-```powershell
-./scripts/bootstrap.ps1
-./scripts/onboarding.ps1
-./scripts/repl.ps1
-```
-
-### Component Registrar (Title + Chapter)
-
-Use onboarding in component mode to add/update/delete specific pieces:
+### Gateway Mode (WebSocket)
 
 ```bash
-cargo run --bin borgclaw -- init --component channel --chapter telegram --action add
-cargo run --bin borgclaw -- init --component sandbox --chapter docker --action update
-cargo run --bin borgclaw -- init --component channel --chapter telegram --action delete
+./scripts/gateway.sh
+# Or: cargo run --bin borgclaw-gateway
+```
+
+Gateway endpoint: `ws://localhost:18789/ws`
+
+## Step 5: Verify
+
+```bash
+./scripts/doctor.sh    # Linux/macOS
+.\scripts\doctor.ps1   # Windows
+```
+
+Expected output:
+```
+=== Required Tools ===
+✓ rustc: 1.75.0
+✓ cargo: 1.75.0
+✓ git: 2.43.0
+
+=== Build Status ===
+✓ Code compiles successfully
+
+✅ All checks passed!
+```
+
+## Optional Components
+
+### Playwright (Browser Automation)
+
+```bash
+./scripts/install-playwright.sh    # Linux/macOS
+.\scripts\install-playwright.ps1   # Windows
+```
+
+### Whisper.cpp (Local STT)
+
+```bash
+./scripts/install-whisper.sh    # Linux/macOS
+.\scripts\install-whisper.ps1   # Windows
 ```
 
 ## Troubleshooting
 
-- Linker errors on Windows: ensure Visual Studio Build Tools / Windows SDK is installed.
-- `cargo` not found: restart shell after `rustup` install, or add cargo bin to `PATH`.
-- Gateway port conflict: stop process on `18789` or change source to bind another port.
+### Build fails with "linker not found"
+- **Ubuntu/Debian**: `sudo apt install build-essential`
+- **macOS**: `xcode-select --install`
+- **Windows**: Install Visual Studio Build Tools
+
+### "Permission denied" on scripts
+```bash
+chmod +x scripts/*.sh
+```
+
+### Gateway port conflict
+Stop process on port 18789 or modify source to bind another port.
+
+## Next Steps
+
+- [Configure channels](channels.md) - Telegram, Signal, Webhook
+- [Set up memory](memory.md) - Session and solution patterns
+- [Add integrations](integrations.md) - GitHub, Google, Browser
+- [Review security](security.md) - WASM sandbox, vault

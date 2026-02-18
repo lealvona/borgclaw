@@ -1,104 +1,133 @@
-# BorgClaw 🦞
+# BorgClaw
 
-> Personal AI Agent Framework combining the best of OpenClaw-family frameworks.
+> Personal AI Agent Framework — Secure, Modular, Extensible
 
-BorgClaw is a secure, modular personal AI assistant built in Rust. It combines the best features from OpenClaw, ZeroClaw, NanoClaw, IronClaw, PicoClaw, and other frameworks in the ecosystem.
+BorgClaw is a Rust-based personal AI assistant combining the best features from the OpenClaw-family frameworks. It provides trait-based modularity, defense-in-depth security, and comprehensive integrations.
 
 ## Features
 
-### Core
-- **Trait-based architecture** - Swappable implementations for all components
-- **Hybrid memory** - Vector + keyword search (SQLite FTS5)
-- **Skills system** - SKILL.md standard parser
-- **Multi-channel** - Telegram, CLI, WebSocket, Signal (planned)
+### Channels
+- **Telegram** - Full bot support via teloxide
+- **Signal** - signal-cli JSON polling with graceful degradation
+- **Webhook** - HTTP triggers with rate limiting and secret verification
+- **CLI** - Interactive REPL
+- **WebSocket** - Real-time gateway for web clients
+
+### Memory Systems
+- **Hybrid search** - SQLite + FTS5 full-text search
+- **Per-group isolation** - Separate memory contexts per conversation
+- **Session auto-compaction** - Configurable context window management
+- **Solution patterns** - Store and recall reusable solutions
+- **Heartbeat engine** - Scheduled background tasks with cron expressions
+- **Sub-agents** - Parallel background task execution
+
+### Skills & Integrations
+- **GitHub** - Repos, PRs, issues, releases with safety rules
+- **Google Workspace** - Gmail, Drive, Calendar via OAuth2
+- **MCP Protocol** - Model Context Protocol client (Stdio, SSE, WebSocket)
+- **Browser Automation** - Playwright bridge + CDP fallback
+- **Speech-to-Text** - OpenAI, Open WebUI, whisper.cpp
+- **Text-to-Speech** - ElevenLabs streaming synthesis
+- **Image Generation** - DALL-E 3, Stable Diffusion
+- **QR Codes** - Generation (PNG/SVG/Terminal)
+- **URL Shortening** - is.gd, tinyurl, YOURLS
+- **Plugin SDK** - WASM sandboxed tools
 
 ### Security (Defense in Depth)
-- **WASM Sandbox** - Isolated tool execution
-- **Command blocklist** - Blocks dangerous system commands
-- **Pairing codes** - 6-digit authentication
+- **WASM Sandbox** - Isolated tool execution via wasmtime
+- **Command blocklist** - Regex-based dangerous command blocking
+- **Pairing codes** - 6-digit channel authentication
 - **Prompt injection defense** - Pattern detection + sanitization
-- **Secret leak detection** - API key protection
+- **Secret leak detection** - API key redaction
 - **Encrypted secrets** - ChaCha20-Poly1305
-
-### Automation
-- **Cron scheduling** - Time-based jobs
-- **Heartbeat system** - Proactive background tasks
-- **Background sub-agents** - Parallel task execution
-- **Webhook triggers** - External automation
+- **Vault integration** - Bitwarden (primary), 1Password (secondary)
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│                   BorgClaw                     │
-├─────────────────────────────────────────────────┤
-│  Gateway (Router)  →  Agent Core  →  Tools    │
-│         ↓                  ↓            ↓     │
-│   Channels           Memory        WASM Sandbox │
-│   (Telegram,        (Hybrid)       Security    │
-│    CLI, Web)                                       │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                        BorgClaw                             │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
+│  │Telegram  │  │ Signal   │  │ Webhook  │  │   CLI    │   │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘   │
+│       │             │             │             │          │
+│       └─────────────┴──────┬──────┴─────────────┘          │
+│                            ▼                                │
+│                   ┌────────────────┐                       │
+│                   │  Message Router │                       │
+│                   └────────┬───────┘                       │
+│                            ▼                                │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │                    Agent Core                        │   │
+│  │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌────────┐ │   │
+│  │  │ Memory  │  │ Session │  │Solution │  │Heartbeat│ │   │
+│  │  └─────────┘  └─────────┘  └─────────┘  └────────┘ │   │
+│  └────────────────────────┬────────────────────────────┘   │
+│                           ▼                                 │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │                    Skills Layer                      │   │
+│  │  GitHub │ Google │ Browser │ STT/TTS │ Image │ QR   │   │
+│  └────────────────────────┬────────────────────────────┘   │
+│                           ▼                                 │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │                  Security Layer                      │   │
+│  │  WASM Sandbox │ Secrets │ Pairing │ Injection Def   │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ## Quick Start
 
-For a full step-by-step setup, see `docs/quickstart.md`.
-
 ### Prerequisites
-- Rust 1.75+
-- SQLite (for memory)
+- Rust 1.75+ (via [rustup](https://rustup.rs))
+- Git
+- SQLite (bundled with Rust crate)
 
-### Build
+### Installation
 
 ```bash
 # Clone
 git clone https://github.com/lealvona/borgclaw.git
 cd borgclaw
 
-# Build
-cargo build --release
-
-# Run
-cargo run --release --bin borgclaw repl
+# Bootstrap (checks dependencies, builds, creates .local/)
+./scripts/bootstrap.sh    # Linux/macOS
+.\scripts\bootstrap.ps1   # Windows
 ```
 
-### Convenience Scripts
-
-- Bash:
-  - `./scripts/bootstrap.sh`
-  - `./scripts/onboarding.sh`
-  - `./scripts/repl.sh`
-  - `./scripts/gateway.sh`
-  - `./scripts/doctor.sh`
-- PowerShell:
-  - `./scripts/bootstrap.ps1`
-  - `./scripts/onboarding.ps1`
-  - `./scripts/repl.ps1`
-  - `./scripts/gateway.ps1`
-  - `./scripts/doctor.ps1`
-
-### Interactive Onboarding
-
-Run the onboarding wizard:
+### Onboarding
 
 ```bash
+# Interactive setup
+./scripts/onboarding.sh    # Linux/macOS
+.\scripts\onboarding.ps1   # Windows
+
+# Or directly
 cargo run --bin borgclaw -- init
 ```
 
-Useful onboarding modes:
+### Running
 
 ```bash
-# list configured provider registry
-cargo run --bin borgclaw -- init --list-providers
+# REPL mode
+./scripts/repl.sh
+# Or: cargo run --bin borgclaw -- repl
 
-# force model refresh from provider APIs (where available)
-cargo run --bin borgclaw -- init --refresh-models
-
-# repeatable component registrar (title/chapter)
-cargo run --bin borgclaw -- init --component channel --chapter telegram --action add
+# WebSocket gateway
+./scripts/gateway.sh
+# Or: cargo run --bin borgclaw-gateway
 ```
 
-### Configuration
+### System Check
+
+```bash
+./scripts/doctor.sh    # Verify all components
+```
+
+## Configuration
 
 Create `~/.config/borgclaw/config.toml`:
 
@@ -115,47 +144,103 @@ prompt_injection_defense = true
 
 [memory]
 hybrid_search = true
+session_max_entries = 100
+
+[channels.telegram]
+enabled = true
+token = "${TELEGRAM_BOT_TOKEN}"
+
+[channels.signal]
+enabled = false
+
+[channels.webhook]
+enabled = true
+port = 8080
+secret = "${WEBHOOK_SECRET}"
 ```
 
-## Usage
+## Optional Components
 
-### CLI REPL
+### Playwright (Browser Automation)
+
 ```bash
-borgclaw repl
+./scripts/install-playwright.sh    # Linux/macOS
+.\scripts\install-playwright.ps1   # Windows
 ```
 
-### Send a message
+### Whisper.cpp (Local STT)
+
 ```bash
-borgclaw send "Hello, help me write a function"
+./scripts/install-whisper.sh    # Linux/macOS
+.\scripts\install-whisper.ps1   # Windows
 ```
 
-### WebSocket Gateway
+### Bitwarden CLI (Vault)
+
 ```bash
-# Start gateway on port 18789
-cargo run --bin borgclaw-gateway
+# Linux/macOS
+bw install
+
+# Authenticate
+bw login
+export BW_SESSION=$(bw unlock --raw)
 ```
 
-Connect via WebSocket: `ws://localhost:18789/ws`
+### 1Password CLI (Secondary Vault)
 
-## Modules
+```bash
+# Install from https://1password.com/downloads/command-line/
+op signin
+```
 
-| Module | Description |
-|--------|-------------|
-| `borgclaw-core` | Core library with traits and implementations |
-| `borgclaw-cli` | CLI with REPL |
-| `borgclaw-gateway` | WebSocket gateway |
+## Project Structure
 
-## Reference Implementations
+```
+borgclaw/
+├── borgclaw-core/         # Core library
+│   ├── src/
+│   │   ├── agent/         # Agent, tools, subagents
+│   │   ├── channel/       # Telegram, Signal, Webhook, CLI
+│   │   ├── memory/        # Storage, session, solution, heartbeat
+│   │   ├── security/      # WASM, secrets, pairing, vault
+│   │   ├── skills/        # GitHub, Google, Browser, STT, TTS, etc.
+│   │   └── mcp/           # MCP protocol client
+│   └── Cargo.toml
+├── borgclaw-cli/          # CLI binary
+├── borgclaw-gateway/      # WebSocket gateway
+├── scripts/               # Convenience scripts
+│   ├── bootstrap.sh/ps1
+│   ├── doctor.sh/ps1
+│   ├── onboarding.sh/ps1
+│   ├── install-playwright.sh/ps1
+│   └── install-whisper.sh/ps1
+├── docs/                  # Documentation
+├── .local/                # Local data (gitignored)
+│   ├── tools/             # Installed tools
+│   ├── data/              # Runtime data
+│   └── cache/             # Cache files
+└── config.toml            # Example config
+```
 
-BorgClaw synthesizes features from:
+## Documentation
+
+- [Quick Start Guide](docs/quickstart.md) - Step-by-step setup
+- [Onboarding](docs/onboarding.md) - Configuration wizard
+- [Channels](docs/channels.md) - Messaging integrations
+- [Memory](docs/memory.md) - Storage and retrieval
+- [Skills](docs/skills.md) - Tool integrations
+- [Security](docs/security.md) - Defense in depth
+- [Integrations](docs/integrations.md) - External services
+
+## Origin
+
+BorgClaw synthesizes features from the OpenClaw family:
 - **OpenClaw** - Full-featured, skills system
 - **ZeroClaw** - Rust trait-based, AIEOS identity
 - **NanoClaw** - Container isolation
 - **IronClaw** - WASM sandbox, security
 - **PicoClaw** - Ultra-lightweight
 - **TinyClaw** - Multi-agent teams
-- **NanoBot** - Python, message bus
-- **Agent Zero** - Self-expanding tools
 
 ## License
 
