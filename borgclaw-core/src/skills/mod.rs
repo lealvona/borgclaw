@@ -1,8 +1,27 @@
 //! Skills module - SKILL.md parser and skill management
 
 mod parser;
+pub mod github;
+pub mod google;
+pub mod browser;
+pub mod stt;
+pub mod tts;
+pub mod image;
+pub mod qr;
+pub mod url_shortener;
+pub mod plugin;
 
 pub use parser::{SkillCommand, SkillManifest};
+
+pub use github::{GitHubClient, GitHubConfig, GitHubSafety, RepoAccess, OperationType};
+pub use google::{GoogleAuth, GoogleOAuthConfig, GmailClient, DriveClient, CalendarClient};
+pub use browser::{BrowserSkill, BrowserConfig, BrowserType, PlaywrightClient, Cookie};
+pub use stt::{SttClient, SttBackend, AudioFormat};
+pub use tts::{TtsClient, ElevenLabsConfig, Voice};
+pub use image::{ImageClient, ImageBackend, ImageParams, ImageResult, ImageFormat};
+pub use qr::{QrSkill, QrFormat};
+pub use url_shortener::{UrlShortener, UrlShortenerProvider};
+pub use plugin::{PluginRegistry, PluginManifest, WasmPermission};
 
 use std::collections::HashMap;
 use std::path::PathBuf;
