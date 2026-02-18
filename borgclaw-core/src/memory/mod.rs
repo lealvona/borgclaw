@@ -1,12 +1,19 @@
-//! Memory module - hybrid vector + keyword search
+//! Memory module - hybrid vector + keyword search with per-group isolation
 
 mod storage;
+mod session;
+mod solution;
+mod heartbeat;
 
 pub use storage::SqliteMemory;
+pub use session::{SessionMemory, SessionMessage, SessionCompactor};
+pub use solution::{SolutionMemory, Solution, SolutionPattern};
+pub use heartbeat::{HeartbeatEngine, HeartbeatTask, HeartbeatResult};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use chrono::{DateTime, Utc};
 
 /// Memory entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,13 +27,15 @@ pub struct MemoryEntry {
     /// Metadata
     pub metadata: HashMap<String, String>,
     /// Created at
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: DateTime<Utc>,
     /// Accessed at
-    pub accessed_at: chrono::DateTime<chrono::Utc>,
+    pub accessed_at: DateTime<Utc>,
     /// Access count
     pub access_count: u32,
     /// Importance score (0-1)
     pub importance: f32,
+    /// Group ID for per-group isolation
+    pub group_id: Option<String>,
 }
 
 /// Memory query
@@ -38,6 +47,8 @@ pub struct MemoryQuery {
     pub limit: usize,
     /// Minimum relevance score
     pub min_score: f32,
+    /// Filter by group ID
+    pub group_id: Option<String>,
 }
 
 impl Default for MemoryQuery {
@@ -46,6 +57,17 @@ impl Default for MemoryQuery {
             query: String::new(),
             limit: 5,
             min_score: 0.5,
+            group_id: None,
+        }
+    }
+}
+
+impl MemoryQuery {
+    pub fn for_group(query: impl Into<String>, group_id: impl Into<String>) -> Self {
+        Self {
+            query: query.into(),
+            group_id: Some(group_id.into()),
+            ..Default::default()
         }
     }
 }
@@ -80,6 +102,12 @@ pub trait Memory: Send + Sync {
     
     /// Clear all memories
     async fn clear(&self) -> Result<(), MemoryError>;
+    
+    /// Clear memories for a specific group
+    async fn clear_group(&self, group_id: &str) -> Result<(), MemoryError>;
+    
+    /// Get all group IDs
+    async fn groups(&self) -> Result<Vec<String>, MemoryError>;
 }
 
 /// Memory errors
@@ -91,11 +119,13 @@ pub enum MemoryError {
     NotFound(String),
     #[error("Query error: {0}")]
     QueryError(String),
+    #[error("Compaction error: {0}")]
+    CompactionError(String),
 }
 
 /// Create a new memory entry
 pub fn new_entry(key: impl Into<String>, content: impl Into<String>) -> MemoryEntry {
-    let now = chrono::Utc::now();
+    let now = Utc::now();
     MemoryEntry {
         id: uuid::Uuid::new_v4().to_string(),
         key: key.into(),
@@ -105,5 +135,17 @@ pub fn new_entry(key: impl Into<String>, content: impl Into<String>) -> MemoryEn
         accessed_at: now,
         access_count: 0,
         importance: 0.5,
+        group_id: None,
     }
+}
+
+/// Create a new memory entry for a group
+pub fn new_entry_for_group(
+    key: impl Into<String>,
+    content: impl Into<String>,
+    group_id: impl Into<String>,
+) -> MemoryEntry {
+    let mut entry = new_entry(key, content);
+    entry.group_id = Some(group_id.into());
+    entry
 }
