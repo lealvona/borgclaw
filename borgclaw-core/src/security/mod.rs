@@ -13,7 +13,7 @@ pub use vault::{
 };
 pub use wasm::WasmSandbox;
 
-use super::config::{ApprovalMode, InjectionAction, SecurityConfig};
+use super::config::{ApprovalMode, InjectionAction, LeakAction, SecurityConfig};
 use chrono::{Duration, Utc};
 use regex::Regex;
 use std::collections::HashMap;
@@ -152,6 +152,10 @@ impl SecurityLayer {
 
     pub fn configured_for_leak_detection(&self) -> bool {
         self.config.secret_leak_detection
+    }
+
+    pub fn leak_action(&self) -> &LeakAction {
+        &self.config.leak_action
     }
 
     pub fn approval_mode(&self) -> &ApprovalMode {
@@ -483,6 +487,20 @@ mod tests {
 
         assert_eq!(count, 1);
         assert!(redacted.contains("[REDACTED_SECRET]"));
+    }
+
+    #[test]
+    fn documented_leak_detection_aliases_parse() {
+        let config: SecurityConfig = toml::from_str(
+            r#"
+            leak_detection = true
+            leak_action = "block"
+            "#,
+        )
+        .unwrap();
+
+        assert!(config.secret_leak_detection);
+        assert_eq!(config.leak_action, LeakAction::Block);
     }
 
     #[test]
