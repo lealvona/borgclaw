@@ -3,6 +3,7 @@
 use crate::memory::{new_entry, Memory, MemoryQuery, SqliteMemory};
 use crate::scheduler::{new_job, JobTrigger, Scheduler, SchedulerTrait};
 use crate::security::{CommandCheck, SecurityLayer};
+use crate::skills::PluginRegistry;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -180,6 +181,7 @@ pub struct ToolRuntime {
     pub workspace_root: PathBuf,
     pub memory: Arc<SqliteMemory>,
     pub scheduler: Arc<Mutex<Scheduler>>,
+    pub plugins: Arc<PluginRegistry>,
     pub security: Arc<SecurityLayer>,
 }
 
@@ -187,16 +189,23 @@ impl ToolRuntime {
     pub async fn from_config(
         agent: &crate::config::AgentConfig,
         memory_config: &crate::config::MemoryConfig,
+        skills_config: &crate::config::SkillsConfig,
         security_config: &crate::config::SecurityConfig,
     ) -> Result<Self, String> {
         let workspace_root = canonical_or_current(&agent.workspace);
         let memory = Arc::new(SqliteMemory::new(memory_config.memory_path.clone()));
         memory.init().await.map_err(|e| e.to_string())?;
+        let plugins = Arc::new(PluginRegistry::new());
+        plugins
+            .load_from_dir(&skills_config.skills_path)
+            .await
+            .map_err(|e| e.to_string())?;
 
         Ok(Self {
             workspace_root,
             memory,
             scheduler: Arc::new(Mutex::new(Scheduler::new())),
+            plugins,
             security: Arc::new(SecurityLayer::with_config(security_config.clone())),
         })
     }
@@ -251,6 +260,8 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "schedule_task" => schedule_task(&call.arguments, runtime).await,
         "approve" => approve_tool(&call.arguments, runtime).await,
         "web_search" => web_search(&call.arguments).await,
+        "plugin_list" => plugin_list(runtime).await,
+        "plugin_invoke" => plugin_invoke(&call.arguments, runtime).await,
         other => ToolResult::err(format!("unknown tool: {}", other)),
     }
 }
@@ -534,6 +545,48 @@ async fn web_search(arguments: &HashMap<String, serde_json::Value>) -> ToolResul
         .with_metadata("result_count", results.len().to_string())
 }
 
+async fn plugin_list(runtime: &ToolRuntime) -> ToolResult {
+    let plugins = runtime.plugins.list().await;
+    if plugins.is_empty() {
+        return ToolResult::ok("no plugins loaded");
+    }
+
+    ToolResult::ok(
+        plugins
+            .into_iter()
+            .map(|plugin| format!("{} {} - {}", plugin.name, plugin.version, plugin.description))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+async fn plugin_invoke(arguments: &HashMap<String, serde_json::Value>, runtime: &ToolRuntime) -> ToolResult {
+    let plugin = match get_required_string(arguments, "plugin") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let function = arguments
+        .get("function")
+        .and_then(|value| value.as_str())
+        .unwrap_or("invoke")
+        .to_string();
+    let input = arguments
+        .get("input")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let input_json = match serde_json::to_string(&input) {
+        Ok(json) => json,
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
+
+    match runtime.plugins.invoke(&plugin, &function, &input_json).await {
+        Ok(output) => ToolResult::ok(output)
+            .with_metadata("plugin", plugin)
+            .with_metadata("function", function),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
 async fn approve_tool(arguments: &HashMap<String, serde_json::Value>, runtime: &ToolRuntime) -> ToolResult {
     let tool = match get_required_string(arguments, "tool") {
         Ok(value) => value,
@@ -682,6 +735,10 @@ mod tests {
                 memory_path: root.join("memory"),
                 ..Default::default()
             },
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
             &SecurityConfig {
                 approval_mode: ApprovalMode::Supervised,
                 ..Default::default()
@@ -750,6 +807,73 @@ mod tests {
         assert_eq!(results[0].title, "Example & One");
         assert_eq!(results[0].url, "https://example.com/one");
         assert_eq!(results[0].snippet.as_deref(), Some("First snippet"));
+    }
+
+    #[tokio::test]
+    async fn plugin_list_reports_empty_registry() {
+        let root = std::env::temp_dir().join(format!("borgclaw_plugin_list_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                memory_path: root.join("memory"),
+                ..Default::default()
+            },
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let result = execute_tool(&ToolCall::new("plugin_list", HashMap::new()), &runtime).await;
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(result.success);
+        assert_eq!(result.output, "no plugins loaded");
+    }
+
+    #[tokio::test]
+    async fn plugin_invoke_fails_for_missing_plugin() {
+        let root = std::env::temp_dir().join(format!("borgclaw_plugin_invoke_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                memory_path: root.join("memory"),
+                ..Default::default()
+            },
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let result = execute_tool(
+            &ToolCall::new(
+                "plugin_invoke",
+                HashMap::from([("plugin".to_string(), serde_json::json!("missing"))]),
+            ),
+            &runtime,
+        )
+        .await;
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(!result.success);
+        assert!(result.output.contains("Plugin not found"));
     }
 }
 
@@ -900,6 +1024,42 @@ pub fn builtin_tools() -> Vec<Tool> {
             vec!["query".to_string()],
         ))
         .with_tags(vec!["web".to_string()]),
+
+        Tool::new(
+            "plugin_list",
+            "List loaded WASM plugins",
+        )
+        .with_schema(ToolSchema::object(HashMap::new(), Vec::new()))
+        .with_tags(vec!["plugin".to_string()]),
+
+        Tool::new(
+            "plugin_invoke",
+            "Invoke a loaded WASM plugin",
+        )
+        .with_schema(ToolSchema::object(
+            [
+                ("plugin".to_string(), PropertySchema {
+                    prop_type: "string".to_string(),
+                    description: Some("Plugin name".to_string()),
+                    default: None,
+                    enum_values: None,
+                }),
+                ("function".to_string(), PropertySchema {
+                    prop_type: "string".to_string(),
+                    description: Some("Exported function to call".to_string()),
+                    default: Some(serde_json::json!("invoke")),
+                    enum_values: None,
+                }),
+                ("input".to_string(), PropertySchema {
+                    prop_type: "object".to_string(),
+                    description: Some("JSON input passed to the plugin".to_string()),
+                    default: Some(serde_json::json!({})),
+                    enum_values: None,
+                }),
+            ].into(),
+            vec!["plugin".to_string()],
+        ))
+        .with_tags(vec!["plugin".to_string()]),
         
         Tool::new(
             "fetch_url",
