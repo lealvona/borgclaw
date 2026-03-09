@@ -4,19 +4,65 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderDef {
+    #[serde(default)]
     pub id: String,
+    #[serde(alias = "name")]
     pub display: String,
     pub api_base: String,
+    #[serde(default)]
     pub models_endpoint: String,
+    #[serde(alias = "env_key", deserialize_with = "deserialize_env_key")]
     pub api_key_env: Option<String>,
     pub default_model: String,
+    #[serde(default)]
     pub static_models: Vec<String>,
+    #[serde(default = "default_requires_auth")]
     pub requires_auth: bool,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ProviderRegistry {
+    #[serde(flatten)]
     pub providers: HashMap<String, ProviderDef>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct LegacyProviderRegistry {
+    #[serde(default)]
+    providers: HashMap<String, ProviderDef>,
+}
+
+impl<'de> Deserialize<'de> for ProviderRegistry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = toml::Value::deserialize(deserializer)?;
+        let table = raw
+            .as_table()
+            .cloned()
+            .ok_or_else(|| serde::de::Error::custom("expected provider registry table"))?;
+
+        if table.contains_key("providers") {
+            let legacy: LegacyProviderRegistry =
+                raw.try_into().map_err(serde::de::Error::custom)?;
+            return Ok(Self {
+                providers: legacy.providers,
+            });
+        }
+
+        let mut providers = HashMap::new();
+        for (id, value) in table {
+            let mut provider: ProviderDef = value.try_into().map_err(serde::de::Error::custom)?;
+            if provider.id.is_empty() {
+                provider.id = id.clone();
+            }
+            provider.finalize_defaults();
+            providers.insert(id, provider);
+        }
+
+        Ok(Self { providers })
+    }
 }
 
 impl ProviderRegistry {
@@ -60,8 +106,8 @@ impl ProviderRegistry {
             "google".to_string(),
             ProviderDef {
                 id: "google".to_string(),
-                display: "Google Gemini".to_string(),
-                api_base: "https://generativelanguage.googleapis.com/v1beta".to_string(),
+                display: "Google AI".to_string(),
+                api_base: "https://generativelanguage.googleapis.com/v1".to_string(),
                 models_endpoint: "https://generativelanguage.googleapis.com/v1beta/models"
                     .to_string(),
                 api_key_env: Some("GOOGLE_API_KEY".to_string()),
@@ -75,11 +121,11 @@ impl ProviderRegistry {
             ProviderDef {
                 id: "ollama".to_string(),
                 display: "Ollama (Local)".to_string(),
-                api_base: "http://localhost:11434".to_string(),
+                api_base: "http://localhost:11434/api".to_string(),
                 models_endpoint: "http://localhost:11434/api/tags".to_string(),
                 api_key_env: None,
-                default_model: "llama3.1".to_string(),
-                static_models: vec!["llama3.1".to_string(), "mistral".to_string()],
+                default_model: "llama3".to_string(),
+                static_models: vec!["llama3".to_string(), "mistral".to_string()],
                 requires_auth: false,
             },
         );
@@ -102,7 +148,14 @@ impl ProviderRegistry {
     pub fn load_or_create(path: &Path) -> Result<Self, String> {
         if path.exists() {
             let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-            toml::from_str(&content).map_err(|e| e.to_string())
+            let mut registry: Self = toml::from_str(&content).map_err(|e| e.to_string())?;
+            for (id, provider) in &mut registry.providers {
+                if provider.id.is_empty() {
+                    provider.id = id.clone();
+                }
+                provider.finalize_defaults();
+            }
+            Ok(registry)
         } else {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -117,5 +170,124 @@ impl ProviderRegistry {
     pub fn save(&self, path: &Path) -> Result<(), String> {
         let content = toml::to_string_pretty(self).map_err(|e| e.to_string())?;
         std::fs::write(path, content).map_err(|e| e.to_string())
+    }
+}
+
+impl ProviderDef {
+    fn finalize_defaults(&mut self) {
+        if self.models_endpoint.is_empty() {
+            self.models_endpoint = default_models_endpoint(&self.id, &self.api_base);
+        }
+        if self.static_models.is_empty() {
+            self.static_models = default_static_models(&self.id, &self.default_model);
+        }
+    }
+}
+
+fn default_requires_auth() -> bool {
+    true
+}
+
+fn deserialize_env_key<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }))
+}
+
+fn default_models_endpoint(id: &str, api_base: &str) -> String {
+    match id {
+        "openai" => format!("{api_base}/models"),
+        "anthropic" => format!("{api_base}/models"),
+        "google" => "https://generativelanguage.googleapis.com/v1beta/models".to_string(),
+        "ollama" => "http://localhost:11434/api/tags".to_string(),
+        _ => format!("{}/models", api_base.trim_end_matches('/')),
+    }
+}
+
+fn default_static_models(id: &str, default_model: &str) -> Vec<String> {
+    match id {
+        "openai" => vec![
+            default_model.to_string(),
+            "gpt-4.1".to_string(),
+            "gpt-4o-mini".to_string(),
+        ],
+        "anthropic" => vec![
+            default_model.to_string(),
+            "claude-3-5-sonnet-20240620".to_string(),
+            "claude-3-opus-20240229".to_string(),
+        ],
+        "google" => vec![default_model.to_string(), "gemini-1.5-flash".to_string()],
+        "ollama" => vec![default_model.to_string(), "mistral".to_string()],
+        _ => vec![default_model.to_string()],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_registry_parses_documented_top_level_shape() {
+        let registry: ProviderRegistry = toml::from_str(
+            r#"
+            [openai]
+            name = "OpenAI"
+            api_base = "https://api.openai.com/v1"
+            env_key = "OPENAI_API_KEY"
+            default_model = "gpt-4o"
+
+            [ollama]
+            name = "Ollama (Local)"
+            api_base = "http://localhost:11434/api"
+            env_key = ""
+            default_model = "llama3"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(registry.providers["openai"].display, "OpenAI");
+        assert_eq!(
+            registry.providers["openai"].api_key_env.as_deref(),
+            Some("OPENAI_API_KEY")
+        );
+        assert_eq!(registry.providers["openai"].id, "openai");
+        assert_eq!(registry.providers["ollama"].api_key_env, None);
+        assert_eq!(
+            registry.providers["ollama"].models_endpoint,
+            "http://localhost:11434/api/tags"
+        );
+    }
+
+    #[test]
+    fn provider_registry_parses_legacy_nested_shape() {
+        let registry: ProviderRegistry = toml::from_str(
+            r#"
+            [providers.openai]
+            id = "openai"
+            display = "OpenAI"
+            api_base = "https://api.openai.com/v1"
+            models_endpoint = "https://api.openai.com/v1/models"
+            api_key_env = "OPENAI_API_KEY"
+            default_model = "gpt-4o"
+            static_models = ["gpt-4o"]
+            requires_auth = true
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(registry.providers["openai"].display, "OpenAI");
+        assert_eq!(
+            registry.providers["openai"].models_endpoint,
+            "https://api.openai.com/v1/models"
+        );
     }
 }
