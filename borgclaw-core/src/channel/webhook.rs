@@ -22,6 +22,8 @@ pub struct WebhookTrigger {
     pub enabled: bool,
     pub headers: HashMap<String, String>,
     pub rate_limit: Option<u32>,
+    pub forward_url: Option<String>,
+    pub body_template: Option<String>,
 }
 
 impl WebhookTrigger {
@@ -35,7 +37,14 @@ impl WebhookTrigger {
             enabled: true,
             headers: HashMap::new(),
             rate_limit: None,
+            forward_url: None,
+            body_template: None,
         }
+    }
+
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = id.into();
+        self
     }
 
     pub fn with_method(mut self, method: impl Into<String>) -> Self {
@@ -55,6 +64,16 @@ impl WebhookTrigger {
 
     pub fn with_rate_limit(mut self, requests_per_minute: u32) -> Self {
         self.rate_limit = Some(requests_per_minute);
+        self
+    }
+
+    pub fn with_forward_url(mut self, url: impl Into<String>) -> Self {
+        self.forward_url = Some(url.into());
+        self
+    }
+
+    pub fn with_body_template(mut self, template: impl Into<String>) -> Self {
+        self.body_template = Some(template.into());
         self
     }
 
@@ -144,7 +163,8 @@ impl WebhookChannel {
 
         let trigger = triggers
             .iter()
-            .find(|t| t.matches(path, method))
+            .filter(|t| t.matches(path, method))
+            .max_by_key(|trigger| trigger_match_priority(trigger))
             .ok_or(WebhookError::NotFound)?;
 
         let secret = header_value(&headers, "x-webhook-secret");
@@ -349,6 +369,14 @@ fn trigger_path_value(pattern: &str, actual: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn trigger_match_priority(trigger: &WebhookTrigger) -> (usize, usize) {
+    let wildcard_count = trigger.path.matches('{').count();
+    (
+        usize::MAX.saturating_sub(wildcard_count),
+        trigger.path.len(),
+    )
+}
+
 fn header_value<'a>(headers: &'a HashMap<String, String>, name: &str) -> Option<&'a str> {
     headers
         .iter()
@@ -473,5 +501,35 @@ mod tests {
             "/webhook/trigger/{id}",
             "/webhook/trigger"
         ));
+    }
+
+    #[tokio::test]
+    async fn exact_webhook_trigger_path_wins_over_named_wildcard() {
+        let channel = WebhookChannel::new();
+        channel
+            .register_trigger(WebhookTrigger::new("named", "/webhook/trigger/{id}"))
+            .await;
+        channel
+            .register_trigger(
+                WebhookTrigger::new("notify_slack", "/webhook/trigger/notify_slack")
+                    .with_id("notify_slack"),
+            )
+            .await;
+
+        let (tx, mut rx) = mpsc::channel(1);
+        let response = channel
+            .handle_request(
+                "/webhook/trigger/notify_slack",
+                "POST",
+                HashMap::new(),
+                br#"{"content":"hello"}"#.to_vec(),
+                tx,
+            )
+            .await
+            .unwrap();
+
+        let inbound = rx.recv().await.unwrap();
+        assert_eq!(response.body["trigger_id"], "notify_slack");
+        assert_eq!(inbound.sender.id, "notify_slack");
     }
 }

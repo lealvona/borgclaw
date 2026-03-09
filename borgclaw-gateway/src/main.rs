@@ -407,6 +407,10 @@ async fn configured_webhook_channel(config: &AppConfig) -> Option<WebhookChannel
     }
 
     let webhook = WebhookChannel::new();
+    for trigger in configured_named_webhook_triggers(channel) {
+        webhook.register_trigger(trigger).await;
+    }
+
     let mut named_trigger = WebhookTrigger::new("named_trigger", "/webhook/trigger/{id}");
     if let Some(secret) = channel.extra.get("secret").and_then(|value| value.as_str()) {
         named_trigger = named_trigger.with_secret(secret);
@@ -423,6 +427,86 @@ async fn configured_webhook_channel(config: &AppConfig) -> Option<WebhookChannel
     webhook.register_trigger(trigger).await;
     webhook.register_trigger(named_trigger).await;
     Some(webhook)
+}
+
+fn configured_named_webhook_triggers(
+    channel: &borgclaw_core::config::ChannelConfig,
+) -> Vec<WebhookTrigger> {
+    let Some(triggers) = channel
+        .extra
+        .get("triggers")
+        .and_then(|value| value.as_table())
+    else {
+        return Vec::new();
+    };
+
+    let inherited_secret = channel
+        .extra
+        .get("secret")
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    let inherited_rate_limit = channel
+        .extra
+        .get("rate_limit_per_minute")
+        .and_then(|value| value.as_integer())
+        .and_then(|value| u32::try_from(value).ok());
+
+    triggers
+        .iter()
+        .filter_map(|(name, value)| {
+            let table = value.as_table()?;
+            let path = table
+                .get("path")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("/webhook/trigger/{}", name));
+            let method = table
+                .get("method")
+                .and_then(|value| value.as_str())
+                .unwrap_or("POST");
+
+            let mut trigger = WebhookTrigger::new(name, path)
+                .with_id(name)
+                .with_method(method);
+
+            if let Some(secret) = table
+                .get("secret")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+                .or_else(|| inherited_secret.clone())
+            {
+                trigger = trigger.with_secret(secret);
+            }
+
+            if let Some(rate_limit) = table
+                .get("rate_limit_per_minute")
+                .and_then(|value| value.as_integer())
+                .and_then(|value| u32::try_from(value).ok())
+                .or(inherited_rate_limit)
+            {
+                trigger = trigger.with_rate_limit(rate_limit);
+            }
+
+            if let Some(url) = table.get("url").and_then(|value| value.as_str()) {
+                trigger = trigger.with_forward_url(url);
+            }
+
+            if let Some(body_template) = table.get("body_template").and_then(|value| value.as_str())
+            {
+                trigger = trigger.with_body_template(body_template);
+            }
+
+            if let Some(headers) = table.get("headers").and_then(|value| value.as_table()) {
+                for (key, value) in headers {
+                    if let Some(value) = value.as_str() {
+                        trigger = trigger.with_header(key, value);
+                    }
+                }
+            }
+
+            Some(trigger)
+        })
+        .collect()
 }
 
 async fn webhook_handler(
@@ -475,13 +559,40 @@ async fn route_webhook_request(
     {
         Ok(response) => {
             if let Some(inbound) = rx.recv().await {
-                if let Err(err) = state.router.route(inbound).await {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        serde_json::json!({ "error": err.to_string() }).to_string(),
-                    )
-                        .into_response();
+                let route_outcome = match state.router.route(inbound).await {
+                    Ok(outcome) => outcome,
+                    Err(err) => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            serde_json::json!({ "error": err.to_string() }).to_string(),
+                        )
+                            .into_response();
+                    }
+                };
+
+                if let Some(trigger_id) = response
+                    .body
+                    .get("trigger_id")
+                    .and_then(|value| value.as_str())
+                {
+                    match webhook.get_trigger(trigger_id).await {
+                        Some(trigger) => {
+                            if let Err(err) =
+                                forward_configured_webhook(&trigger, &route_outcome.response.text)
+                                    .await
+                            {
+                                return (
+                                    StatusCode::BAD_GATEWAY,
+                                    serde_json::json!({ "error": err }).to_string(),
+                                )
+                                    .into_response();
+                            }
+                        }
+                        None => {}
+                    }
                 }
+
+                let _ = route_outcome;
             }
             (
                 StatusCode::from_u16(response.status).unwrap_or(StatusCode::OK),
@@ -500,6 +611,40 @@ async fn route_webhook_request(
             (StatusCode::INTERNAL_SERVER_ERROR, "Webhook channel closed").into_response()
         }
     }
+}
+
+async fn forward_configured_webhook(trigger: &WebhookTrigger, message: &str) -> Result<(), String> {
+    let Some(url) = trigger.forward_url.as_deref() else {
+        return Ok(());
+    };
+
+    let method =
+        reqwest::Method::from_bytes(trigger.method.as_bytes()).map_err(|err| err.to_string())?;
+    let body = render_webhook_body(trigger.body_template.as_deref(), message);
+    let client = reqwest::Client::new();
+    let mut request = client.request(method, url);
+
+    for (key, value) in &trigger.headers {
+        request = request.header(key, value);
+    }
+
+    let response = request
+        .body(body)
+        .send()
+        .await
+        .map_err(|err| err.to_string())?;
+
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("http {}", response.status()))
+    }
+}
+
+fn render_webhook_body(template: Option<&str>, message: &str) -> String {
+    template
+        .unwrap_or("{{message}}")
+        .replace("{{message}}", message)
 }
 
 fn header_map_to_hash_map(headers: &HeaderMap) -> HashMap<String, String> {
@@ -621,5 +766,50 @@ mod tests {
 
         let response = api_status(State(state)).await.into_response();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn configured_webhook_trigger_contract_is_loaded_from_config() {
+        let mut channel = borgclaw_core::config::ChannelConfig::default();
+        channel.enabled = true;
+        channel.extra.insert(
+            "triggers".to_string(),
+            toml::Value::Table(toml::map::Map::from_iter([(
+                "notify_slack".to_string(),
+                toml::Value::Table(toml::map::Map::from_iter([
+                    (
+                        "url".to_string(),
+                        toml::Value::String(
+                            "https://hooks.slack.com/services/T00/B00/XXX".to_string(),
+                        ),
+                    ),
+                    (
+                        "body_template".to_string(),
+                        toml::Value::String("{\"text\":\"{{message}}\"}".to_string()),
+                    ),
+                ])),
+            )])),
+        );
+
+        let triggers = configured_named_webhook_triggers(&channel);
+        assert_eq!(triggers.len(), 1);
+        assert_eq!(triggers[0].id, "notify_slack");
+        assert_eq!(triggers[0].path, "/webhook/trigger/notify_slack");
+        assert_eq!(
+            triggers[0].forward_url.as_deref(),
+            Some("https://hooks.slack.com/services/T00/B00/XXX")
+        );
+        assert_eq!(
+            triggers[0].body_template.as_deref(),
+            Some("{\"text\":\"{{message}}\"}")
+        );
+    }
+
+    #[test]
+    fn webhook_body_template_renders_documented_message_placeholder() {
+        assert_eq!(
+            render_webhook_body(Some("{\"text\":\"{{message}}\"}"), "hello"),
+            "{\"text\":\"hello\"}"
+        );
     }
 }
