@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, RwLock};
 
@@ -62,8 +63,9 @@ pub struct BridgeRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BridgeResponse {
-    pub id: u64,
+    pub id: Option<u64>,
     pub success: bool,
+    #[serde(default, alias = "data")]
     pub result: Option<serde_json::Value>,
     pub error: Option<String>,
 }
@@ -89,7 +91,6 @@ pub struct PlaywrightClient {
     config: BrowserConfig,
     process: Arc<RwLock<Option<tokio::process::Child>>>,
     stdin: Arc<RwLock<Option<tokio::io::BufWriter<tokio::process::ChildStdin>>>>,
-    stdout: Arc<RwLock<Option<tokio::io::BufReader<tokio::process::ChildStdout>>>>,
     pending: Arc<RwLock<HashMap<u64, mpsc::Sender<BridgeResponse>>>>,
     next_id: Arc<RwLock<u64>>,
 }
@@ -100,23 +101,39 @@ impl PlaywrightClient {
             config,
             process: Arc::new(RwLock::new(None)),
             stdin: Arc::new(RwLock::new(None)),
-            stdout: Arc::new(RwLock::new(None)),
             pending: Arc::new(RwLock::new(HashMap::new())),
             next_id: Arc::new(RwLock::new(1)),
         }
     }
 
-    pub async fn launch(&self) -> Result<(), BrowserError> {
-        let mut cmd = tokio::process::Command::new(&self.config.node_path);
-        cmd.arg(&self.config.bridge_path);
-        cmd.arg("--browser");
-        cmd.arg(match self.config.browser {
-            BrowserType::Chromium => "chromium",
-            BrowserType::Firefox => "firefox",
-            BrowserType::Webkit => "webkit",
-        });
+    fn launch_args(&self) -> Vec<String> {
+        let mut args = vec![
+            self.config.bridge_path.display().to_string(),
+            "--browser".to_string(),
+            match self.config.browser {
+                BrowserType::Chromium => "chromium".to_string(),
+                BrowserType::Firefox => "firefox".to_string(),
+                BrowserType::Webkit => "webkit".to_string(),
+            },
+        ];
         if self.config.headless {
-            cmd.arg("--headless");
+            args.push("--headless".to_string());
+        }
+        if let Some(cdp_url) = &self.config.cdp_url {
+            args.push("--cdp-url".to_string());
+            args.push(cdp_url.clone());
+        }
+        args
+    }
+
+    pub async fn launch(&self) -> Result<(), BrowserError> {
+        if self.process.read().await.is_some() {
+            return Ok(());
+        }
+
+        let mut cmd = tokio::process::Command::new(&self.config.node_path);
+        for arg in self.launch_args() {
+            cmd.arg(arg);
         }
         cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::piped());
@@ -135,9 +152,28 @@ impl PlaywrightClient {
             .take()
             .ok_or(BrowserError::LaunchFailed("No stdout".to_string()))?;
 
+        let pending = self.pending.clone();
+        tokio::spawn(async move {
+            let mut lines = tokio::io::BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let Ok(response) = serde_json::from_str::<BridgeResponse>(&line) else {
+                    continue;
+                };
+                let Some(id) = response.id else {
+                    continue;
+                };
+                let sender = {
+                    let pending = pending.read().await;
+                    pending.get(&id).cloned()
+                };
+                if let Some(sender) = sender {
+                    let _ = sender.send(response).await;
+                }
+            }
+        });
+
         *self.process.write().await = Some(child);
         *self.stdin.write().await = Some(tokio::io::BufWriter::new(stdin));
-        *self.stdout.write().await = Some(tokio::io::BufReader::new(stdout));
 
         let response = self.send_request("new_page", HashMap::new()).await?;
         if !response.success {
@@ -194,6 +230,52 @@ impl PlaywrightClient {
 
         Ok(response)
     }
+
+    fn response_value<'a>(
+        response: &'a BridgeResponse,
+        field: Option<&str>,
+    ) -> Result<&'a serde_json::Value, BrowserError> {
+        let Some(result) = response.result.as_ref() else {
+            return Err(BrowserError::ActionFailed(
+                response.error.clone().unwrap_or_default(),
+            ));
+        };
+
+        if let Some(field) = field {
+            result.get(field).ok_or_else(|| {
+                BrowserError::ParseFailed(format!("Expected '{}' field in bridge response", field))
+            })
+        } else {
+            Ok(result)
+        }
+    }
+
+    async fn capture_screenshot(&self, full_page: bool) -> Result<Vec<u8>, BrowserError> {
+        let mut args = HashMap::new();
+        args.insert("fullPage".to_string(), serde_json::json!(full_page));
+        let response = self.send_request("screenshot", args).await?;
+        let base64_data = Self::response_value(&response, Some("image"))?
+            .as_str()
+            .ok_or(BrowserError::ParseFailed(
+                "Expected base64 image".to_string(),
+            ))?;
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(base64_data)
+            .map_err(|e| BrowserError::ParseFailed(e.to_string()))
+    }
+
+    pub async fn screenshot(&self, full_page: bool) -> Result<Vec<u8>, BrowserError> {
+        self.capture_screenshot(full_page).await
+    }
+
+    pub async fn get_text(&self, selector: &str) -> Result<String, BrowserError> {
+        self.extract_text(selector).await
+    }
+
+    pub async fn get_html(&self, selector: &str) -> Result<String, BrowserError> {
+        self.extract_html(selector).await
+    }
 }
 
 #[async_trait]
@@ -239,29 +321,14 @@ impl BrowserSkill for PlaywrightClient {
     }
 
     async fn screenshot(&self) -> Result<Vec<u8>, BrowserError> {
-        let args = HashMap::new();
-        let response = self.send_request("screenshot", args).await?;
-        if let Some(result) = response.result {
-            let base64_data = result
-                .as_str()
-                .ok_or(BrowserError::ParseFailed("Expected string".to_string()))?;
-            use base64::Engine;
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(base64_data)
-                .map_err(|e| BrowserError::ParseFailed(e.to_string()))?;
-            Ok(bytes)
-        } else {
-            Err(BrowserError::ActionFailed(
-                response.error.unwrap_or_default(),
-            ))
-        }
+        self.capture_screenshot(true).await
     }
 
     async fn wait_for(&self, selector: &str, timeout_ms: u64) -> Result<(), BrowserError> {
         let mut args = HashMap::new();
         args.insert("selector".to_string(), serde_json::json!(selector));
         args.insert("timeout".to_string(), serde_json::json!(timeout_ms));
-        let response = self.send_request("wait_for", args).await?;
+        let response = self.send_request("wait_for_selector", args).await?;
         if response.success {
             Ok(())
         } else {
@@ -288,54 +355,39 @@ impl BrowserSkill for PlaywrightClient {
     async fn extract_text(&self, selector: &str) -> Result<String, BrowserError> {
         let mut args = HashMap::new();
         args.insert("selector".to_string(), serde_json::json!(selector));
-        let response = self.send_request("extract_text", args).await?;
-        if let Some(result) = response.result {
-            result
-                .as_str()
-                .map(|s| s.to_string())
-                .ok_or(BrowserError::ParseFailed("Expected string".to_string()))
-        } else {
-            Err(BrowserError::ActionFailed(
-                response.error.unwrap_or_default(),
+        let response = self.send_request("get_text", args).await?;
+        Self::response_value(&response, Some("text"))?
+            .as_str()
+            .map(str::to_string)
+            .ok_or(BrowserError::ParseFailed(
+                "Expected text string".to_string(),
             ))
-        }
     }
 
     async fn extract_html(&self, selector: &str) -> Result<String, BrowserError> {
         let mut args = HashMap::new();
         args.insert("selector".to_string(), serde_json::json!(selector));
-        let response = self.send_request("extract_html", args).await?;
-        if let Some(result) = response.result {
-            result
-                .as_str()
-                .map(|s| s.to_string())
-                .ok_or(BrowserError::ParseFailed("Expected string".to_string()))
-        } else {
-            Err(BrowserError::ActionFailed(
-                response.error.unwrap_or_default(),
+        let response = self.send_request("get_html", args).await?;
+        Self::response_value(&response, Some("html"))?
+            .as_str()
+            .map(str::to_string)
+            .ok_or(BrowserError::ParseFailed(
+                "Expected html string".to_string(),
             ))
-        }
     }
 
     async fn eval_js(&self, script: &str) -> Result<serde_json::Value, BrowserError> {
         let mut args = HashMap::new();
         args.insert("script".to_string(), serde_json::json!(script));
-        let response = self.send_request("eval_js", args).await?;
-        response
-            .result
-            .ok_or_else(|| BrowserError::ActionFailed(response.error.unwrap_or_default()))
+        let response = self.send_request("evaluate", args).await?;
+        Self::response_value(&response, None).cloned()
     }
 
     async fn get_cookies(&self) -> Result<Vec<Cookie>, BrowserError> {
         let args = HashMap::new();
         let response = self.send_request("get_cookies", args).await?;
-        if let Some(result) = response.result {
-            serde_json::from_value(result).map_err(|e| BrowserError::ParseFailed(e.to_string()))
-        } else {
-            Err(BrowserError::ActionFailed(
-                response.error.unwrap_or_default(),
-            ))
-        }
+        serde_json::from_value(Self::response_value(&response, Some("cookies"))?.clone())
+            .map_err(|e| BrowserError::ParseFailed(e.to_string()))
     }
 
     async fn set_cookie(&self, cookie: Cookie) -> Result<(), BrowserError> {
@@ -357,16 +409,10 @@ impl BrowserSkill for PlaywrightClient {
     async fn get_url(&self) -> Result<String, BrowserError> {
         let args = HashMap::new();
         let response = self.send_request("get_url", args).await?;
-        if let Some(result) = response.result {
-            result
-                .as_str()
-                .map(|s| s.to_string())
-                .ok_or(BrowserError::ParseFailed("Expected string".to_string()))
-        } else {
-            Err(BrowserError::ActionFailed(
-                response.error.unwrap_or_default(),
-            ))
-        }
+        Self::response_value(&response, Some("url"))?
+            .as_str()
+            .map(str::to_string)
+            .ok_or(BrowserError::ParseFailed("Expected url string".to_string()))
     }
 
     async fn close(&self) -> Result<(), BrowserError> {
@@ -378,9 +424,86 @@ impl BrowserSkill for PlaywrightClient {
         }
 
         *self.stdin.write().await = None;
-        *self.stdout.write().await = None;
 
         Ok(())
+    }
+}
+
+pub type PlaywrightConfig = BrowserConfig;
+
+pub struct CdpClient {
+    inner: PlaywrightClient,
+}
+
+impl CdpClient {
+    pub fn new(url: impl Into<String>) -> Self {
+        let config = BrowserConfig {
+            browser: BrowserType::Chromium,
+            cdp_url: Some(url.into()),
+            ..BrowserConfig::default()
+        };
+        Self {
+            inner: PlaywrightClient::new(config),
+        }
+    }
+
+    pub async fn launch(&self) -> Result<(), BrowserError> {
+        self.inner.launch().await
+    }
+}
+
+#[async_trait]
+impl BrowserSkill for CdpClient {
+    async fn navigate(&self, url: &str) -> Result<(), BrowserError> {
+        self.inner.navigate(url).await
+    }
+
+    async fn click(&self, selector: &str) -> Result<(), BrowserError> {
+        self.inner.click(selector).await
+    }
+
+    async fn fill(&self, selector: &str, value: &str) -> Result<(), BrowserError> {
+        self.inner.fill(selector, value).await
+    }
+
+    async fn screenshot(&self) -> Result<Vec<u8>, BrowserError> {
+        BrowserSkill::screenshot(&self.inner).await
+    }
+
+    async fn wait_for(&self, selector: &str, timeout_ms: u64) -> Result<(), BrowserError> {
+        self.inner.wait_for(selector, timeout_ms).await
+    }
+
+    async fn wait_for_text(&self, text: &str, timeout_ms: u64) -> Result<(), BrowserError> {
+        self.inner.wait_for_text(text, timeout_ms).await
+    }
+
+    async fn extract_text(&self, selector: &str) -> Result<String, BrowserError> {
+        self.inner.extract_text(selector).await
+    }
+
+    async fn extract_html(&self, selector: &str) -> Result<String, BrowserError> {
+        self.inner.extract_html(selector).await
+    }
+
+    async fn eval_js(&self, script: &str) -> Result<serde_json::Value, BrowserError> {
+        self.inner.eval_js(script).await
+    }
+
+    async fn get_cookies(&self) -> Result<Vec<Cookie>, BrowserError> {
+        self.inner.get_cookies().await
+    }
+
+    async fn set_cookie(&self, cookie: Cookie) -> Result<(), BrowserError> {
+        self.inner.set_cookie(cookie).await
+    }
+
+    async fn get_url(&self) -> Result<String, BrowserError> {
+        self.inner.get_url().await
+    }
+
+    async fn close(&self) -> Result<(), BrowserError> {
+        self.inner.close().await
     }
 }
 
@@ -403,4 +526,42 @@ pub enum BrowserError {
 
     #[error("Timeout")]
     Timeout,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bridge_response_accepts_bridge_data_payloads() {
+        let response: BridgeResponse =
+            serde_json::from_str(r#"{"id":1,"success":true,"data":{"text":"hello"}}"#).unwrap();
+
+        assert_eq!(response.result.unwrap()["text"].as_str(), Some("hello"));
+    }
+
+    #[test]
+    fn playwright_launch_args_include_cdp_when_configured() {
+        let client = PlaywrightClient::new(BrowserConfig {
+            cdp_url: Some("http://localhost:9222".to_string()),
+            ..BrowserConfig::default()
+        });
+
+        let args = client.launch_args();
+
+        assert!(args
+            .windows(2)
+            .any(|pair| { pair[0] == "--cdp-url" && pair[1] == "http://localhost:9222" }));
+    }
+
+    #[test]
+    fn cdp_client_uses_chromium_with_cdp_url() {
+        let client = CdpClient::new("http://localhost:9222");
+
+        assert_eq!(client.inner.config.browser, BrowserType::Chromium);
+        assert_eq!(
+            client.inner.config.cdp_url.as_deref(),
+            Some("http://localhost:9222")
+        );
+    }
 }

@@ -14,6 +14,7 @@ let context = null;
 let page = null;
 let browserType = 'chromium';
 let headless = true;
+let cdpUrl = null;
 
 function logError(msg) {
     console.error(JSON.stringify({ error: msg }));
@@ -21,12 +22,19 @@ function logError(msg) {
 
 async function initBrowser() {
     if (browser) return true;
-    
-    const browserLauncher = browserType === 'firefox' ? firefox 
-        : browserType === 'webkit' ? webkit 
-        : chromium;
-    
+
     try {
+        if (cdpUrl) {
+            browser = await chromium.connectOverCDP(cdpUrl);
+            context = browser.contexts()[0] || await browser.newContext();
+            page = context.pages()[0] || await context.newPage();
+            return true;
+        }
+
+        const browserLauncher = browserType === 'firefox' ? firefox 
+            : browserType === 'webkit' ? webkit 
+            : chromium;
+
         browser = await browserLauncher.launch({ headless });
         context = await browser.newContext();
         page = await context.newPage();
@@ -121,8 +129,20 @@ async function handleRequest(req) {
                 
             case 'get_html':
                 if (!page) return { id, success: false, error: 'No page available' };
-                const html = await page.content();
+                const html = args.selector
+                    ? await page.$eval(args.selector, el => el.outerHTML)
+                    : await page.content();
                 return { id, success: true, data: { html } };
+
+            case 'get_cookies':
+                if (!context) return { id, success: false, error: 'No context available' };
+                const cookies = await context.cookies();
+                return { id, success: true, data: { cookies } };
+
+            case 'set_cookie':
+                if (!context) return { id, success: false, error: 'No context available' };
+                await context.addCookies([args.cookie]);
+                return { id, success: true };
                 
             case 'get_url':
                 if (!page) return { id, success: false, error: 'No page available' };
@@ -193,6 +213,9 @@ async function main() {
             headless = true;
         } else if (args[i] === '--no-headless' || args[i] === '--headed') {
             headless = false;
+        } else if (args[i] === '--cdp-url' && args[i + 1]) {
+            cdpUrl = args[i + 1];
+            i++;
         }
     }
     
