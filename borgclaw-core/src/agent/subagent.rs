@@ -316,7 +316,7 @@ impl SubAgentCoordinator {
 
         let memory_entries_created = match task.memory_access {
             MemoryAccessType::ReadWrite => {
-                let memory = SqliteMemory::new(self.memory_config.memory_path.clone());
+                let memory = SqliteMemory::new(self.memory_config.database_path.clone());
                 memory
                     .init()
                     .await
@@ -466,7 +466,7 @@ mod tests {
                 ..Default::default()
             },
             MemoryConfig {
-                memory_path: root.join("memory"),
+                database_path: root.join("memory"),
                 ..Default::default()
             },
             SkillsConfig::default(),

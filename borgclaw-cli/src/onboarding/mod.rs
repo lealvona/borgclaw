@@ -509,7 +509,7 @@ fn configure_memory(
             let conn = build_postgres_connection(theme)?;
             config
                 .memory
-                .memory_path
+                .database_path
                 .clone_from(&PathBuf::from(".borgclaw/memory-postgres"));
             config
                 .skills

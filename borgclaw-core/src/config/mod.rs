@@ -16,6 +16,8 @@ pub struct AppConfig {
     pub security: SecurityConfig,
     /// Memory settings
     pub memory: MemoryConfig,
+    /// Heartbeat settings
+    pub heartbeat: HeartbeatConfig,
     /// Scheduler settings
     pub scheduler: SchedulerConfig,
     /// Skills configuration
@@ -33,6 +35,7 @@ impl Default for AppConfig {
             channels: HashMap::new(),
             security: SecurityConfig::default(),
             memory: MemoryConfig::default(),
+            heartbeat: HeartbeatConfig::default(),
             scheduler: SchedulerConfig::default(),
             skills: SkillsConfig::default(),
             mcp: McpConfig::default(),
@@ -259,6 +262,9 @@ pub struct OnePasswordVaultConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MemoryConfig {
+    /// SQLite database path
+    #[serde(alias = "memory_path")]
+    pub database_path: PathBuf,
     /// Enable hybrid search
     pub hybrid_search: bool,
     /// Vector store provider
@@ -266,19 +272,43 @@ pub struct MemoryConfig {
     /// Embedding model
     pub embedding_model: String,
     /// Max entries in session before compaction
-    pub session_compaction_threshold: usize,
-    /// Memory file path
-    pub memory_path: PathBuf,
+    #[serde(alias = "session_compaction_threshold")]
+    pub session_max_entries: usize,
+    /// Number of recent messages preserved during compaction
+    pub session_keep_recent: usize,
+    /// Whether important context should be preserved during compaction
+    pub session_keep_important: bool,
 }
 
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
+            database_path: PathBuf::from(".borgclaw/memory"),
             hybrid_search: true,
             vector_provider: "sqlite".to_string(),
             embedding_model: "sentence-transformers/all-MiniLM-L6-v2".to_string(),
-            session_compaction_threshold: 50,
-            memory_path: PathBuf::from(".borgclaw/memory"),
+            session_max_entries: 100,
+            session_keep_recent: 20,
+            session_keep_important: true,
+        }
+    }
+}
+
+/// Heartbeat configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HeartbeatConfig {
+    /// Enable heartbeat scheduling
+    pub enabled: bool,
+    /// Scheduler polling interval in seconds
+    pub check_interval_seconds: u64,
+}
+
+impl Default for HeartbeatConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            check_interval_seconds: 60,
         }
     }
 }
@@ -415,5 +445,53 @@ mod tests {
         assert!(config.security.pairing.enabled);
         assert_eq!(config.security.pairing.code_length, 6);
         assert_eq!(config.security.pairing.expiry_seconds, 300);
+    }
+
+    #[test]
+    fn memory_and_heartbeat_config_parse_documented_contract_shape() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [memory]
+            database_path = ".local/data/memory.db"
+            hybrid_search = true
+            session_max_entries = 100
+            session_keep_recent = 20
+            session_keep_important = true
+
+            [heartbeat]
+            enabled = true
+            check_interval_seconds = 60
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.memory.database_path,
+            PathBuf::from(".local/data/memory.db")
+        );
+        assert!(config.memory.hybrid_search);
+        assert_eq!(config.memory.session_max_entries, 100);
+        assert_eq!(config.memory.session_keep_recent, 20);
+        assert!(config.memory.session_keep_important);
+        assert!(config.heartbeat.enabled);
+        assert_eq!(config.heartbeat.check_interval_seconds, 60);
+    }
+
+    #[test]
+    fn memory_config_accepts_legacy_aliases() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [memory]
+            memory_path = ".borgclaw/memory"
+            session_compaction_threshold = 50
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.memory.database_path,
+            PathBuf::from(".borgclaw/memory")
+        );
+        assert_eq!(config.memory.session_max_entries, 50);
     }
 }
