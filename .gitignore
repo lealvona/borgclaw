@@ -1,3 +1,5 @@
 target/
 .local/
 .borgclaw/
+.codex/
+AGENTS.md
