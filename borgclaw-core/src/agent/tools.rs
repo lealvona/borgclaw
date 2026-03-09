@@ -199,7 +199,7 @@ impl ToolRuntime {
         security_config: &crate::config::SecurityConfig,
     ) -> Result<Self, String> {
         let workspace_root = canonical_or_current(&agent.workspace);
-        let memory = Arc::new(SqliteMemory::new(memory_config.memory_path.clone()));
+        let memory = Arc::new(SqliteMemory::new(memory_config.database_path.clone()));
         memory.init().await.map_err(|e| e.to_string())?;
         let plugins = Arc::new(PluginRegistry::new());
         plugins
@@ -944,7 +944,7 @@ mod tests {
                 ..Default::default()
             },
             &MemoryConfig {
-                memory_path: root.join("memory"),
+                database_path: root.join("memory"),
                 ..Default::default()
             },
             &crate::config::SkillsConfig {
@@ -1039,7 +1039,7 @@ mod tests {
                 ..Default::default()
             },
             &MemoryConfig {
-                memory_path: root.join("memory"),
+                database_path: root.join("memory"),
                 ..Default::default()
             },
             &crate::config::SkillsConfig {
@@ -1073,7 +1073,7 @@ mod tests {
                 ..Default::default()
             },
             &MemoryConfig {
-                memory_path: root.join("memory"),
+                database_path: root.join("memory"),
                 ..Default::default()
             },
             &crate::config::SkillsConfig {
@@ -1112,7 +1112,7 @@ mod tests {
                 ..Default::default()
             },
             &MemoryConfig {
-                memory_path: root.join("memory"),
+                database_path: root.join("memory"),
                 ..Default::default()
             },
             &crate::config::SkillsConfig {
@@ -1160,7 +1160,7 @@ mod tests {
                 ..Default::default()
             },
             &MemoryConfig {
-                memory_path: root.join("memory"),
+                database_path: root.join("memory"),
                 ..Default::default()
             },
             &crate::config::SkillsConfig {
@@ -1254,7 +1254,7 @@ mod tests {
                 ..Default::default()
             },
             &MemoryConfig {
-                memory_path: root.join("memory"),
+                database_path: root.join("memory"),
                 ..Default::default()
             },
             &crate::config::SkillsConfig {

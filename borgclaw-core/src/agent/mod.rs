@@ -336,7 +336,7 @@ impl Agent for SimpleAgent {
         }
 
         {
-            let threshold = self.memory_config.session_compaction_threshold;
+            let threshold = self.memory_config.session_max_entries;
             let session =
                 self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
             Self::compact_session_if_needed(threshold, session);

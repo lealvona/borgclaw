@@ -350,7 +350,17 @@ async fn status(config: AppConfig) {
             .as_deref()
             .unwrap_or("disabled")
     );
-    println!("Memory path: {:?}", config.memory.memory_path);
+    println!("Memory database: {:?}", config.memory.database_path);
+    println!(
+        "Session compaction: max_entries={}, keep_recent={}, keep_important={}",
+        config.memory.session_max_entries,
+        config.memory.session_keep_recent,
+        config.memory.session_keep_important
+    );
+    println!(
+        "Heartbeat config: enabled={}, poll={}s",
+        config.heartbeat.enabled, config.heartbeat.check_interval_seconds
+    );
     println!("Skills path: {:?}", config.skills.skills_path);
     println!("\nChannels:");
     for (name, channel) in &config.channels {
@@ -390,12 +400,16 @@ async fn doctor(config: AppConfig) {
         Some(env_key) => println!("✗ Provider credential env missing ({})", env_key),
         None => println!("✗ Unknown provider '{}'", config.agent.provider),
     }
-    if std::fs::create_dir_all(&config.memory.memory_path).is_ok()
-        && config.memory.memory_path.exists()
-    {
-        println!("✓ Memory path available");
+    if let Some(parent) = config.memory.database_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if config.memory.database_path.parent().is_some() || config.memory.database_path.is_absolute() {
+        println!("✓ Memory database path configured");
     } else {
-        println!("✗ Memory path unavailable: {:?}", config.memory.memory_path);
+        println!(
+            "✗ Memory database path unavailable: {:?}",
+            config.memory.database_path
+        );
     }
     if std::fs::create_dir_all(&config.skills.skills_path).is_ok()
         && config.skills.skills_path.exists()
