@@ -39,7 +39,7 @@ Good examples:
   Source: [OpenClaw README gateway/control-plane notes](https://github.com/openclaw/openclaw#readme)
 - The repo layout shows deliberate runtime segregation for sandboxing with `Dockerfile.sandbox`, `Dockerfile.sandbox-browser`, and `Dockerfile.sandbox-common`. That is stronger than a single toggle-based sandbox story.  
   Source: [OpenClaw repository root](https://github.com/openclaw/openclaw)
-- OpenClaw documents a managed skills platform with bundled, managed, and workspace skills plus install gating and UI. That is directly relevant to BorgClaw because `borgclaw skill install` is still a stub today.  
+- OpenClaw documents a managed skills platform with bundled, managed, and workspace skills plus install gating and UI. BorgClaw now supports local `SKILL.md` installs and installed-skill listing, but it still does not have a broader managed registry lifecycle.  
   Source: [OpenClaw README skills platform notes](https://github.com/openclaw/openclaw#readme)
 - OpenClaw's security model explicitly distinguishes main-session host execution from non-main session sandbox execution, with allowlists and denylisted capabilities. That is the right level of specificity for channel and group safety.  
   Source: [OpenClaw README security model](https://github.com/openclaw/openclaw#readme)
@@ -55,7 +55,7 @@ Best matches for current BorgClaw gaps:
 
 - `ROADMAP.md` Phase 2: shared routing, pairing consistency, structured gateway events.
 - `ROADMAP.md` Phase 5: onboarding, `status`, and `doctor` maturity.
-- `borgclaw-cli/src/main.rs`: `SkillsAction::Install` still prints `not implemented`.
+- `borgclaw-cli/src/main.rs`: local skill installs exist now, but remote/registry installs still do not.
 
 ## ZeroClaw
 
@@ -247,8 +247,8 @@ Best upstream references:
 Current BorgClaw signal:
 
 - `ROADMAP.md` Phase 4 calls for operational paths, unified runtime results, and MCP/plugin routing.
-- `borgclaw-core/src/agent/tools.rs` still returns `web_search is not implemented yet`.
-- `borgclaw-cli/src/main.rs` still returns `Installing skill '...' (not implemented)`.
+- `borgclaw-core/src/agent/tools.rs` now has a basic `web_search`, but the broader web/runtime integration is still much thinner than the other skill paths.
+- `borgclaw-cli/src/main.rs` now supports local `SKILL.md` installs, but remote URL and registry installs are still missing.
 
 Best upstream references:
 
