@@ -249,6 +249,8 @@ pub struct VaultConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BitwardenVaultConfig {
+    pub cli_path: PathBuf,
+    pub session_env: String,
     pub server_url: Option<String>,
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
@@ -258,6 +260,8 @@ pub struct BitwardenVaultConfig {
 impl Default for BitwardenVaultConfig {
     fn default() -> Self {
         Self {
+            cli_path: PathBuf::from("bw"),
+            session_env: "BW_SESSION".to_string(),
             server_url: None,
             client_id: None,
             client_secret: None,
@@ -266,11 +270,22 @@ impl Default for BitwardenVaultConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OnePasswordVaultConfig {
+    pub cli_path: PathBuf,
     pub vault: Option<String>,
     pub account: Option<String>,
+}
+
+impl Default for OnePasswordVaultConfig {
+    fn default() -> Self {
+        Self {
+            cli_path: PathBuf::from("op"),
+            vault: None,
+            account: None,
+        }
+    }
 }
 
 /// Memory configuration
@@ -464,6 +479,45 @@ mod tests {
         assert!(config.security.pairing.enabled);
         assert_eq!(config.security.pairing.code_length, 6);
         assert_eq!(config.security.pairing.expiry_seconds, 300);
+    }
+
+    #[test]
+    fn vault_config_parses_documented_cli_contract_shape() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [security.vault]
+            provider = "bitwarden"
+
+            [security.vault.bitwarden]
+            cli_path = "bw"
+            session_env = "BW_SESSION"
+
+            [security.vault.1password]
+            cli_path = "op"
+            account = "my-account"
+            vault = "Private"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.security.vault.provider.as_deref(), Some("bitwarden"));
+        assert_eq!(
+            config.security.vault.bitwarden.cli_path,
+            PathBuf::from("bw")
+        );
+        assert_eq!(config.security.vault.bitwarden.session_env, "BW_SESSION");
+        assert_eq!(
+            config.security.vault.one_password.cli_path,
+            PathBuf::from("op")
+        );
+        assert_eq!(
+            config.security.vault.one_password.account.as_deref(),
+            Some("my-account")
+        );
+        assert_eq!(
+            config.security.vault.one_password.vault.as_deref(),
+            Some("Private")
+        );
     }
 
     #[test]

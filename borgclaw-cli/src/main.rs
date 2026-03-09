@@ -435,10 +435,26 @@ async fn doctor(config: AppConfig) {
         println!("✗ Skills path unavailable: {:?}", config.skills.skills_path);
     }
     match config.security.vault.provider.as_deref() {
-        Some("bitwarden") if cli_in_path("bw") => println!("✓ Bitwarden CLI available"),
-        Some("bitwarden") => println!("✗ Bitwarden CLI missing (bw)"),
-        Some("1password") if cli_in_path("op") => println!("✓ 1Password CLI available"),
-        Some("1password") => println!("✗ 1Password CLI missing (op)"),
+        Some("bitwarden") if cli_path_available(&config.security.vault.bitwarden.cli_path) => {
+            println!(
+                "✓ Bitwarden CLI available ({})",
+                config.security.vault.bitwarden.cli_path.display()
+            )
+        }
+        Some("bitwarden") => println!(
+            "✗ Bitwarden CLI missing ({})",
+            config.security.vault.bitwarden.cli_path.display()
+        ),
+        Some("1password") if cli_path_available(&config.security.vault.one_password.cli_path) => {
+            println!(
+                "✓ 1Password CLI available ({})",
+                config.security.vault.one_password.cli_path.display()
+            )
+        }
+        Some("1password") => println!(
+            "✗ 1Password CLI missing ({})",
+            config.security.vault.one_password.cli_path.display()
+        ),
         Some(other) => println!("✗ Unsupported vault provider '{}'", other),
         None => println!("• Vault integration disabled"),
     }
@@ -479,9 +495,23 @@ async fn provider_credential_status(config: &AppConfig) -> ProviderCredentialSta
     }
 }
 
-fn cli_in_path(binary: &str) -> bool {
+fn cli_path_available(binary: &std::path::Path) -> bool {
+    if binary.components().count() > 1 {
+        return binary.exists();
+    }
+
+    let Some(binary_name) = binary.to_str() else {
+        return false;
+    };
+
     std::env::var_os("PATH")
-        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(binary).exists()))
+        .map(|paths| {
+            std::env::split_paths(&paths).any(|dir| {
+                let candidate = dir.join(binary_name);
+                candidate.exists()
+                    || cfg!(windows) && dir.join(format!("{}.exe", binary_name)).exists()
+            })
+        })
         .unwrap_or(false)
 }
 
@@ -867,4 +897,22 @@ fn parse_repl_command(input: &str) -> ReplCommand {
 fn clear_screen() {
     print!("{}", CLEAR_SCREEN_SEQUENCE);
     let _ = std::io::Write::flush(&mut std::io::stdout());
+}
+
+#[cfg(test)]
+mod cli_path_tests {
+    use super::cli_path_available;
+    use std::path::Path;
+
+    #[test]
+    fn cli_path_available_accepts_existing_explicit_paths() {
+        assert!(cli_path_available(Path::new("/bin/sh")));
+    }
+
+    #[test]
+    fn cli_path_available_rejects_missing_explicit_paths() {
+        assert!(!cli_path_available(Path::new(
+            "/definitely/not/a/real/binary"
+        )));
+    }
 }

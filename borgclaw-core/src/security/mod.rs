@@ -457,12 +457,15 @@ impl SecurityLayer {
 fn configured_vault(config: &SecurityConfig) -> Option<Arc<dyn VaultClient>> {
     match config.vault.provider.as_deref() {
         Some("bitwarden") => Some(Arc::new(BitwardenClient::new(BitwardenConfig {
+            cli_path: config.vault.bitwarden.cli_path.clone(),
+            session_env: config.vault.bitwarden.session_env.clone(),
             server_url: config.vault.bitwarden.server_url.clone(),
             client_id: config.vault.bitwarden.client_id.clone(),
             client_secret: config.vault.bitwarden.client_secret.clone(),
             use_cli: config.vault.bitwarden.use_cli,
         }))),
         Some("1password") => Some(Arc::new(OnePasswordClient::new(OnePasswordConfig {
+            cli_path: config.vault.one_password.cli_path.clone(),
             vault: config.vault.one_password.vault.clone(),
             account: config.vault.one_password.account.clone(),
         }))),
