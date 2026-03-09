@@ -2,7 +2,9 @@
 
 use super::{Memory, MemoryEntry, MemoryError, MemoryQuery, MemoryResult};
 use async_trait::async_trait;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -21,11 +23,18 @@ impl SqliteMemory {
     }
     
     pub async fn init(&self) -> Result<(), MemoryError> {
+        std::fs::create_dir_all(&self.path)
+            .map_err(|e| MemoryError::StorageError(e.to_string()))?;
         let db_path = self.path.join("memory.db");
-        
+
+        let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
+            .map_err(|e| MemoryError::StorageError(e.to_string()))?
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal);
+
         let pool = sqlx::pool::PoolOptions::<sqlx::Sqlite>::new()
             .max_connections(1)
-            .connect(&format!("sqlite:{}", db_path.display()))
+            .connect_with(options)
             .await
             .map_err(|e| MemoryError::StorageError(e.to_string()))?;
         

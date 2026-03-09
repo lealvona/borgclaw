@@ -9,7 +9,9 @@ pub use secrets::SecretStore;
 pub use wasm::WasmSandbox;
 
 use super::config::{ApprovalMode, SecurityConfig};
+use chrono::{Duration, Utc};
 use regex::Regex;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -19,7 +21,15 @@ pub struct SecurityLayer {
     command_blocklist: Vec<Regex>,
     pairing: Arc<RwLock<PairingManager>>,
     secrets: Arc<RwLock<SecretStore>>,
+    approvals: Arc<RwLock<HashMap<String, PendingApproval>>>,
     wasm: Option<WasmSandbox>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingApproval {
+    tool_name: String,
+    expires_at: chrono::DateTime<Utc>,
+    approved: bool,
 }
 
 impl SecurityLayer {
@@ -36,6 +46,7 @@ impl SecurityLayer {
             command_blocklist,
             pairing: Arc::new(RwLock::new(PairingManager::new(6, 300))),
             secrets: Arc::new(RwLock::new(SecretStore::new())),
+            approvals: Arc::new(RwLock::new(HashMap::new())),
             wasm: None,
         }
     }
@@ -55,6 +66,7 @@ impl SecurityLayer {
                 config.pairing_code_expiry,
             ))),
             secrets: Arc::new(RwLock::new(SecretStore::new())),
+            approvals: Arc::new(RwLock::new(HashMap::new())),
             wasm: None,
         }
     }
@@ -97,6 +109,56 @@ impl SecurityLayer {
     pub async fn get_secret(&self, key: &str) -> Option<String> {
         let secrets = self.secrets.read().await;
         secrets.get(key).await
+    }
+
+    pub fn approval_mode(&self) -> &ApprovalMode {
+        &self.config.approval_mode
+    }
+
+    pub async fn request_approval(&self, tool_name: &str) -> String {
+        let token = uuid::Uuid::new_v4().to_string();
+        let pending = PendingApproval {
+            tool_name: tool_name.to_string(),
+            expires_at: Utc::now() + Duration::minutes(5),
+            approved: false,
+        };
+        let mut approvals = self.approvals.write().await;
+        approvals.insert(token.clone(), pending);
+        token
+    }
+
+    pub async fn approve_pending(&self, tool_name: &str, token: &str) -> Result<(), SecurityError> {
+        let mut approvals = self.approvals.write().await;
+        approvals.retain(|_, approval| approval.expires_at > Utc::now());
+        let approval = approvals
+            .get_mut(token)
+            .ok_or_else(|| SecurityError::ApprovalError("invalid or expired approval token".to_string()))?;
+
+        if approval.tool_name != tool_name {
+            return Err(SecurityError::ApprovalError("approval token does not match tool".to_string()));
+        }
+
+        approval.approved = true;
+
+        Ok(())
+    }
+
+    pub async fn consume_approval(&self, tool_name: &str, token: &str) -> Result<(), SecurityError> {
+        let mut approvals = self.approvals.write().await;
+        approvals.retain(|_, approval| approval.expires_at > Utc::now());
+        let approval = approvals
+            .remove(token)
+            .ok_or_else(|| SecurityError::ApprovalError("invalid or expired approval token".to_string()))?;
+
+        if approval.tool_name != tool_name {
+            return Err(SecurityError::ApprovalError("approval token does not match tool".to_string()));
+        }
+
+        if !approval.approved {
+            return Err(SecurityError::ApprovalError("approval token has not been approved yet".to_string()));
+        }
+
+        Ok(())
     }
     
     /// Check for secret leaks in output
@@ -198,6 +260,8 @@ pub enum SecurityError {
     PairingError(String),
     #[error("Secret error: {0}")]
     SecretError(String),
+    #[error("Approval error: {0}")]
+    ApprovalError(String),
     #[error("WASM error: {0}")]
     WasmError(String),
 }

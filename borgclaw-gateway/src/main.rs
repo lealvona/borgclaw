@@ -46,7 +46,12 @@ async fn main() {
     let app_state = Arc::new(AppState::new(config));
     
     // Initialize agent
-    let mut agent = SimpleAgent::new(app_state.config.read().await.agent.clone());
+    let config = app_state.config.read().await.clone();
+    let mut agent = SimpleAgent::new(
+        config.agent.clone(),
+        Some(config.memory.clone()),
+        Some(config.security.clone()),
+    );
     for tool in borgclaw_core::agent::builtin_tools() {
         agent.register_tool(tool);
     }

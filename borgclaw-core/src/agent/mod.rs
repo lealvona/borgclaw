@@ -1,20 +1,21 @@
 //! Agent core module - handles agent loop, tools, and session management
 
+mod provider;
 mod session;
 mod subagent;
 mod tools;
 
-pub use session::{Session, SessionId};
+pub use provider::{ChatMessage, ChatProvider, ProviderFactory, ProviderRequest};
+pub use session::{Message, MessageRole, Session, SessionId};
 pub use subagent::{
     SubAgentBuilder, SubAgentCoordinator, SubAgentError, SubAgentResult, SubAgentTask,
     MemoryAccessType, TaskPriority, TaskStatus,
 };
-pub use tools::{builtin_tools, Tool, ToolCall, ToolResult, ToolSchema};
+pub use tools::{builtin_tools, execute_tool, parse_tool_command, Tool, ToolCall, ToolResult, ToolRuntime, ToolSchema};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use uuid::Uuid;
 
 /// Agent trait - implemented by agent backends
 #[async_trait]
@@ -141,23 +142,61 @@ pub struct ToolRequest {
 /// Simple in-memory agent implementation
 pub struct SimpleAgent {
     config: super::config::AgentConfig,
+    memory_config: super::config::MemoryConfig,
+    security_config: super::config::SecurityConfig,
     tools: Vec<Tool>,
     state: AgentState,
     session: Option<Session>,
+    provider: Option<Box<dyn ChatProvider>>,
+    tool_runtime: Option<ToolRuntime>,
 }
 
 impl SimpleAgent {
-    pub fn new(config: super::config::AgentConfig) -> Self {
+    pub fn new(
+        config: super::config::AgentConfig,
+        memory_config: Option<super::config::MemoryConfig>,
+        security_config: Option<super::config::SecurityConfig>,
+    ) -> Self {
+        let provider = ProviderFactory::create(&config).ok();
         Self {
             config,
+            memory_config: memory_config.unwrap_or_default(),
+            security_config: security_config.unwrap_or_default(),
             tools: Vec::new(),
             state: AgentState::Idle,
             session: None,
+            provider,
+            tool_runtime: None,
         }
     }
     
     pub fn register_tool(&mut self, tool: Tool) {
         self.tools.push(tool);
+    }
+
+    fn system_prompt(&self) -> Option<String> {
+        let path = self.config.soul_path.as_ref()?;
+        std::fs::read_to_string(path).ok()
+    }
+
+    fn ensure_session(&mut self) -> &mut Session {
+        self.session
+            .get_or_insert_with(|| Session::new(None, self.config.max_tokens.clamp(32, 512) as usize))
+    }
+
+    async fn ensure_tool_runtime(&mut self) -> Result<&ToolRuntime, AgentError> {
+        if self.tool_runtime.is_none() {
+            let runtime = ToolRuntime::from_config(
+                &self.config,
+                &self.memory_config,
+                &self.security_config,
+            )
+            .await
+            .map_err(AgentError::ConfigError)?;
+            self.tool_runtime = Some(runtime);
+        }
+
+        Ok(self.tool_runtime.as_ref().expect("tool runtime initialized"))
     }
 }
 
@@ -165,11 +204,82 @@ impl SimpleAgent {
 impl Agent for SimpleAgent {
     async fn process(&mut self, ctx: &AgentContext) -> AgentResponse {
         self.state = AgentState::Processing;
-        
-        // Simple echo response for now - will integrate with LLM later
-        let response = AgentResponse::text(format!("Received: {}", ctx.message));
-        
-        self.state = AgentState::Idle;
+        if self.provider.is_none() {
+            self.state = AgentState::Error("provider initialization failed".to_string());
+            return AgentResponse::text(format!(
+                "Provider '{}' is not configured or is unsupported in the current runtime.",
+                self.config.provider
+            ));
+        }
+
+        let parsed_tool_call = parse_tool_command(&ctx.message, &self.tools);
+        let system_prompt = self.system_prompt();
+        let model = self.config.model.clone();
+        let temperature = self.config.temperature;
+        let max_tokens = self.config.max_tokens;
+        let session = self.ensure_session();
+        if let Some(prompt) = system_prompt {
+            let has_system = session
+                .messages()
+                .iter()
+                .any(|msg| msg.role == MessageRole::System && msg.content == prompt);
+            if !has_system {
+                session.add_message(Message::system(prompt));
+            }
+        }
+        session.add_message(Message::user(ctx.message.clone()));
+
+        if let Some(call) = parsed_tool_call {
+            let runtime = match self.ensure_tool_runtime().await {
+                Ok(runtime) => runtime,
+                Err(err) => {
+                    self.state = AgentState::Error(err.to_string());
+                    return AgentResponse::text(format!("Tool runtime error: {}", err));
+                }
+            };
+            let result = execute_tool(&call, runtime).await;
+            let response_text = result.output.clone();
+            if let Some(session) = self.session.as_mut() {
+                session.add_message(Message::assistant(response_text.clone()));
+            }
+            self.state = AgentState::Idle;
+            return AgentResponse {
+                text: response_text,
+                tool_calls: vec![call.with_result(result)],
+                session_updates: HashMap::new(),
+                metadata: HashMap::new(),
+            };
+        }
+
+        let request = ProviderRequest {
+            model,
+            temperature,
+            max_tokens,
+            messages: session
+                .messages()
+                .iter()
+                .map(ChatMessage::from)
+                .collect(),
+        };
+        let provider = self.provider.as_ref().expect("provider checked above");
+
+        let response = match provider.complete(&request).await {
+            Ok(text) => {
+                if let Some(session) = self.session.as_mut() {
+                    session.add_message(Message::assistant(text.clone()));
+                }
+                self.state = AgentState::Idle;
+                AgentResponse::text(text)
+            }
+            Err(err) => {
+                self.state = AgentState::Error(err.to_string());
+                AgentResponse::text(format!("Provider error: {}", err))
+            }
+        };
+
+        if matches!(self.state, AgentState::Processing) {
+            self.state = AgentState::Idle;
+        }
         response
     }
     
@@ -179,6 +289,7 @@ impl Agent for SimpleAgent {
     
     async fn configure(&mut self, config: &super::config::AgentConfig) -> Result<(), AgentError> {
         self.config = config.clone();
+        self.provider = ProviderFactory::create(config).ok();
         Ok(())
     }
     

@@ -127,7 +127,11 @@ async fn main() {
 async fn repl(config: AppConfig, _config_path: PathBuf) {
     info!("Starting BorgClaw REPL...");
 
-    let mut agent = SimpleAgent::new(config.agent.clone());
+    let mut agent = SimpleAgent::new(
+        config.agent.clone(),
+        Some(config.memory.clone()),
+        Some(config.security.clone()),
+    );
     for tool in borgclaw_core::agent::builtin_tools() {
         agent.register_tool(tool);
     }
@@ -180,7 +184,11 @@ async fn repl(config: AppConfig, _config_path: PathBuf) {
 }
 
 async fn send_message(config: AppConfig, message: String) {
-    let mut agent = SimpleAgent::new(config.agent.clone());
+    let mut agent = SimpleAgent::new(
+        config.agent.clone(),
+        Some(config.memory.clone()),
+        Some(config.security.clone()),
+    );
     let ctx = AgentContext {
         session_id: borgclaw_core::agent::SessionId::new(),
         message,
