@@ -329,13 +329,12 @@ async fn status(config: AppConfig) {
     println!("Heartbeat: {} minutes", config.agent.heartbeat_interval);
     println!(
         "Provider auth: {}",
-        provider_env_var(&config.agent.provider)
-            .map(|key| if std::env::var(key).is_ok() {
-                "configured"
-            } else {
-                "missing env"
-            })
-            .unwrap_or("unknown")
+        match provider_credential_status(&config).await {
+            ProviderCredentialStatus::Env(_) => "configured via env",
+            ProviderCredentialStatus::SecureStore(_) => "configured via secure store",
+            ProviderCredentialStatus::Missing(_) => "missing",
+            ProviderCredentialStatus::UnknownProvider => "unknown",
+        }
     );
     println!(
         "Security: wasm={}, docker={}, approval={:?}",
