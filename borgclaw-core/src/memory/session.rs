@@ -1,9 +1,9 @@
 //! Session memory with auto-compaction support
 
-use super::{MemoryError, MemoryEntry};
+use super::{MemoryEntry, MemoryError};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use chrono::{DateTime, Utc};
 
 pub const DEFAULT_COMPACTION_THRESHOLD: usize = 50;
 
@@ -229,7 +229,8 @@ impl SessionCompactor {
             "Session context: {} user messages, {} assistant responses. Recent topics: {}",
             user_msgs.len(),
             assistant_msgs.len(),
-            user_msgs.iter()
+            user_msgs
+                .iter()
                 .take(3)
                 .map(|s| {
                     let words: Vec<&str> = s.split_whitespace().take(5).collect();

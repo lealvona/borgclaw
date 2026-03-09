@@ -66,13 +66,13 @@ impl SkillManifest {
         let mut dependencies = Vec::new();
         let mut instructions = String::new();
         let mut examples = Vec::new();
-        
+
         let mut in_instructions = false;
         let mut in_examples = false;
-        
+
         for line in content.lines() {
             let line = line.trim();
-            
+
             // Frontmatter parsing
             if line.starts_with("name:") {
                 name = line.trim_start_matches("name:").trim().to_string();
@@ -124,7 +124,7 @@ impl SkillManifest {
                 });
             }
         }
-        
+
         // If no name found, try to get from first heading
         if name.is_empty() {
             for line in content.lines() {
@@ -134,11 +134,13 @@ impl SkillManifest {
                 }
             }
         }
-        
+
         if name.is_empty() {
-            return Err(super::SkillsError::ParseError("Missing skill name".to_string()));
+            return Err(super::SkillsError::ParseError(
+                "Missing skill name".to_string(),
+            ));
         }
-        
+
         Ok(Self {
             name,
             version,

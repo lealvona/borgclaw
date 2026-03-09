@@ -115,16 +115,16 @@ impl WebhookChannel {
             let mut limits = self.rate_limits.write().await;
             let now = Utc::now();
             let minute_ago = now - chrono::Duration::seconds(60);
-            
+
             let requests = limits
                 .entry(format!("{}:{}", trigger.id, requester))
                 .or_default();
             requests.retain(|&t| t > minute_ago);
-            
+
             if requests.len() >= rpm as usize {
                 return false;
             }
-            
+
             requests.push(now);
         }
         true
@@ -139,7 +139,7 @@ impl WebhookChannel {
         sender: mpsc::Sender<InboundMessage>,
     ) -> Result<WebhookResponse, WebhookError> {
         let triggers = self.triggers.read().await;
-        
+
         let trigger = triggers
             .iter()
             .find(|t| t.matches(path, method))
@@ -187,7 +187,10 @@ impl WebhookChannel {
             status.last_activity = Some(Utc::now());
         }
 
-        sender.send(inbound).await.map_err(|_| WebhookError::ChannelClosed)?;
+        sender
+            .send(inbound)
+            .await
+            .map_err(|_| WebhookError::ChannelClosed)?;
 
         Ok(WebhookResponse {
             status: 200,
@@ -216,7 +219,10 @@ impl Channel for WebhookChannel {
         Ok(())
     }
 
-    async fn start_receiving(&self, _sender: mpsc::Sender<InboundMessage>) -> Result<(), ChannelError> {
+    async fn start_receiving(
+        &self,
+        _sender: mpsc::Sender<InboundMessage>,
+    ) -> Result<(), ChannelError> {
         Ok(())
     }
 
@@ -337,7 +343,8 @@ mod tests {
                 "/webhook",
                 "POST",
                 HashMap::from([("X-Forwarded-For".to_string(), "127.0.0.1".to_string())]),
-                br#"{"content":"hello","sender":"user123","sender_name":"User","group_id":"grp"}"#.to_vec(),
+                br#"{"content":"hello","sender":"user123","sender_name":"User","group_id":"grp"}"#
+                    .to_vec(),
                 tx,
             )
             .await
@@ -363,7 +370,13 @@ mod tests {
         let headers_b = HashMap::from([("X-Forwarded-For".to_string(), "10.0.0.2".to_string())]);
 
         channel
-            .handle_request("/webhook", "POST", headers_a.clone(), b"one".to_vec(), tx.clone())
+            .handle_request(
+                "/webhook",
+                "POST",
+                headers_a.clone(),
+                b"one".to_vec(),
+                tx.clone(),
+            )
             .await
             .unwrap();
         let limited = channel

@@ -1,10 +1,10 @@
 //! CLI Channel implementation
 
-use super::{
-    Channel, ChannelConfig, ChannelError, ChannelType, InboundMessage,
-    MessagePayload, OutboundMessage, Sender,
-};
 use super::traits::ChannelStatus;
+use super::{
+    Channel, ChannelConfig, ChannelError, ChannelType, InboundMessage, MessagePayload,
+    OutboundMessage, Sender,
+};
 use async_trait::async_trait;
 use chrono::Utc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -39,19 +39,22 @@ impl Channel for CliChannel {
     fn channel_type(&self) -> ChannelType {
         self.channel_type.clone()
     }
-    
+
     async fn init(&mut self, _config: &ChannelConfig) -> Result<(), ChannelError> {
         *self.status.write().await = ChannelStatus::connected();
         Ok(())
     }
-    
-    async fn start_receiving(&self, sender: mpsc::Sender<InboundMessage>) -> Result<(), ChannelError> {
+
+    async fn start_receiving(
+        &self,
+        sender: mpsc::Sender<InboundMessage>,
+    ) -> Result<(), ChannelError> {
         // CLI channel doesn't auto-receive - messages come via stdin handler
         // This is a no-op for the channel itself
         let _ = sender;
         Ok(())
     }
-    
+
     async fn send(&self, message: OutboundMessage) -> Result<(), ChannelError> {
         let text = match message.content {
             MessagePayload::Text(s) => s,
@@ -60,13 +63,13 @@ impl Channel for CliChannel {
             MessagePayload::Media { url, .. } => url,
             MessagePayload::File { name, .. } => name,
         };
-        
+
         println!("{}", text);
         self.msg_count.fetch_add(1, Ordering::Relaxed);
-        
+
         Ok(())
     }
-    
+
     async fn status(&self) -> ChannelStatus {
         let status = self.status.read().await;
         ChannelStatus {
@@ -77,7 +80,7 @@ impl Channel for CliChannel {
             messages_sent: self.msg_count.load(Ordering::Relaxed),
         }
     }
-    
+
     async fn shutdown(&self) -> Result<(), ChannelError> {
         *self.status.write().await = ChannelStatus::disconnected();
         Ok(())

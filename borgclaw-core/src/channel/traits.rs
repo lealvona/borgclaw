@@ -9,19 +9,22 @@ use tokio::sync::mpsc;
 pub trait Channel: Send + Sync {
     /// Get channel type
     fn channel_type(&self) -> ChannelType;
-    
+
     /// Initialize channel with config
     async fn init(&mut self, config: &ChannelConfig) -> Result<(), ChannelError>;
-    
+
     /// Start receiving messages
-    async fn start_receiving(&self, sender: mpsc::Sender<InboundMessage>) -> Result<(), ChannelError>;
-    
+    async fn start_receiving(
+        &self,
+        sender: mpsc::Sender<InboundMessage>,
+    ) -> Result<(), ChannelError>;
+
     /// Send a message
     async fn send(&self, message: OutboundMessage) -> Result<(), ChannelError>;
-    
+
     /// Get channel status
     async fn status(&self) -> ChannelStatus;
-    
+
     /// Shutdown channel
     async fn shutdown(&self) -> Result<(), ChannelError>;
 }
@@ -51,7 +54,7 @@ impl ChannelStatus {
             messages_sent: 0,
         }
     }
-    
+
     pub fn connected() -> Self {
         Self {
             connected: true,
@@ -72,21 +75,33 @@ pub struct ChannelSender {
 
 impl ChannelSender {
     pub fn new(channel_type: ChannelType, sender: mpsc::Sender<OutboundMessage>) -> Self {
-        Self { channel_type, sender }
+        Self {
+            channel_type,
+            sender,
+        }
     }
-    
+
     pub fn channel_type(&self) -> &ChannelType {
         &self.channel_type
     }
-    
+
     pub async fn send(&self, message: OutboundMessage) -> Result<(), ChannelError> {
-        self.sender.send(message).await.map_err(|e| {
-            ChannelError::SendFailed(e.to_string())
-        })
+        self.sender
+            .send(message)
+            .await
+            .map_err(|e| ChannelError::SendFailed(e.to_string()))
     }
-    
-    pub async fn send_text(&self, target: impl Into<String>, text: impl Into<String>) -> Result<(), ChannelError> {
-        let msg = OutboundMessage::new(target, self.channel_type.clone(), super::MessagePayload::text(text));
+
+    pub async fn send_text(
+        &self,
+        target: impl Into<String>,
+        text: impl Into<String>,
+    ) -> Result<(), ChannelError> {
+        let msg = OutboundMessage::new(
+            target,
+            self.channel_type.clone(),
+            super::MessagePayload::text(text),
+        );
         self.send(msg).await
     }
 }

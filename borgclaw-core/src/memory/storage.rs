@@ -21,7 +21,7 @@ impl SqliteMemory {
             path,
         }
     }
-    
+
     pub async fn init(&self) -> Result<(), MemoryError> {
         std::fs::create_dir_all(&self.path)
             .map_err(|e| MemoryError::StorageError(e.to_string()))?;
@@ -37,7 +37,7 @@ impl SqliteMemory {
             .connect_with(options)
             .await
             .map_err(|e| MemoryError::StorageError(e.to_string()))?;
-        
+
         // Create tables
         sqlx::query(
             r#"
@@ -57,7 +57,7 @@ impl SqliteMemory {
         .execute(&pool)
         .await
         .map_err(|e| MemoryError::StorageError(e.to_string()))?;
-        
+
         // Create FTS5 virtual table for full-text search
         sqlx::query(
             r#"
@@ -72,7 +72,7 @@ impl SqliteMemory {
         .execute(&pool)
         .await
         .map_err(|e| MemoryError::StorageError(e.to_string()))?;
-        
+
         // Create triggers to keep FTS in sync
         sqlx::query(
             r#"
@@ -84,7 +84,7 @@ impl SqliteMemory {
         .execute(&pool)
         .await
         .map_err(|e| MemoryError::StorageError(e.to_string()))?;
-        
+
         sqlx::query(
             r#"
             CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
@@ -95,7 +95,7 @@ impl SqliteMemory {
         .execute(&pool)
         .await
         .map_err(|e| MemoryError::StorageError(e.to_string()))?;
-        
+
         sqlx::query(
             r#"
             CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
@@ -107,7 +107,7 @@ impl SqliteMemory {
         .execute(&pool)
         .await
         .map_err(|e| MemoryError::StorageError(e.to_string()))?;
-        
+
         // Create vector table for semantic search (using simple embeddings)
         sqlx::query(
             r#"
@@ -121,7 +121,7 @@ impl SqliteMemory {
         .execute(&pool)
         .await
         .map_err(|e| MemoryError::StorageError(e.to_string()))?;
-        
+
         *self.conn.write().await = Some(pool);
         Ok(())
     }
@@ -131,8 +131,10 @@ impl SqliteMemory {
 impl Memory for SqliteMemory {
     async fn store(&self, entry: MemoryEntry) -> Result<(), MemoryError> {
         let conn = self.conn.read().await;
-        let pool = conn.as_ref().ok_or_else(|| MemoryError::StorageError("Not initialized".to_string()))?;
-        
+        let pool = conn
+            .as_ref()
+            .ok_or_else(|| MemoryError::StorageError("Not initialized".to_string()))?;
+
         sqlx::query(
             r#"
             INSERT OR REPLACE INTO memories (id, key, content, metadata, created_at, accessed_at, access_count, importance, group_id)
@@ -151,13 +153,15 @@ impl Memory for SqliteMemory {
         .execute(pool)
         .await
         .map_err(|e| MemoryError::StorageError(e.to_string()))?;
-        
+
         Ok(())
     }
-    
+
     async fn recall(&self, query: &MemoryQuery) -> Result<Vec<MemoryResult>, MemoryError> {
         let conn = self.conn.read().await;
-        let pool = conn.as_ref().ok_or_else(|| MemoryError::StorageError("Not initialized".to_string()))?;
+        let pool = conn
+            .as_ref()
+            .ok_or_else(|| MemoryError::StorageError("Not initialized".to_string()))?;
 
         let rows = if let Some(group_id) = &query.group_id {
             sqlx::query_as::<_, MemoryRow>(
@@ -204,14 +208,16 @@ impl Memory for SqliteMemory {
                 }
             })
             .collect();
-        
+
         Ok(results)
     }
-    
+
     async fn get(&self, id: &str) -> Result<Option<MemoryEntry>, MemoryError> {
         let conn = self.conn.read().await;
-        let pool = conn.as_ref().ok_or_else(|| MemoryError::StorageError("Not initialized".to_string()))?;
-        
+        let pool = conn
+            .as_ref()
+            .ok_or_else(|| MemoryError::StorageError("Not initialized".to_string()))?;
+
         let row: Option<MemoryRow> = sqlx::query_as(
             r#"SELECT id, key, content, metadata, created_at, accessed_at, access_count, importance, group_id FROM memories WHERE id = ?"#,
         )
@@ -222,70 +228,81 @@ impl Memory for SqliteMemory {
 
         Ok(row.map(MemoryRow::into_memory_entry))
     }
-    
+
     async fn delete(&self, id: &str) -> Result<(), MemoryError> {
         let conn = self.conn.read().await;
-        let pool = conn.as_ref().ok_or_else(|| MemoryError::StorageError("Not initialized".to_string()))?;
-        
+        let pool = conn
+            .as_ref()
+            .ok_or_else(|| MemoryError::StorageError("Not initialized".to_string()))?;
+
         sqlx::query("DELETE FROM memories WHERE id = ?")
             .bind(id)
             .execute(pool)
             .await
             .map_err(|e| MemoryError::StorageError(e.to_string()))?;
-        
+
         Ok(())
     }
-    
+
     async fn update(&self, entry: &MemoryEntry) -> Result<(), MemoryError> {
         self.store(entry.clone()).await
     }
-    
+
     async fn keys(&self) -> Result<Vec<String>, MemoryError> {
         let conn = self.conn.read().await;
-        let pool = conn.as_ref().ok_or_else(|| MemoryError::StorageError("Not initialized".to_string()))?;
-        
+        let pool = conn
+            .as_ref()
+            .ok_or_else(|| MemoryError::StorageError("Not initialized".to_string()))?;
+
         let rows: Vec<(String,)> = sqlx::query_as("SELECT DISTINCT key FROM memories ORDER BY key")
             .fetch_all(pool)
             .await
             .map_err(|e| MemoryError::StorageError(e.to_string()))?;
-        
+
         Ok(rows.into_iter().map(|(k,)| k).collect())
     }
-    
+
     async fn clear(&self) -> Result<(), MemoryError> {
         let conn = self.conn.read().await;
-        let pool = conn.as_ref().ok_or_else(|| MemoryError::StorageError("Not initialized".to_string()))?;
-        
+        let pool = conn
+            .as_ref()
+            .ok_or_else(|| MemoryError::StorageError("Not initialized".to_string()))?;
+
         sqlx::query("DELETE FROM memories")
             .execute(pool)
             .await
             .map_err(|e| MemoryError::StorageError(e.to_string()))?;
-        
+
         Ok(())
     }
-    
+
     async fn clear_group(&self, group_id: &str) -> Result<(), MemoryError> {
         let conn = self.conn.read().await;
-        let pool = conn.as_ref().ok_or_else(|| MemoryError::StorageError("Not initialized".to_string()))?;
-        
+        let pool = conn
+            .as_ref()
+            .ok_or_else(|| MemoryError::StorageError("Not initialized".to_string()))?;
+
         sqlx::query("DELETE FROM memories WHERE group_id = ?")
             .bind(group_id)
             .execute(pool)
             .await
             .map_err(|e| MemoryError::StorageError(e.to_string()))?;
-        
+
         Ok(())
     }
-    
+
     async fn groups(&self) -> Result<Vec<String>, MemoryError> {
         let conn = self.conn.read().await;
-        let pool = conn.as_ref().ok_or_else(|| MemoryError::StorageError("Not initialized".to_string()))?;
-        
-        let rows: Vec<(Option<String>,)> = sqlx::query_as("SELECT DISTINCT group_id FROM memories WHERE group_id IS NOT NULL")
-            .fetch_all(pool)
-            .await
-            .map_err(|e| MemoryError::StorageError(e.to_string()))?;
-        
+        let pool = conn
+            .as_ref()
+            .ok_or_else(|| MemoryError::StorageError("Not initialized".to_string()))?;
+
+        let rows: Vec<(Option<String>,)> =
+            sqlx::query_as("SELECT DISTINCT group_id FROM memories WHERE group_id IS NOT NULL")
+                .fetch_all(pool)
+                .await
+                .map_err(|e| MemoryError::StorageError(e.to_string()))?;
+
         Ok(rows.into_iter().filter_map(|(g,)| g).collect())
     }
 }
@@ -330,12 +347,15 @@ mod tests {
 
     #[tokio::test]
     async fn recall_round_trips_metadata_and_group() {
-        let root = std::env::temp_dir().join(format!("borgclaw_memory_test_{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_memory_test_{}", uuid::Uuid::new_v4()));
         let memory = SqliteMemory::new(root.clone());
         memory.init().await.unwrap();
 
         let mut entry = new_entry_for_group("deadline", "Quarterly report due friday", "work");
-        entry.metadata.insert("source".to_string(), "calendar".to_string());
+        entry
+            .metadata
+            .insert("source".to_string(), "calendar".to_string());
         memory.store(entry.clone()).await.unwrap();
 
         let results = memory
@@ -351,17 +371,27 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].entry.group_id.as_deref(), Some("work"));
-        assert_eq!(results[0].entry.metadata.get("source").map(String::as_str), Some("calendar"));
+        assert_eq!(
+            results[0].entry.metadata.get("source").map(String::as_str),
+            Some("calendar")
+        );
     }
 
     #[tokio::test]
     async fn recall_respects_group_isolation() {
-        let root = std::env::temp_dir().join(format!("borgclaw_memory_test_{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_memory_test_{}", uuid::Uuid::new_v4()));
         let memory = SqliteMemory::new(root.clone());
         memory.init().await.unwrap();
 
-        memory.store(new_entry("shared", "deploy runbook")).await.unwrap();
-        memory.store(new_entry_for_group("shared", "deploy checklist", "ops")).await.unwrap();
+        memory
+            .store(new_entry("shared", "deploy runbook"))
+            .await
+            .unwrap();
+        memory
+            .store(new_entry_for_group("shared", "deploy checklist", "ops"))
+            .await
+            .unwrap();
 
         let no_group = memory
             .recall(&MemoryQuery {

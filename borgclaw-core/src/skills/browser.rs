@@ -122,10 +122,18 @@ impl PlaywrightClient {
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
-        let mut child = cmd.spawn().map_err(|e| BrowserError::LaunchFailed(e.to_string()))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| BrowserError::LaunchFailed(e.to_string()))?;
 
-        let stdin = child.stdin.take().ok_or(BrowserError::LaunchFailed("No stdin".to_string()))?;
-        let stdout = child.stdout.take().ok_or(BrowserError::LaunchFailed("No stdout".to_string()))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or(BrowserError::LaunchFailed("No stdin".to_string()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or(BrowserError::LaunchFailed("No stdout".to_string()))?;
 
         *self.process.write().await = Some(child);
         *self.stdin.write().await = Some(tokio::io::BufWriter::new(stdin));
@@ -133,13 +141,19 @@ impl PlaywrightClient {
 
         let response = self.send_request("new_page", HashMap::new()).await?;
         if !response.success {
-            return Err(BrowserError::ActionFailed(response.error.unwrap_or_default()));
+            return Err(BrowserError::ActionFailed(
+                response.error.unwrap_or_default(),
+            ));
         }
 
         Ok(())
     }
 
-    async fn send_request(&self, action: &str, args: HashMap<String, serde_json::Value>) -> Result<BridgeResponse, BrowserError> {
+    async fn send_request(
+        &self,
+        action: &str,
+        args: HashMap<String, serde_json::Value>,
+    ) -> Result<BridgeResponse, BrowserError> {
         let id = {
             let mut next = self.next_id.write().await;
             let id = *next;
@@ -161,11 +175,14 @@ impl PlaywrightClient {
 
         let mut stdin = self.stdin.write().await;
         if let Some(ref mut s) = *stdin {
-            s.write_all(request_json.as_bytes()).await
+            s.write_all(request_json.as_bytes())
+                .await
                 .map_err(|e| BrowserError::SendFailed(e.to_string()))?;
-            s.write_all(b"\n").await
+            s.write_all(b"\n")
+                .await
                 .map_err(|e| BrowserError::SendFailed(e.to_string()))?;
-            s.flush().await
+            s.flush()
+                .await
                 .map_err(|e| BrowserError::SendFailed(e.to_string()))?;
         } else {
             return Err(BrowserError::NotConnected);
@@ -185,14 +202,26 @@ impl BrowserSkill for PlaywrightClient {
         let mut args = HashMap::new();
         args.insert("url".to_string(), serde_json::json!(url));
         let response = self.send_request("navigate", args).await?;
-        if response.success { Ok(()) } else { Err(BrowserError::ActionFailed(response.error.unwrap_or_default())) }
+        if response.success {
+            Ok(())
+        } else {
+            Err(BrowserError::ActionFailed(
+                response.error.unwrap_or_default(),
+            ))
+        }
     }
 
     async fn click(&self, selector: &str) -> Result<(), BrowserError> {
         let mut args = HashMap::new();
         args.insert("selector".to_string(), serde_json::json!(selector));
         let response = self.send_request("click", args).await?;
-        if response.success { Ok(()) } else { Err(BrowserError::ActionFailed(response.error.unwrap_or_default())) }
+        if response.success {
+            Ok(())
+        } else {
+            Err(BrowserError::ActionFailed(
+                response.error.unwrap_or_default(),
+            ))
+        }
     }
 
     async fn fill(&self, selector: &str, value: &str) -> Result<(), BrowserError> {
@@ -200,20 +229,31 @@ impl BrowserSkill for PlaywrightClient {
         args.insert("selector".to_string(), serde_json::json!(selector));
         args.insert("value".to_string(), serde_json::json!(value));
         let response = self.send_request("fill", args).await?;
-        if response.success { Ok(()) } else { Err(BrowserError::ActionFailed(response.error.unwrap_or_default())) }
+        if response.success {
+            Ok(())
+        } else {
+            Err(BrowserError::ActionFailed(
+                response.error.unwrap_or_default(),
+            ))
+        }
     }
 
     async fn screenshot(&self) -> Result<Vec<u8>, BrowserError> {
         let args = HashMap::new();
         let response = self.send_request("screenshot", args).await?;
         if let Some(result) = response.result {
-            let base64_data = result.as_str().ok_or(BrowserError::ParseFailed("Expected string".to_string()))?;
+            let base64_data = result
+                .as_str()
+                .ok_or(BrowserError::ParseFailed("Expected string".to_string()))?;
             use base64::Engine;
-            let bytes = base64::engine::general_purpose::STANDARD.decode(base64_data)
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(base64_data)
                 .map_err(|e| BrowserError::ParseFailed(e.to_string()))?;
             Ok(bytes)
         } else {
-            Err(BrowserError::ActionFailed(response.error.unwrap_or_default()))
+            Err(BrowserError::ActionFailed(
+                response.error.unwrap_or_default(),
+            ))
         }
     }
 
@@ -222,7 +262,13 @@ impl BrowserSkill for PlaywrightClient {
         args.insert("selector".to_string(), serde_json::json!(selector));
         args.insert("timeout".to_string(), serde_json::json!(timeout_ms));
         let response = self.send_request("wait_for", args).await?;
-        if response.success { Ok(()) } else { Err(BrowserError::ActionFailed(response.error.unwrap_or_default())) }
+        if response.success {
+            Ok(())
+        } else {
+            Err(BrowserError::ActionFailed(
+                response.error.unwrap_or_default(),
+            ))
+        }
     }
 
     async fn wait_for_text(&self, text: &str, timeout_ms: u64) -> Result<(), BrowserError> {
@@ -230,7 +276,13 @@ impl BrowserSkill for PlaywrightClient {
         args.insert("text".to_string(), serde_json::json!(text));
         args.insert("timeout".to_string(), serde_json::json!(timeout_ms));
         let response = self.send_request("wait_for_text", args).await?;
-        if response.success { Ok(()) } else { Err(BrowserError::ActionFailed(response.error.unwrap_or_default())) }
+        if response.success {
+            Ok(())
+        } else {
+            Err(BrowserError::ActionFailed(
+                response.error.unwrap_or_default(),
+            ))
+        }
     }
 
     async fn extract_text(&self, selector: &str) -> Result<String, BrowserError> {
@@ -238,11 +290,14 @@ impl BrowserSkill for PlaywrightClient {
         args.insert("selector".to_string(), serde_json::json!(selector));
         let response = self.send_request("extract_text", args).await?;
         if let Some(result) = response.result {
-            result.as_str()
+            result
+                .as_str()
                 .map(|s| s.to_string())
                 .ok_or(BrowserError::ParseFailed("Expected string".to_string()))
         } else {
-            Err(BrowserError::ActionFailed(response.error.unwrap_or_default()))
+            Err(BrowserError::ActionFailed(
+                response.error.unwrap_or_default(),
+            ))
         }
     }
 
@@ -251,11 +306,14 @@ impl BrowserSkill for PlaywrightClient {
         args.insert("selector".to_string(), serde_json::json!(selector));
         let response = self.send_request("extract_html", args).await?;
         if let Some(result) = response.result {
-            result.as_str()
+            result
+                .as_str()
                 .map(|s| s.to_string())
                 .ok_or(BrowserError::ParseFailed("Expected string".to_string()))
         } else {
-            Err(BrowserError::ActionFailed(response.error.unwrap_or_default()))
+            Err(BrowserError::ActionFailed(
+                response.error.unwrap_or_default(),
+            ))
         }
     }
 
@@ -263,50 +321,65 @@ impl BrowserSkill for PlaywrightClient {
         let mut args = HashMap::new();
         args.insert("script".to_string(), serde_json::json!(script));
         let response = self.send_request("eval_js", args).await?;
-        response.result.ok_or_else(|| BrowserError::ActionFailed(response.error.unwrap_or_default()))
+        response
+            .result
+            .ok_or_else(|| BrowserError::ActionFailed(response.error.unwrap_or_default()))
     }
 
     async fn get_cookies(&self) -> Result<Vec<Cookie>, BrowserError> {
         let args = HashMap::new();
         let response = self.send_request("get_cookies", args).await?;
         if let Some(result) = response.result {
-            serde_json::from_value(result)
-                .map_err(|e| BrowserError::ParseFailed(e.to_string()))
+            serde_json::from_value(result).map_err(|e| BrowserError::ParseFailed(e.to_string()))
         } else {
-            Err(BrowserError::ActionFailed(response.error.unwrap_or_default()))
+            Err(BrowserError::ActionFailed(
+                response.error.unwrap_or_default(),
+            ))
         }
     }
 
     async fn set_cookie(&self, cookie: Cookie) -> Result<(), BrowserError> {
         let mut args = HashMap::new();
-        args.insert("cookie".to_string(), serde_json::to_value(cookie).map_err(|e| BrowserError::ParseFailed(e.to_string()))?);
+        args.insert(
+            "cookie".to_string(),
+            serde_json::to_value(cookie).map_err(|e| BrowserError::ParseFailed(e.to_string()))?,
+        );
         let response = self.send_request("set_cookie", args).await?;
-        if response.success { Ok(()) } else { Err(BrowserError::ActionFailed(response.error.unwrap_or_default())) }
+        if response.success {
+            Ok(())
+        } else {
+            Err(BrowserError::ActionFailed(
+                response.error.unwrap_or_default(),
+            ))
+        }
     }
 
     async fn get_url(&self) -> Result<String, BrowserError> {
         let args = HashMap::new();
         let response = self.send_request("get_url", args).await?;
         if let Some(result) = response.result {
-            result.as_str()
+            result
+                .as_str()
                 .map(|s| s.to_string())
                 .ok_or(BrowserError::ParseFailed("Expected string".to_string()))
         } else {
-            Err(BrowserError::ActionFailed(response.error.unwrap_or_default()))
+            Err(BrowserError::ActionFailed(
+                response.error.unwrap_or_default(),
+            ))
         }
     }
 
     async fn close(&self) -> Result<(), BrowserError> {
         let args = HashMap::new();
         let _ = self.send_request("close", args).await;
-        
+
         if let Some(mut child) = self.process.write().await.take() {
             child.kill().await.ok();
         }
-        
+
         *self.stdin.write().await = None;
         *self.stdout.write().await = None;
-        
+
         Ok(())
     }
 }
@@ -315,19 +388,19 @@ impl BrowserSkill for PlaywrightClient {
 pub enum BrowserError {
     #[error("Launch failed: {0}")]
     LaunchFailed(String),
-    
+
     #[error("Not connected")]
     NotConnected,
-    
+
     #[error("Send failed: {0}")]
     SendFailed(String),
-    
+
     #[error("Action failed: {0}")]
     ActionFailed(String),
-    
+
     #[error("Parse failed: {0}")]
     ParseFailed(String),
-    
+
     #[error("Timeout")]
     Timeout,
 }

@@ -1,10 +1,10 @@
 //! GitHub integration with safety rules
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitHubConfig {
@@ -204,7 +204,10 @@ impl GitHubClient {
             login: String,
         }
 
-        let user: UserResponse = response.json().await.map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
+        let user: UserResponse = response
+            .json()
+            .await
+            .map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
         let mut cached = self.authenticated_user.write().await;
         *cached = Some(user.login.clone());
 
@@ -239,7 +242,10 @@ impl GitHubClient {
                     login: String,
                 }
 
-                let repo_resp: RepoResponse = response.json().await.map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
+                let repo_resp: RepoResponse = response
+                    .json()
+                    .await
+                    .map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
                 Ok(repo_resp.owner.login == user)
             }
             RepoAccess::Allowlisted(allowlist) => {
@@ -252,15 +258,18 @@ impl GitHubClient {
 
     pub async fn check_repo_access(&self, owner: &str, repo: &str) -> Result<(), GitHubError> {
         let is_owned = self.verify_ownership(owner, repo).await?;
-        
+
         match &self.safety.repo_access {
-            RepoAccess::OwnedOnly if !is_owned => {
-                Err(GitHubError::AccessDenied("Repository not owned by authenticated user".to_string()))
-            }
+            RepoAccess::OwnedOnly if !is_owned => Err(GitHubError::AccessDenied(
+                "Repository not owned by authenticated user".to_string(),
+            )),
             RepoAccess::Allowlisted(allowlist) => {
                 let full_name = format!("{}/{}", owner, repo);
                 if !allowlist.contains(&full_name) {
-                    Err(GitHubError::AccessDenied(format!("Repository {} not in allowlist", full_name)))
+                    Err(GitHubError::AccessDenied(format!(
+                        "Repository {} not in allowlist",
+                        full_name
+                    )))
                 } else {
                     Ok(())
                 }
@@ -298,9 +307,12 @@ impl GitHubClient {
         Ok(confirmation)
     }
 
-    pub async fn confirm_destructive_op(&self, token: &str) -> Result<PendingConfirmation, GitHubError> {
+    pub async fn confirm_destructive_op(
+        &self,
+        token: &str,
+    ) -> Result<PendingConfirmation, GitHubError> {
         let mut pending = self.pending_confirmations.write().await;
-        
+
         let confirmation = pending
             .remove(token)
             .ok_or(GitHubError::ConfirmationExpired)?;
@@ -312,7 +324,10 @@ impl GitHubClient {
         Ok(confirmation)
     }
 
-    pub async fn list_repos(&self, visibility: Option<&str>) -> Result<Vec<GitHubRepo>, GitHubError> {
+    pub async fn list_repos(
+        &self,
+        visibility: Option<&str>,
+    ) -> Result<Vec<GitHubRepo>, GitHubError> {
         let mut url = format!("{}/user/repos", self.config.base_url);
         if let Some(v) = visibility {
             url.push_str(&format!("?per_page=100&visibility={}", v));
@@ -349,7 +364,10 @@ impl GitHubClient {
             login: String,
         }
 
-        let repos: Vec<RepoItem> = response.json().await.map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
+        let repos: Vec<RepoItem> = response
+            .json()
+            .await
+            .map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
 
         Ok(repos
             .into_iter()
@@ -398,7 +416,10 @@ impl GitHubClient {
             login: String,
         }
 
-        let r: RepoResponse = response.json().await.map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
+        let r: RepoResponse = response
+            .json()
+            .await
+            .map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
 
         Ok(GitHubRepo {
             name: r.name,
@@ -411,7 +432,11 @@ impl GitHubClient {
         })
     }
 
-    pub async fn list_branches(&self, owner: &str, repo: &str) -> Result<Vec<GitHubBranch>, GitHubError> {
+    pub async fn list_branches(
+        &self,
+        owner: &str,
+        repo: &str,
+    ) -> Result<Vec<GitHubBranch>, GitHubError> {
         self.check_repo_access(owner, repo).await?;
 
         let url = format!("{}/repos/{}/{}/branches", self.config.base_url, owner, repo);
@@ -440,7 +465,10 @@ impl GitHubClient {
             sha: String,
         }
 
-        let branches: Vec<BranchItem> = response.json().await.map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
+        let branches: Vec<BranchItem> = response
+            .json()
+            .await
+            .map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
 
         Ok(branches
             .into_iter()
@@ -461,10 +489,7 @@ impl GitHubClient {
     ) -> Result<GitHubBranch, GitHubError> {
         self.check_repo_access(owner, repo).await?;
 
-        let url = format!(
-            "{}/repos/{}/{}/git/refs",
-            self.config.base_url, owner, repo
-        );
+        let url = format!("{}/repos/{}/{}/git/refs", self.config.base_url, owner, repo);
 
         let body = serde_json::json!({
             "ref": format!("refs/heads/{}", name),
@@ -498,7 +523,10 @@ impl GitHubClient {
             sha: String,
         }
 
-        let r: RefResponse = response.json().await.map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
+        let r: RefResponse = response
+            .json()
+            .await
+            .map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
 
         Ok(GitHubBranch {
             name: name.to_string(),
@@ -593,7 +621,10 @@ impl GitHubClient {
             r#ref: String,
         }
 
-        let prs: Vec<PRItem> = response.json().await.map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
+        let prs: Vec<PRItem> = response
+            .json()
+            .await
+            .map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
 
         Ok(prs
             .into_iter()
@@ -667,7 +698,10 @@ impl GitHubClient {
             r#ref: String,
         }
 
-        let pr: PRResponse = response.json().await.map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
+        let pr: PRResponse = response
+            .json()
+            .await
+            .map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
 
         Ok(GitHubPullRequest {
             number: pr.number,
@@ -754,7 +788,10 @@ impl GitHubClient {
             html_url: String,
         }
 
-        let issues: Vec<IssueItem> = response.json().await.map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
+        let issues: Vec<IssueItem> = response
+            .json()
+            .await
+            .map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
 
         Ok(issues
             .into_iter()
@@ -808,7 +845,10 @@ impl GitHubClient {
             html_url: String,
         }
 
-        let issue: IssueResponse = response.json().await.map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
+        let issue: IssueResponse = response
+            .json()
+            .await
+            .map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
 
         Ok(GitHubIssue {
             number: issue.number,
@@ -826,10 +866,7 @@ impl GitHubClient {
     ) -> Result<Vec<GitHubRelease>, GitHubError> {
         self.check_repo_access(owner, repo).await?;
 
-        let url = format!(
-            "{}/repos/{}/{}/releases",
-            self.config.base_url, owner, repo
-        );
+        let url = format!("{}/repos/{}/{}/releases", self.config.base_url, owner, repo);
 
         let response = self
             .http
@@ -853,7 +890,10 @@ impl GitHubClient {
             html_url: String,
         }
 
-        let releases: Vec<ReleaseItem> = response.json().await.map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
+        let releases: Vec<ReleaseItem> = response
+            .json()
+            .await
+            .map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
 
         Ok(releases
             .into_iter()
@@ -900,7 +940,10 @@ impl GitHubClient {
             encoding: Option<String>,
         }
 
-        let content: ContentResponse = response.json().await.map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
+        let content: ContentResponse = response
+            .json()
+            .await
+            .map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
 
         if let (Some(encoded), Some("base64")) = (content.content, content.encoding.as_deref()) {
             use base64::Engine;
@@ -961,28 +1004,28 @@ impl GitHubClient {
 pub enum GitHubError {
     #[error("Request failed: {0}")]
     RequestFailed(#[from] reqwest::Error),
-    
+
     #[error("HTTP error: {0}")]
     HttpError(u16),
-    
+
     #[error("Authentication failed: {0}")]
     AuthFailed(u16),
-    
+
     #[error("Parse failed: {0}")]
     ParseFailed(String),
-    
+
     #[error("Not found: {0}")]
     NotFound(String),
-    
+
     #[error("Access denied: {0}")]
     AccessDenied(String),
-    
+
     #[error("Confirmation required: {0}")]
     ConfirmationRequired(String),
-    
+
     #[error("Confirmation expired")]
     ConfirmationExpired,
-    
+
     #[error("Confirmation not required for this operation")]
     ConfirmationNotRequired,
 }

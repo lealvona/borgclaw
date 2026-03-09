@@ -3,11 +3,11 @@
 use crate::agent::{builtin_tools, Agent, AgentContext, SenderInfo, SessionId, SimpleAgent};
 use crate::config::{AgentConfig, McpConfig, MemoryConfig, SecurityConfig, SkillsConfig};
 use crate::memory::{new_entry_for_group, Memory, SqliteMemory};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
-use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -195,13 +195,14 @@ impl SubAgentCoordinator {
     pub async fn execute(&self, task_id: &str) -> Result<SubAgentResult, SubAgentError> {
         let task = {
             let mut tasks = self.tasks.write().await;
-            let task = tasks.get_mut(task_id)
+            let task = tasks
+                .get_mut(task_id)
                 .ok_or_else(|| SubAgentError::NotFound(task_id.to_string()))?;
-            
+
             if task.status != TaskStatus::Pending {
                 return Err(SubAgentError::InvalidState(task.status));
             }
-            
+
             task.status = TaskStatus::Running;
             task.clone()
         };
@@ -211,36 +212,40 @@ impl SubAgentCoordinator {
 
         let result = tokio::time::timeout(timeout, self.execute_task_inner(&task))
             .await
-            .unwrap_or_else(|_| {
-                Err(SubAgentError::Timeout(task.timeout_seconds))
-            });
+            .unwrap_or_else(|_| Err(SubAgentError::Timeout(task.timeout_seconds)));
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
         let (sub_result, status) = match result {
-            Ok(output) => (SubAgentResult {
-                task_id: task_id.to_string(),
-                success: true,
-                output: output.output,
-                tools_used: output.tools_used,
-                duration_ms,
-                memory_entries_created: output.memory_entries_created,
-                error: None,
-            }, TaskStatus::Completed),
+            Ok(output) => (
+                SubAgentResult {
+                    task_id: task_id.to_string(),
+                    success: true,
+                    output: output.output,
+                    tools_used: output.tools_used,
+                    duration_ms,
+                    memory_entries_created: output.memory_entries_created,
+                    error: None,
+                },
+                TaskStatus::Completed,
+            ),
             Err(e) => {
                 let status = match e {
                     SubAgentError::Timeout(_) => TaskStatus::Timeout,
                     _ => TaskStatus::Failed,
                 };
-                (SubAgentResult {
-                task_id: task_id.to_string(),
-                success: false,
-                output: String::new(),
-                tools_used: vec![],
-                duration_ms,
-                memory_entries_created: 0,
-                error: Some(e.to_string()),
-            }, status)
+                (
+                    SubAgentResult {
+                        task_id: task_id.to_string(),
+                        success: false,
+                        output: String::new(),
+                        tools_used: vec![],
+                        duration_ms,
+                        memory_entries_created: 0,
+                        error: Some(e.to_string()),
+                    },
+                    status,
+                )
             }
         };
 
@@ -258,12 +263,17 @@ impl SubAgentCoordinator {
             Ok(sub_result)
         } else {
             Err(SubAgentError::ExecutionFailed(
-                sub_result.error.unwrap_or_else(|| "Unknown error".to_string())
+                sub_result
+                    .error
+                    .unwrap_or_else(|| "Unknown error".to_string()),
             ))
         }
     }
 
-    async fn execute_task_inner(&self, task: &SubAgentTask) -> Result<InnerTaskResult, SubAgentError> {
+    async fn execute_task_inner(
+        &self,
+        task: &SubAgentTask,
+    ) -> Result<InnerTaskResult, SubAgentError> {
         let session_id = SessionId::new();
         let ctx = AgentContext {
             session_id: session_id.clone(),
@@ -285,7 +295,13 @@ impl SubAgentCoordinator {
         );
         let tools = builtin_tools()
             .into_iter()
-            .filter(|tool| task.tools_allowed.is_empty() || task.tools_allowed.iter().any(|allowed| allowed == &tool.name))
+            .filter(|tool| {
+                task.tools_allowed.is_empty()
+                    || task
+                        .tools_allowed
+                        .iter()
+                        .any(|allowed| allowed == &tool.name)
+            })
             .collect::<Vec<_>>();
         for tool in tools {
             agent.register_tool(tool);
@@ -439,7 +455,8 @@ mod tests {
 
     #[tokio::test]
     async fn subagent_executes_agent_and_records_memory_when_allowed() {
-        let root = std::env::temp_dir().join(format!("borgclaw_subagent_test_{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_subagent_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let (sender, mut receiver) = mpsc::channel(4);
         let coordinator = SubAgentCoordinator::with_configs(

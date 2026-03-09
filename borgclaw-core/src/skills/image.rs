@@ -73,14 +73,22 @@ impl ImageClient {
         }
     }
 
-    pub async fn generate(&self, prompt: &str, params: ImageParams) -> Result<ImageResult, ImageError> {
+    pub async fn generate(
+        &self,
+        prompt: &str,
+        params: ImageParams,
+    ) -> Result<ImageResult, ImageError> {
         match &self.backend {
             ImageBackend::DallE3 => self.generate_dalle(prompt, &params).await,
             ImageBackend::StableDiffusion(cfg) => self.generate_sd(prompt, &params, cfg).await,
         }
     }
 
-    async fn generate_dalle(&self, prompt: &str, params: &ImageParams) -> Result<ImageResult, ImageError> {
+    async fn generate_dalle(
+        &self,
+        prompt: &str,
+        params: &ImageParams,
+    ) -> Result<ImageResult, ImageError> {
         let api_key = std::env::var("OPENAI_API_KEY")
             .map_err(|_| ImageError::ConfigError("OPENAI_API_KEY not set".to_string()))?;
 
@@ -92,7 +100,8 @@ impl ImageClient {
             "n": 1
         });
 
-        let response = self.http
+        let response = self
+            .http
             .post("https://api.openai.com/v1/images/generations")
             .bearer_auth(&api_key)
             .header("Content-Type", "application/json")
@@ -115,13 +124,16 @@ impl ImageClient {
             revised_prompt: Option<String>,
         }
 
-        let result: DallEResponse = response.json().await
+        let result: DallEResponse = response
+            .json()
+            .await
             .map_err(|e| ImageError::ParseFailed(e.to_string()))?;
 
         if let Some(image) = result.data.first() {
             let (url, bytes) = if let Some(b64) = &image.b64_json {
                 use base64::Engine;
-                let decoded = base64::engine::general_purpose::STANDARD.decode(b64)
+                let decoded = base64::engine::general_purpose::STANDARD
+                    .decode(b64)
                     .map_err(|e| ImageError::ParseFailed(e.to_string()))?;
                 (None, Some(decoded))
             } else if let Some(url) = &image.url {
@@ -141,7 +153,12 @@ impl ImageClient {
         }
     }
 
-    async fn generate_sd(&self, prompt: &str, params: &ImageParams, config: &SdConfig) -> Result<ImageResult, ImageError> {
+    async fn generate_sd(
+        &self,
+        prompt: &str,
+        params: &ImageParams,
+        config: &SdConfig,
+    ) -> Result<ImageResult, ImageError> {
         let body = serde_json::json!({
             "prompt": prompt,
             "negative_prompt": params.negative_prompt.as_deref().unwrap_or(""),
@@ -154,7 +171,8 @@ impl ImageClient {
 
         let url = format!("{}/sdapi/v1/txt2img", config.base_url);
 
-        let response = self.http
+        let response = self
+            .http
             .post(&url)
             .header("Content-Type", "application/json")
             .json(&body)
@@ -167,12 +185,15 @@ impl ImageClient {
             images: Vec<String>,
         }
 
-        let result: SdResponse = response.json().await
+        let result: SdResponse = response
+            .json()
+            .await
             .map_err(|e| ImageError::ParseFailed(e.to_string()))?;
 
         if let Some(b64) = result.images.first() {
             use base64::Engine;
-            let decoded = base64::engine::general_purpose::STANDARD.decode(b64)
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(b64)
                 .map_err(|e| ImageError::ParseFailed(e.to_string()))?;
 
             Ok(ImageResult {
@@ -191,10 +212,10 @@ impl ImageClient {
 pub enum ImageError {
     #[error("Request failed: {0}")]
     RequestFailed(String),
-    
+
     #[error("Parse failed: {0}")]
     ParseFailed(String),
-    
+
     #[error("Config error: {0}")]
     ConfigError(String),
 }

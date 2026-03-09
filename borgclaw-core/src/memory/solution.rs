@@ -1,10 +1,10 @@
 //! Solution memory for storing and retrieving problem-solving patterns
 
-use super::{MemoryError, MemoryEntry, MemoryQuery, MemoryResult};
+use super::{MemoryEntry, MemoryError, MemoryQuery, MemoryResult};
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use chrono::{DateTime, Utc};
-use async_trait::async_trait;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Solution {
@@ -54,15 +54,20 @@ impl Solution {
     pub fn record_use(&mut self, success: bool) {
         self.usage_count += 1;
         self.last_used = Some(Utc::now());
-        
+
         let prev_weight = (self.usage_count - 1) as f32;
         let curr_weight = 1.0;
         let total_weight = prev_weight + curr_weight;
-        
+
         self.success_rate = if total_weight > 0.0 {
-            (self.success_rate * prev_weight + if success { 1.0 } else { 0.0 } * curr_weight) / total_weight
+            (self.success_rate * prev_weight + if success { 1.0 } else { 0.0 } * curr_weight)
+                / total_weight
         } else {
-            if success { 1.0 } else { 0.0 }
+            if success {
+                1.0
+            } else {
+                0.0
+            }
         };
     }
 
@@ -84,7 +89,7 @@ impl Solution {
         if !entry.key.starts_with("solution:") {
             return None;
         }
-        
+
         serde_json::from_str(&entry.content).ok()
     }
 }
@@ -237,7 +242,9 @@ impl SolutionMemory {
             .values()
             .filter(|s| {
                 s.problem_description.to_lowercase().contains(&query_lower)
-                    || s.tags.iter().any(|t| t.to_lowercase().contains(&query_lower))
+                    || s.tags
+                        .iter()
+                        .any(|t| t.to_lowercase().contains(&query_lower))
                     || s.problem_type.to_lowercase().contains(&query_lower)
             })
             .collect()
@@ -246,7 +253,8 @@ impl SolutionMemory {
     pub fn top_solutions(&self, limit: usize) -> Vec<&Solution> {
         let mut solutions: Vec<&Solution> = self.solutions.values().collect();
         solutions.sort_by(|a, b| {
-            b.success_rate.partial_cmp(&a.success_rate)
+            b.success_rate
+                .partial_cmp(&a.success_rate)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| b.usage_count.cmp(&a.usage_count))
         });

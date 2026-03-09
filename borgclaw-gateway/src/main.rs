@@ -36,20 +36,20 @@ async fn main() {
                 .add_directive(tracing::Level::INFO.into()),
         )
         .init();
-    
+
     info!("Starting BorgClaw Gateway...");
-    
+
     // Initialize app state
     let config = Arc::new(AppConfig::default());
     let router = Arc::new(MessageRouter::from_config(&config));
     let state = GatewayState { config, router };
-    
+
     // CORS layer
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
-    
+
     // Build router
     let app = Router::new()
         .route("/", get(index))
@@ -58,10 +58,10 @@ async fn main() {
         .route("/api/chat", get(api_chat_get))
         .layer(cors)
         .with_state(state);
-    
+
     let addr = SocketAddr::from(([0, 0, 0, 0], 18789));
     info!("Gateway listening on http://{}", addr);
-    
+
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
@@ -88,13 +88,16 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
         .unwrap_or(true);
 
     info!("New WebSocket connection: {}", client_id);
-    
-    let _ = send_event(&mut socket, serde_json::json!({
+
+    let _ = send_event(
+        &mut socket,
+        serde_json::json!({
             "type": "welcome",
             "client_id": client_id,
             "auth_required": requires_pairing,
             "message": "Connected to BorgClaw"
-        }))
+        }),
+    )
     .await;
 
     let mut heartbeat = tokio::time::interval(Duration::from_secs(30));
@@ -132,7 +135,7 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
             }
         }
     }
-    
+
     info!("Connection closed: {}", client_id);
 }
 
@@ -142,25 +145,29 @@ async fn handle_ws_message(
     client_id: &str,
     text: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let request: serde_json::Value = serde_json::from_str(text)
-        .map_err(|_| "Invalid JSON")?;
-    
-    let msg_type = request.get("type")
+    let request: serde_json::Value = serde_json::from_str(text).map_err(|_| "Invalid JSON")?;
+
+    let msg_type = request
+        .get("type")
         .and_then(|v| v.as_str())
         .unwrap_or("message");
-    
+
     match msg_type {
         "request_pairing" => {
             let code = state.router.request_pairing_code(client_id).await?;
-            send_event(socket, serde_json::json!({
+            send_event(
+                socket,
+                serde_json::json!({
                     "type": "pairing_code",
                     "client_id": client_id,
                     "pairing_code": code
-                }))
+                }),
+            )
             .await?;
         }
         "auth" => {
-            let pairing_code = request.get("pairing_code")
+            let pairing_code = request
+                .get("pairing_code")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing pairing_code")?;
             let approved_sender = state.router.approve_pairing_code(pairing_code).await?;
@@ -174,10 +181,12 @@ async fn handle_ws_message(
             .await?;
         }
         "message" => {
-            let content = request.get("content")
+            let content = request
+                .get("content")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let group_id = request.get("group_id")
+            let group_id = request
+                .get("group_id")
                 .and_then(|v| v.as_str())
                 .map(str::to_string);
             let inbound = InboundMessage {
@@ -190,13 +199,16 @@ async fn handle_ws_message(
             };
             match state.router.route(inbound).await {
                 Ok(outcome) => {
-                    send_event(socket, serde_json::json!({
-                        "type": "response",
-                        "session_id": outcome.session_id.0,
-                        "text": outcome.response.text,
-                        "tool_calls": outcome.response.tool_calls,
-                        "metadata": outcome.response.metadata,
-                    }))
+                    send_event(
+                        socket,
+                        serde_json::json!({
+                            "type": "response",
+                            "session_id": outcome.session_id.0,
+                            "text": outcome.response.text,
+                            "tool_calls": outcome.response.tool_calls,
+                            "metadata": outcome.response.metadata,
+                        }),
+                    )
                     .await?;
                 }
                 Err(borgclaw_core::channel::ChannelError::AuthFailed(message)) => {
@@ -229,14 +241,11 @@ async fn handle_ws_message(
             send_event(socket, error_event("Unknown message type")).await?;
         }
     }
-    
+
     Ok(())
 }
 
-async fn send_event(
-    socket: &mut WebSocket,
-    event: serde_json::Value,
-) -> Result<(), axum::Error> {
+async fn send_event(socket: &mut WebSocket, event: serde_json::Value) -> Result<(), axum::Error> {
     socket.send(Message::Text(event.to_string())).await
 }
 
@@ -253,8 +262,11 @@ async fn api_status(State(state): State<GatewayState>) -> impl IntoResponse {
         "model": state.config.agent.model,
         "provider": state.config.agent.provider,
     });
-    
-    (StatusCode::OK, serde_json::to_string(&body).unwrap_or_default())
+
+    (
+        StatusCode::OK,
+        serde_json::to_string(&body).unwrap_or_default(),
+    )
 }
 
 async fn api_chat_get() -> impl IntoResponse {

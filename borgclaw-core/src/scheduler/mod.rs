@@ -18,13 +18,13 @@ use uuid::Uuid;
 pub trait SchedulerTrait: Send + Sync {
     /// Schedule a new job
     async fn schedule(&self, job: Job) -> Result<String, SchedulerError>;
-    
+
     /// Unschedule a job
     async fn unschedule(&self, id: &str) -> Result<(), SchedulerError>;
-    
+
     /// List all jobs
     async fn list(&self) -> Vec<Job>;
-    
+
     /// Get job by ID
     async fn get(&self, id: &str) -> Option<Job>;
 }
@@ -54,18 +54,18 @@ impl Default for Scheduler {
 impl SchedulerTrait for Scheduler {
     async fn schedule(&self, job: Job) -> Result<String, SchedulerError> {
         let id = job.id.clone();
-        
+
         if let JobTrigger::Cron(cron_expr) = &job.trigger {
             Schedule::from_str(cron_expr)
                 .map_err(|e| SchedulerError::InvalidSchedule(e.to_string()))?;
         }
-        
+
         let mut jobs = self.jobs.write().await;
         jobs.insert(id.clone(), job);
-        
+
         Ok(id)
     }
-    
+
     async fn unschedule(&self, id: &str) -> Result<(), SchedulerError> {
         {
             let mut running = self.running.write().await;
@@ -73,19 +73,19 @@ impl SchedulerTrait for Scheduler {
                 handle.abort();
             }
         }
-        
+
         let mut jobs = self.jobs.write().await;
         jobs.remove(id)
             .ok_or_else(|| SchedulerError::JobNotFound(id.to_string()))?;
-        
+
         Ok(())
     }
-    
+
     async fn list(&self) -> Vec<Job> {
         let jobs = self.jobs.read().await;
         jobs.values().cloned().collect()
     }
-    
+
     async fn get(&self, id: &str) -> Option<Job> {
         let jobs = self.jobs.read().await;
         jobs.get(id).cloned()
@@ -106,7 +106,7 @@ impl Scheduler {
             .cloned()
             .collect()
     }
-    
+
     /// Update job status
     pub async fn update_status(&self, id: &str, status: JobStatus) -> Result<(), SchedulerError> {
         let mut jobs = self.jobs.write().await;
@@ -116,12 +116,12 @@ impl Scheduler {
         job.status = status;
         Ok(())
     }
-    
+
     /// Get next run time for cron jobs
     pub async fn next_runs(&self) -> HashMap<String, DateTime<Utc>> {
         let jobs = self.jobs.read().await;
         let mut next_runs = HashMap::new();
-        
+
         for (id, job) in jobs.iter() {
             if let JobTrigger::Cron(cron_expr) = &job.trigger {
                 if let Ok(schedule) = Schedule::from_str(cron_expr) {
@@ -131,7 +131,7 @@ impl Scheduler {
                 }
             }
         }
-        
+
         next_runs
     }
 }
@@ -158,11 +158,7 @@ pub enum SchedulerError {
 }
 
 /// Create a new job
-pub fn new_job(
-    name: impl Into<String>,
-    trigger: JobTrigger,
-    action: impl Into<String>,
-) -> Job {
+pub fn new_job(name: impl Into<String>, trigger: JobTrigger, action: impl Into<String>) -> Job {
     Job {
         id: Uuid::new_v4().to_string(),
         name: name.into(),

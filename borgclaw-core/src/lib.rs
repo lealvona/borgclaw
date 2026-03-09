@@ -1,18 +1,18 @@
 //! BorgClaw Core - Personal AI Agent Framework
-//! 
+//!
 //! A modular, secure personal AI assistant combining the best features
 //! from OpenClaw-family frameworks.
 
 pub mod agent;
 pub mod channel;
 pub mod config;
-pub mod memory;
 pub mod mcp;
+pub mod memory;
 pub mod scheduler;
 pub mod security;
 pub mod skills;
 
-pub use agent::{Agent, AgentEvent, SimpleAgent, Tool, ToolResult, builtin_tools};
+pub use agent::{builtin_tools, Agent, AgentEvent, SimpleAgent, Tool, ToolResult};
 pub use channel::{Channel, ChannelSender};
 pub use config::{AppConfig, ChannelConfig, SecurityConfig};
 pub use memory::{Memory, MemoryEntry};

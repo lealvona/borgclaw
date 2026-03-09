@@ -1,9 +1,9 @@
 //! Google Workspace integration - OAuth2, Gmail, Drive, Calendar, Docs, Sheets
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GoogleOAuthConfig {
@@ -85,7 +85,8 @@ impl GoogleAuth {
             ("redirect_uri", self.config.redirect_uri.as_str()),
         ];
 
-        let response = self.http
+        let response = self
+            .http
             .post("https://oauth2.googleapis.com/token")
             .form(&params)
             .send()
@@ -100,14 +101,20 @@ impl GoogleAuth {
             scope: String,
         }
 
-        let token_resp: TokenResponse = response.json().await
+        let token_resp: TokenResponse = response
+            .json()
+            .await
             .map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
 
         let token = GoogleToken {
             access_token: token_resp.access_token,
             refresh_token: token_resp.refresh_token,
             expires_at: chrono::Utc::now().timestamp() + token_resp.expires_in,
-            scopes: token_resp.scope.split_whitespace().map(String::from).collect(),
+            scopes: token_resp
+                .scope
+                .split_whitespace()
+                .map(String::from)
+                .collect(),
         };
 
         *self.token.write().await = Some(token.clone());
@@ -150,7 +157,8 @@ impl GoogleAuth {
             ("grant_type", "refresh_token"),
         ];
 
-        let response = self.http
+        let response = self
+            .http
             .post("https://oauth2.googleapis.com/token")
             .form(&params)
             .send()
@@ -164,10 +172,17 @@ impl GoogleAuth {
             scope: Option<String>,
         }
 
-        let token_resp: TokenResponse = response.json().await
+        let token_resp: TokenResponse = response
+            .json()
+            .await
             .map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
 
-        let mut token = self.token.read().await.clone().ok_or(GoogleError::NotAuthenticated)?;
+        let mut token = self
+            .token
+            .read()
+            .await
+            .clone()
+            .ok_or(GoogleError::NotAuthenticated)?;
         token.access_token = token_resp.access_token;
         token.expires_at = chrono::Utc::now().timestamp() + token_resp.expires_in;
 
@@ -186,8 +201,8 @@ impl GoogleAuth {
     async fn load_token(&self) -> Result<(), GoogleError> {
         let content = std::fs::read_to_string(&self.token_path)
             .map_err(|e| GoogleError::IoError(e.to_string()))?;
-        let token: GoogleToken = serde_json::from_str(&content)
-            .map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
+        let token: GoogleToken =
+            serde_json::from_str(&content).map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
         *self.token.write().await = Some(token);
         Ok(())
     }
@@ -213,16 +228,22 @@ impl GmailClient {
         Self { auth }
     }
 
-    pub async fn list_messages(&self, query: &str, limit: u32) -> Result<Vec<GmailMessage>, GoogleError> {
+    pub async fn list_messages(
+        &self,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<GmailMessage>, GoogleError> {
         let token = self.auth.get_token().await?;
-        
+
         let url = format!(
             "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults={}&q={}",
             limit,
             urlencoding::encode(query)
         );
 
-        let response = self.auth.http
+        let response = self
+            .auth
+            .http
             .get(&url)
             .bearer_auth(&token.access_token)
             .send()
@@ -240,7 +261,9 @@ impl GmailClient {
             thread_id: String,
         }
 
-        let list: ListResponse = response.json().await
+        let list: ListResponse = response
+            .json()
+            .await
             .map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
 
         let mut messages = Vec::new();
@@ -257,10 +280,15 @@ impl GmailClient {
 
     pub async fn get_message(&self, id: &str) -> Result<GmailMessage, GoogleError> {
         let token = self.auth.get_token().await?;
-        
-        let url = format!("https://gmail.googleapis.com/gmail/v1/users/me/messages/{}", id);
 
-        let response = self.auth.http
+        let url = format!(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}",
+            id
+        );
+
+        let response = self
+            .auth
+            .http
             .get(&url)
             .bearer_auth(&token.access_token)
             .send()
@@ -286,7 +314,9 @@ impl GmailClient {
             value: String,
         }
 
-        let msg: MsgResponse = response.json().await
+        let msg: MsgResponse = response
+            .json()
+            .await
             .map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
 
         let mut subject = None;
@@ -317,13 +347,15 @@ impl GmailClient {
         })
     }
 
-    pub async fn send_message(&self, to: &str, subject: &str, body: &str) -> Result<String, GoogleError> {
+    pub async fn send_message(
+        &self,
+        to: &str,
+        subject: &str,
+        body: &str,
+    ) -> Result<String, GoogleError> {
         let token = self.auth.get_token().await?;
 
-        let raw = format!(
-            "To: {}\nSubject: {}\n\n{}",
-            to, subject, body
-        );
+        let raw = format!("To: {}\nSubject: {}\n\n{}", to, subject, body);
 
         use base64::Engine;
         let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw);
@@ -332,7 +364,9 @@ impl GmailClient {
             "raw": encoded
         });
 
-        let response = self.auth.http
+        let response = self
+            .auth
+            .http
             .post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send")
             .bearer_auth(&token.access_token)
             .json(&body)
@@ -345,7 +379,9 @@ impl GmailClient {
             id: String,
         }
 
-        let result: SendResponse = response.json().await
+        let result: SendResponse = response
+            .json()
+            .await
             .map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
 
         Ok(result.id)
@@ -370,19 +406,25 @@ impl DriveClient {
         Self { auth }
     }
 
-    pub async fn list_files(&self, query: Option<&str>, page_size: u32) -> Result<Vec<DriveFile>, GoogleError> {
+    pub async fn list_files(
+        &self,
+        query: Option<&str>,
+        page_size: u32,
+    ) -> Result<Vec<DriveFile>, GoogleError> {
         let token = self.auth.get_token().await?;
-        
+
         let mut url = format!(
             "https://www.googleapis.com/drive/v3/files?pageSize={}",
             page_size
         );
-        
+
         if let Some(q) = query {
             url.push_str(&format!("&q={}", urlencoding::encode(q)));
         }
 
-        let response = self.auth.http
+        let response = self
+            .auth
+            .http
             .get(&url)
             .bearer_auth(&token.access_token)
             .send()
@@ -394,7 +436,9 @@ impl DriveClient {
             files: Vec<DriveFile>,
         }
 
-        let result: ListResponse = response.json().await
+        let result: ListResponse = response
+            .json()
+            .await
             .map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
 
         Ok(result.files)
@@ -402,27 +446,33 @@ impl DriveClient {
 
     pub async fn download_file(&self, id: &str) -> Result<Vec<u8>, GoogleError> {
         let token = self.auth.get_token().await?;
-        
-        let url = format!(
-            "https://www.googleapis.com/drive/v3/files/{}?alt=media",
-            id
-        );
 
-        let response = self.auth.http
+        let url = format!("https://www.googleapis.com/drive/v3/files/{}?alt=media", id);
+
+        let response = self
+            .auth
+            .http
             .get(&url)
             .bearer_auth(&token.access_token)
             .send()
             .await
             .map_err(|e| GoogleError::RequestFailed(e.to_string()))?;
 
-        let bytes = response.bytes().await
+        let bytes = response
+            .bytes()
+            .await
             .map_err(|e| GoogleError::RequestFailed(e.to_string()))?
             .to_vec();
 
         Ok(bytes)
     }
 
-    pub async fn upload_file(&self, name: &str, content: Vec<u8>, mime_type: &str) -> Result<DriveFile, GoogleError> {
+    pub async fn upload_file(
+        &self,
+        name: &str,
+        content: Vec<u8>,
+        mime_type: &str,
+    ) -> Result<DriveFile, GoogleError> {
         let token = self.auth.get_token().await?;
 
         let metadata = serde_json::json!({
@@ -448,7 +498,9 @@ impl DriveClient {
             .await
             .map_err(|e| GoogleError::RequestFailed(e.to_string()))?;
 
-        let file: DriveFile = response.json().await
+        let file: DriveFile = response
+            .json()
+            .await
             .map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
 
         Ok(file)
@@ -473,9 +525,15 @@ impl CalendarClient {
         Self { auth }
     }
 
-    pub async fn list_events(&self, calendar_id: &str, time_min: &str, time_max: &str, max_results: u32) -> Result<Vec<CalendarEvent>, GoogleError> {
+    pub async fn list_events(
+        &self,
+        calendar_id: &str,
+        time_min: &str,
+        time_max: &str,
+        max_results: u32,
+    ) -> Result<Vec<CalendarEvent>, GoogleError> {
         let token = self.auth.get_token().await?;
-        
+
         let url = format!(
             "https://www.googleapis.com/calendar/v3/calendars/{}/events?timeMin={}&timeMax={}&maxResults={}",
             urlencoding::encode(calendar_id),
@@ -484,7 +542,9 @@ impl CalendarClient {
             max_results
         );
 
-        let response = self.auth.http
+        let response = self
+            .auth
+            .http
             .get(&url)
             .bearer_auth(&token.access_token)
             .send()
@@ -496,15 +556,23 @@ impl CalendarClient {
             items: Option<Vec<CalendarEvent>>,
         }
 
-        let result: ListResponse = response.json().await
+        let result: ListResponse = response
+            .json()
+            .await
             .map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
 
         Ok(result.items.unwrap_or_default())
     }
 
-    pub async fn create_event(&self, calendar_id: &str, summary: &str, start: &str, end: &str) -> Result<CalendarEvent, GoogleError> {
+    pub async fn create_event(
+        &self,
+        calendar_id: &str,
+        summary: &str,
+        start: &str,
+        end: &str,
+    ) -> Result<CalendarEvent, GoogleError> {
         let token = self.auth.get_token().await?;
-        
+
         let url = format!(
             "https://www.googleapis.com/calendar/v3/calendars/{}/events",
             urlencoding::encode(calendar_id)
@@ -516,7 +584,9 @@ impl CalendarClient {
             "end": { "dateTime": end }
         });
 
-        let response = self.auth.http
+        let response = self
+            .auth
+            .http
             .post(&url)
             .bearer_auth(&token.access_token)
             .json(&body)
@@ -524,7 +594,9 @@ impl CalendarClient {
             .await
             .map_err(|e| GoogleError::RequestFailed(e.to_string()))?;
 
-        let event: CalendarEvent = response.json().await
+        let event: CalendarEvent = response
+            .json()
+            .await
             .map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
 
         Ok(event)
@@ -535,13 +607,13 @@ impl CalendarClient {
 pub enum GoogleError {
     #[error("Request failed: {0}")]
     RequestFailed(String),
-    
+
     #[error("Parse failed: {0}")]
     ParseFailed(String),
-    
+
     #[error("IO error: {0}")]
     IoError(String),
-    
+
     #[error("Not authenticated")]
     NotAuthenticated,
 }
