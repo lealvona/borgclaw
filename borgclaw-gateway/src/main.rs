@@ -12,14 +12,15 @@ use axum::{
 };
 use borgclaw_core::{
     channel::{ChannelType, InboundMessage, MessagePayload, MessageRouter, Sender},
+    config::load_config,
     AppConfig,
 };
 use futures_util::StreamExt;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{net::SocketAddr, path::PathBuf};
 use tower_http::cors::{Any, CorsLayer};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 #[derive(Clone)]
 struct GatewayState {
@@ -39,16 +40,11 @@ async fn main() {
 
     info!("Starting BorgClaw Gateway...");
 
-    // Initialize app state
-    let config = Arc::new(AppConfig::default());
+    let config_path =
+        parse_config_path_from_args(std::env::args_os()).unwrap_or_else(default_config_path);
+    let config = Arc::new(load_app_config(&config_path));
     let router = Arc::new(MessageRouter::from_config(&config));
-    let port = config
-        .channels
-        .get("websocket")
-        .and_then(|channel| channel.extra.get("port"))
-        .and_then(|value| value.as_integer())
-        .and_then(|value| u16::try_from(value).ok())
-        .unwrap_or(18789);
+    let port = websocket_port(&config);
     let state = GatewayState { config, router };
 
     // CORS layer
@@ -265,6 +261,70 @@ async fn send_event(socket: &mut WebSocket, event: serde_json::Value) -> Result<
     socket.send(Message::Text(event.to_string())).await
 }
 
+fn default_config_path() -> PathBuf {
+    if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
+        return PathBuf::from(dir).join("borgclaw").join("config.toml");
+    }
+
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home)
+            .join(".config")
+            .join("borgclaw")
+            .join("config.toml");
+    }
+
+    PathBuf::from(".").join("borgclaw").join("config.toml")
+}
+
+fn parse_config_path_from_args<I>(args: I) -> Option<PathBuf>
+where
+    I: IntoIterator,
+    I::Item: Into<std::ffi::OsString>,
+{
+    let mut args = args.into_iter().map(Into::into);
+    let _ = args.next();
+
+    while let Some(arg) = args.next() {
+        if arg == "--config" || arg == "-c" {
+            return args.next().map(PathBuf::from);
+        }
+    }
+
+    None
+}
+
+fn load_app_config(path: &PathBuf) -> AppConfig {
+    if !path.exists() {
+        warn!(
+            "Gateway config not found at {}; using defaults",
+            path.display()
+        );
+        return AppConfig::default();
+    }
+
+    match load_config(path) {
+        Ok(config) => config,
+        Err(err) => {
+            warn!(
+                "Failed to load gateway config from {}: {}; using defaults",
+                path.display(),
+                err
+            );
+            AppConfig::default()
+        }
+    }
+}
+
+fn websocket_port(config: &AppConfig) -> u16 {
+    config
+        .channels
+        .get("websocket")
+        .and_then(|channel| channel.extra.get("port"))
+        .and_then(|value| value.as_integer())
+        .and_then(|value| u16::try_from(value).ok())
+        .unwrap_or(18789)
+}
+
 fn error_event(message: &str) -> serde_json::Value {
     serde_json::json!({
         "type": "error",
@@ -298,5 +358,55 @@ mod tests {
         let event = error_event("bad request");
         assert_eq!(event["type"], "error");
         assert_eq!(event["message"], "bad request");
+    }
+
+    #[test]
+    fn parse_config_path_from_args_supports_short_and_long_flags() {
+        assert_eq!(
+            parse_config_path_from_args(["borgclaw-gateway", "--config", "/tmp/custom.toml"]),
+            Some(PathBuf::from("/tmp/custom.toml"))
+        );
+        assert_eq!(
+            parse_config_path_from_args(["borgclaw-gateway", "-c", "/tmp/custom.toml"]),
+            Some(PathBuf::from("/tmp/custom.toml"))
+        );
+    }
+
+    #[test]
+    fn load_app_config_reads_documented_default_path_shape() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_gateway_config_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+            [agent]
+            provider = "openai"
+            model = "gpt-4o"
+
+            [channels.websocket]
+            enabled = true
+            port = 19002
+            require_pairing = false
+            "#,
+        )
+        .unwrap();
+
+        let config = load_app_config(&path);
+        assert_eq!(config.agent.provider, "openai");
+        assert_eq!(websocket_port(&config), 19002);
+        assert_eq!(
+            config
+                .channels
+                .get("websocket")
+                .and_then(|channel| channel.extra.get("require_pairing"))
+                .and_then(|value| value.as_bool()),
+            Some(false)
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
