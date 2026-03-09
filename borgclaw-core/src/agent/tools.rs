@@ -355,9 +355,11 @@ async fn execute_command(arguments: &HashMap<String, serde_json::Value>, runtime
     }
 
     let mut cmd = tokio::process::Command::new("sh");
+    let secret_env = runtime.security.secret_env().await;
     cmd.arg("-lc")
         .arg(&command)
         .current_dir(&runtime.workspace_root)
+        .envs(secret_env)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
@@ -988,6 +990,53 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
         assert!(!result.success);
         assert!(result.output.contains("Plugin not found"));
+    }
+
+    #[tokio::test]
+    async fn execute_command_receives_security_secret_env() {
+        let root = std::env::temp_dir().join(format!("borgclaw_secret_env_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                memory_path: root.join("memory"),
+                ..Default::default()
+            },
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        runtime
+            .security
+            .store_secret("api_key", "from-security")
+            .await
+            .unwrap();
+
+        let result = execute_tool(
+            &ToolCall::new(
+                "execute_command",
+                HashMap::from([(
+                    "command".to_string(),
+                    serde_json::json!("printf %s \"$BC_SECRET_API_KEY\""),
+                )]),
+            ),
+            &runtime,
+        )
+        .await;
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(result.success);
+        assert_eq!(result.output, "from-security");
     }
 
     #[test]

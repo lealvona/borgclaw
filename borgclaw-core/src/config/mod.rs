@@ -146,6 +146,8 @@ pub struct SecurityConfig {
     pub prompt_injection_defense: bool,
     /// Enable secret leak detection
     pub secret_leak_detection: bool,
+    /// Optional vault integration
+    pub vault: VaultConfig,
 }
 
 /// Execution approval mode
@@ -180,8 +182,46 @@ impl Default for SecurityConfig {
             pairing_code_expiry: 300,
             prompt_injection_defense: true,
             secret_leak_detection: true,
+            vault: VaultConfig::default(),
         }
     }
+}
+
+/// External vault configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct VaultConfig {
+    pub provider: Option<String>,
+    pub bitwarden: BitwardenVaultConfig,
+    #[serde(rename = "1password")]
+    pub one_password: OnePasswordVaultConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BitwardenVaultConfig {
+    pub server_url: Option<String>,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    pub use_cli: bool,
+}
+
+impl Default for BitwardenVaultConfig {
+    fn default() -> Self {
+        Self {
+            server_url: None,
+            client_id: None,
+            client_secret: None,
+            use_cli: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct OnePasswordVaultConfig {
+    pub vault: Option<String>,
+    pub account: Option<String>,
 }
 
 /// Memory configuration

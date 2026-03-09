@@ -2,10 +2,15 @@
 
 mod pairing;
 mod secrets;
+mod vault;
 mod wasm;
 
 pub use pairing::PairingManager;
 pub use secrets::SecretStore;
+pub use vault::{
+    BitwardenClient, BitwardenConfig, OnePasswordClient, OnePasswordConfig, VaultClient,
+    VaultError, VaultItem, VaultItemType,
+};
 pub use wasm::WasmSandbox;
 
 use super::config::{ApprovalMode, SecurityConfig};
@@ -22,6 +27,7 @@ pub struct SecurityLayer {
     pairing: Arc<RwLock<PairingManager>>,
     secrets: Arc<RwLock<SecretStore>>,
     approvals: Arc<RwLock<HashMap<String, PendingApproval>>>,
+    vault: Option<Arc<dyn VaultClient>>,
     wasm: Option<WasmSandbox>,
 }
 
@@ -47,6 +53,7 @@ impl SecurityLayer {
             pairing: Arc::new(RwLock::new(PairingManager::new(6, 300))),
             secrets: Arc::new(RwLock::new(SecretStore::new())),
             approvals: Arc::new(RwLock::new(HashMap::new())),
+            vault: None,
             wasm: None,
         }
     }
@@ -67,6 +74,7 @@ impl SecurityLayer {
             ))),
             secrets: Arc::new(RwLock::new(SecretStore::new())),
             approvals: Arc::new(RwLock::new(HashMap::new())),
+            vault: configured_vault(&config),
             wasm: None,
         }
     }
@@ -101,14 +109,32 @@ impl SecurityLayer {
     
     /// Store a secret
     pub async fn store_secret(&self, key: &str, value: &str) -> Result<(), SecurityError> {
-        let mut secrets = self.secrets.write().await;
+        let secrets = self.secrets.write().await;
         secrets.store(key, value).await
     }
     
     /// Get a secret (injected into environment)
     pub async fn get_secret(&self, key: &str) -> Option<String> {
         let secrets = self.secrets.read().await;
-        secrets.get(key).await
+        if let Some(value) = secrets.get(key).await {
+            return Some(value);
+        }
+        drop(secrets);
+
+        let vault = self.vault.as_ref()?;
+        let value = vault.get_secret(key).await.ok()?;
+        let secrets = self.secrets.write().await;
+        let _ = secrets.store(key, &value).await;
+        Some(value)
+    }
+
+    pub async fn secret_env(&self) -> HashMap<String, String> {
+        let secrets = self.secrets.read().await;
+        secrets.inject_env().await
+    }
+
+    pub fn vault_provider(&self) -> Option<&str> {
+        self.config.vault.provider.as_deref()
     }
 
     pub fn approval_mode(&self) -> &ApprovalMode {
@@ -230,6 +256,22 @@ impl SecurityLayer {
     }
 }
 
+fn configured_vault(config: &SecurityConfig) -> Option<Arc<dyn VaultClient>> {
+    match config.vault.provider.as_deref() {
+        Some("bitwarden") => Some(Arc::new(BitwardenClient::new(BitwardenConfig {
+            server_url: config.vault.bitwarden.server_url.clone(),
+            client_id: config.vault.bitwarden.client_id.clone(),
+            client_secret: config.vault.bitwarden.client_secret.clone(),
+            use_cli: config.vault.bitwarden.use_cli,
+        }))),
+        Some("1password") => Some(Arc::new(OnePasswordClient::new(OnePasswordConfig {
+            vault: config.vault.one_password.vault.clone(),
+            account: config.vault.one_password.account.clone(),
+        }))),
+        _ => None,
+    }
+}
+
 /// Command check result
 #[derive(Debug, Clone)]
 pub enum CommandCheck {
@@ -262,6 +304,37 @@ pub enum SecurityError {
     SecretError(String),
     #[error("Approval error: {0}")]
     ApprovalError(String),
+    #[error("Vault error: {0}")]
+    VaultError(String),
     #[error("WASM error: {0}")]
     WasmError(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn local_secret_is_cached_and_injected_into_env() {
+        let security = SecurityLayer::new();
+        security.store_secret("api_key", "secret-value").await.unwrap();
+
+        assert_eq!(security.get_secret("api_key").await.as_deref(), Some("secret-value"));
+
+        let env = security.secret_env().await;
+        assert_eq!(env.get("BC_SECRET_API_KEY").map(String::as_str), Some("secret-value"));
+    }
+
+    #[test]
+    fn configured_vault_provider_is_reported() {
+        let security = SecurityLayer::with_config(SecurityConfig {
+            vault: crate::config::VaultConfig {
+                provider: Some("bitwarden".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+        assert_eq!(security.vault_provider(), Some("bitwarden"));
+    }
 }
