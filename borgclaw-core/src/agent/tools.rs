@@ -689,7 +689,7 @@ async fn mcp_list_tools(
         Ok(client) => client,
         Err(err) => return ToolResult::err(err),
     };
-    if let Err(err) = client.connect().await {
+    if let Err(err) = client.initialize().await {
         return ToolResult::err(err.to_string());
     }
     let result = client.list_tools().await;
@@ -729,7 +729,7 @@ async fn mcp_call_tool(
         Ok(client) => client,
         Err(err) => return ToolResult::err(err),
     };
-    if let Err(err) = client.connect().await {
+    if let Err(err) = client.initialize().await {
         return ToolResult::err(err.to_string());
     }
     let result = client.call_tool(&tool, input).await;
