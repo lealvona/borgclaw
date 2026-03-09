@@ -110,13 +110,15 @@ impl WebhookChannel {
         self.triggers.read().await.clone()
     }
 
-    async fn check_rate_limit(&self, trigger: &WebhookTrigger) -> bool {
+    async fn check_rate_limit(&self, trigger: &WebhookTrigger, requester: &str) -> bool {
         if let Some(rpm) = trigger.rate_limit {
             let mut limits = self.rate_limits.write().await;
             let now = Utc::now();
             let minute_ago = now - chrono::Duration::seconds(60);
             
-            let requests = limits.entry(trigger.id.clone()).or_default();
+            let requests = limits
+                .entry(format!("{}:{}", trigger.id, requester))
+                .or_default();
             requests.retain(|&t| t > minute_ago);
             
             if requests.len() >= rpm as usize {
@@ -148,22 +150,26 @@ impl WebhookChannel {
             return Err(WebhookError::Unauthorized);
         }
 
-        if !self.check_rate_limit(trigger).await {
+        let requester = webhook_requester(&headers);
+        if !self.check_rate_limit(trigger, &requester).await {
             return Err(WebhookError::RateLimited);
         }
 
         let body_str = String::from_utf8_lossy(&body);
-        let content = if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body_str) {
-            MessagePayload::Text(body_str.to_string())
-        } else {
-            MessagePayload::Text(body_str.to_string())
-        };
+        let parsed_json = serde_json::from_str::<serde_json::Value>(&body_str).ok();
+        let content = webhook_content(parsed_json.as_ref(), &body_str);
+        let sender_info = webhook_sender(parsed_json.as_ref(), trigger);
+        let group_id = parsed_json
+            .as_ref()
+            .and_then(|json| json.get("group_id"))
+            .and_then(|value| value.as_str())
+            .map(ToString::to_string);
 
         let inbound = InboundMessage {
             channel: self.channel_type.clone(),
-            sender: Sender::new(&trigger.id).with_name(&trigger.name),
+            sender: sender_info,
             content,
-            group_id: None,
+            group_id,
             timestamp: Utc::now(),
             raw: serde_json::json!({
                 "trigger_id": trigger.id,
@@ -171,6 +177,7 @@ impl WebhookChannel {
                 "path": path,
                 "method": method,
                 "headers": headers,
+                "body": parsed_json.unwrap_or_else(|| serde_json::Value::String(body_str.to_string())),
             }),
         };
 
@@ -282,5 +289,91 @@ impl WebhookChannelBuilder {
 impl Default for WebhookChannelBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn webhook_requester(headers: &HashMap<String, String>) -> String {
+    headers
+        .get("X-Forwarded-For")
+        .or_else(|| headers.get("X-Real-IP"))
+        .cloned()
+        .unwrap_or_else(|| "anonymous".to_string())
+}
+
+fn webhook_content(payload: Option<&serde_json::Value>, body: &str) -> MessagePayload {
+    let text = payload
+        .and_then(|json| json.get("content"))
+        .and_then(|value| value.as_str())
+        .unwrap_or(body);
+    MessagePayload::Text(text.to_string())
+}
+
+fn webhook_sender(payload: Option<&serde_json::Value>, trigger: &WebhookTrigger) -> Sender {
+    let sender_id = payload
+        .and_then(|json| json.get("sender"))
+        .and_then(|value| value.as_str())
+        .unwrap_or(&trigger.id);
+    let sender_name = payload
+        .and_then(|json| json.get("sender_name"))
+        .and_then(|value| value.as_str())
+        .unwrap_or(&trigger.name);
+    Sender::new(sender_id).with_name(sender_name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn webhook_uses_payload_content_sender_and_group() {
+        let channel = WebhookChannel::new();
+        channel
+            .register_trigger(WebhookTrigger::new("incoming", "/webhook"))
+            .await;
+        let (tx, mut rx) = mpsc::channel(1);
+
+        let response = channel
+            .handle_request(
+                "/webhook",
+                "POST",
+                HashMap::from([("X-Forwarded-For".to_string(), "127.0.0.1".to_string())]),
+                br#"{"content":"hello","sender":"user123","sender_name":"User","group_id":"grp"}"#.to_vec(),
+                tx,
+            )
+            .await
+            .unwrap();
+
+        let inbound = rx.recv().await.unwrap();
+        assert_eq!(response.status, 200);
+        assert!(matches!(inbound.content, MessagePayload::Text(ref text) if text == "hello"));
+        assert_eq!(inbound.sender.id, "user123");
+        assert_eq!(inbound.sender.name.as_deref(), Some("User"));
+        assert_eq!(inbound.group_id.as_deref(), Some("grp"));
+    }
+
+    #[tokio::test]
+    async fn webhook_rate_limit_isolated_per_requester() {
+        let channel = WebhookChannel::new();
+        channel
+            .register_trigger(WebhookTrigger::new("incoming", "/webhook").with_rate_limit(1))
+            .await;
+        let (tx, _rx) = mpsc::channel(4);
+
+        let headers_a = HashMap::from([("X-Forwarded-For".to_string(), "10.0.0.1".to_string())]);
+        let headers_b = HashMap::from([("X-Forwarded-For".to_string(), "10.0.0.2".to_string())]);
+
+        channel
+            .handle_request("/webhook", "POST", headers_a.clone(), b"one".to_vec(), tx.clone())
+            .await
+            .unwrap();
+        let limited = channel
+            .handle_request("/webhook", "POST", headers_a, b"two".to_vec(), tx.clone())
+            .await;
+        let other_requester = channel
+            .handle_request("/webhook", "POST", headers_b, b"three".to_vec(), tx)
+            .await;
+
+        assert!(matches!(limited, Err(WebhookError::RateLimited)));
+        assert!(other_requester.is_ok());
     }
 }
