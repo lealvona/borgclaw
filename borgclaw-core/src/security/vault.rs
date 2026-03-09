@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -40,6 +41,8 @@ pub trait VaultClient: Send + Sync {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BitwardenConfig {
+    pub cli_path: PathBuf,
+    pub session_env: String,
     pub server_url: Option<String>,
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
@@ -49,6 +52,8 @@ pub struct BitwardenConfig {
 impl Default for BitwardenConfig {
     fn default() -> Self {
         Self {
+            cli_path: PathBuf::from("bw"),
+            session_env: "BW_SESSION".to_string(),
             server_url: None,
             client_id: None,
             client_secret: None,
@@ -79,7 +84,12 @@ impl BitwardenClient {
             return Err(VaultError::NotAuthenticated);
         }
 
-        let output = tokio::process::Command::new("bw")
+        if let Ok(session) = std::env::var(&self.config.session_env) {
+            *self.session_key.write().await = Some(session);
+            return Ok(());
+        }
+
+        let output = tokio::process::Command::new(&self.config.cli_path)
             .arg("unlocked")
             .output()
             .await
@@ -96,7 +106,11 @@ impl BitwardenClient {
     async fn run_bw(&self, args: &[&str]) -> Result<String, VaultError> {
         self.ensure_unlocked().await?;
 
-        let output = tokio::process::Command::new("bw")
+        let mut command = tokio::process::Command::new(&self.config.cli_path);
+        if let Some(session) = self.session_key.read().await.clone() {
+            command.env(&self.config.session_env, session);
+        }
+        let output = command
             .args(args)
             .output()
             .await
@@ -260,8 +274,19 @@ impl VaultClient for BitwardenClient {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OnePasswordConfig {
+    pub cli_path: PathBuf,
     pub vault: Option<String>,
     pub account: Option<String>,
+}
+
+impl Default for OnePasswordConfig {
+    fn default() -> Self {
+        Self {
+            cli_path: PathBuf::from("op"),
+            vault: None,
+            account: None,
+        }
+    }
 }
 
 pub struct OnePasswordClient {
@@ -286,7 +311,7 @@ impl VaultClient for OnePasswordClient {
             args.extend(&["--account", account]);
         }
 
-        let output = tokio::process::Command::new("op")
+        let output = tokio::process::Command::new(&self.config.cli_path)
             .args(&args)
             .output()
             .await
@@ -340,7 +365,7 @@ impl VaultClient for OnePasswordClient {
             args.extend(&["--account", account]);
         }
 
-        let output = tokio::process::Command::new("op")
+        let output = tokio::process::Command::new(&self.config.cli_path)
             .args(&args)
             .output()
             .await
@@ -401,7 +426,7 @@ impl VaultClient for OnePasswordClient {
             args.extend(["--account".to_string(), account.clone()]);
         }
 
-        let output = tokio::process::Command::new("op")
+        let output = tokio::process::Command::new(&self.config.cli_path)
             .args(&args)
             .output()
             .await
@@ -441,7 +466,7 @@ impl VaultClient for OnePasswordClient {
             args.extend(["--account".to_string(), account.clone()]);
         }
 
-        let output = tokio::process::Command::new("op")
+        let output = tokio::process::Command::new(&self.config.cli_path)
             .args(&args)
             .output()
             .await
@@ -465,7 +490,7 @@ impl VaultClient for OnePasswordClient {
             args.extend(&["--account", account]);
         }
 
-        let output = tokio::process::Command::new("op")
+        let output = tokio::process::Command::new(&self.config.cli_path)
             .args(&args)
             .output()
             .await
