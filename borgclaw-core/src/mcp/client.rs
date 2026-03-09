@@ -41,7 +41,17 @@ impl McpClient {
         }
     }
 
-    pub async fn connect(&mut self) -> Result<(), McpError> {
+    pub async fn connect(transport_config: McpTransportConfig) -> Result<Self, McpError> {
+        let mut client = Self::new(McpClientConfig {
+            name: "borgclaw".to_string(),
+            transport_config,
+            protocol_version: "2024-11-05".to_string(),
+        });
+        client.initialize().await?;
+        Ok(client)
+    }
+
+    pub async fn initialize(&mut self) -> Result<(), McpError> {
         self.transport
             .connect()
             .await
