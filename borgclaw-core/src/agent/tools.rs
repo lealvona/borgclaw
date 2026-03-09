@@ -3,6 +3,7 @@
 use crate::memory::{new_entry, Memory, MemoryQuery, SqliteMemory};
 use crate::scheduler::{new_job, JobTrigger, Scheduler, SchedulerTrait};
 use crate::security::{CommandCheck, SecurityLayer};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -249,7 +250,7 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "message" => message(&call.arguments),
         "schedule_task" => schedule_task(&call.arguments, runtime).await,
         "approve" => approve_tool(&call.arguments, runtime).await,
-        "web_search" => ToolResult::err("web_search is not implemented yet"),
+        "web_search" => web_search(&call.arguments).await,
         other => ToolResult::err(format!("unknown tool: {}", other)),
     }
 }
@@ -479,6 +480,60 @@ async fn schedule_task(arguments: &HashMap<String, serde_json::Value>, runtime: 
     ToolResult::ok(format!("scheduled {}", id))
 }
 
+async fn web_search(arguments: &HashMap<String, serde_json::Value>) -> ToolResult {
+    let query = match get_required_string(arguments, "query") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let num_results = get_u64(arguments, "num_results").unwrap_or(5).clamp(1, 10) as usize;
+
+    let client = reqwest::Client::builder()
+        .user_agent("BorgClaw/0.1")
+        .build();
+    let client = match client {
+        Ok(client) => client,
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
+
+    let response = client
+        .get("https://duckduckgo.com/html/")
+        .query(&[("q", query.as_str())])
+        .send()
+        .await;
+    let response = match response {
+        Ok(response) if response.status().is_success() => response,
+        Ok(response) => return ToolResult::err(format!("http {}", response.status())),
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
+
+    let body = match response.text().await {
+        Ok(body) => body,
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
+
+    let results = parse_duckduckgo_results(&body, num_results);
+    if results.is_empty() {
+        return ToolResult::ok("no results");
+    }
+
+    let output = results
+        .iter()
+        .enumerate()
+        .map(|(index, result)| {
+            let mut line = format!("{}. {} - {}", index + 1, result.title, result.url);
+            if let Some(snippet) = &result.snippet {
+                line.push_str(&format!("\n   {}", snippet));
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    ToolResult::ok(output)
+        .with_metadata("source", "duckduckgo")
+        .with_metadata("result_count", results.len().to_string())
+}
+
 async fn approve_tool(arguments: &HashMap<String, serde_json::Value>, runtime: &ToolRuntime) -> ToolResult {
     let tool = match get_required_string(arguments, "tool") {
         Ok(value) => value,
@@ -538,6 +593,51 @@ fn truncate_output(output: &str) -> String {
     } else {
         format!("{}...", &output[..MAX_LEN])
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct SearchResult {
+    title: String,
+    url: String,
+    snippet: Option<String>,
+}
+
+fn parse_duckduckgo_results(body: &str, limit: usize) -> Vec<SearchResult> {
+    let result_re = Regex::new(
+        r#"(?s)<a[^>]*class="result__a"[^>]*href="(?P<url>[^"]+)"[^>]*>(?P<title>.*?)</a>.*?(?:<a[^>]*class="result__snippet"[^>]*>|<div[^>]*class="result__snippet"[^>]*>)(?P<snippet>.*?)(?:</a>|</div>)"#,
+    )
+    .expect("valid regex");
+    let tag_re = Regex::new(r"<[^>]+>").expect("valid regex");
+
+    result_re
+        .captures_iter(body)
+        .take(limit)
+        .filter_map(|capture| {
+            let title = decode_html_entities(tag_re.replace_all(&capture["title"], "").trim());
+            let url = decode_html_entities(capture["url"].trim());
+            let snippet = decode_html_entities(tag_re.replace_all(&capture["snippet"], "").trim());
+            if title.is_empty() || url.is_empty() {
+                return None;
+            }
+
+            Some(SearchResult {
+                title,
+                url,
+                snippet: if snippet.is_empty() { None } else { Some(snippet) },
+            })
+        })
+        .collect()
+}
+
+fn decode_html_entities(input: &str) -> String {
+    input
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#x27;", "'")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&nbsp;", " ")
 }
 
 #[cfg(test)]
@@ -630,6 +730,26 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
         assert!(second.success);
         assert_eq!(second.output, "ok");
+    }
+
+    #[test]
+    fn parses_duckduckgo_results() {
+        let html = r#"
+            <div class="result">
+              <a class="result__a" href="https://example.com/one">Example &amp; One</a>
+              <div class="result__snippet">First <b>snippet</b></div>
+            </div>
+            <div class="result">
+              <a class="result__a" href="https://example.com/two">Example Two</a>
+              <a class="result__snippet">Second snippet</a>
+            </div>
+        "#;
+
+        let results = parse_duckduckgo_results(html, 5);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].title, "Example & One");
+        assert_eq!(results[0].url, "https://example.com/one");
+        assert_eq!(results[0].snippet.as_deref(), Some("First snippet"));
     }
 }
 
