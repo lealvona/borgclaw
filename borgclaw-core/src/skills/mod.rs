@@ -13,7 +13,9 @@ pub mod url_shortener;
 
 pub use parser::{SkillCommand, SkillManifest};
 
-pub use browser::{BrowserConfig, BrowserSkill, BrowserType, Cookie, PlaywrightClient};
+pub use browser::{
+    BrowserConfig, BrowserSkill, BrowserType, CdpClient, Cookie, PlaywrightClient, PlaywrightConfig,
+};
 pub use github::{GitHubClient, GitHubConfig, GitHubSafety, OperationType, RepoAccess};
 pub use google::{CalendarClient, DriveClient, GmailClient, GoogleAuth, GoogleOAuthConfig};
 pub use image::{ImageBackend, ImageClient, ImageFormat, ImageParams, ImageResult};
