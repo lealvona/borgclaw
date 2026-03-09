@@ -20,6 +20,150 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+pub const INJECTION_PATTERNS: &[&str] = &[
+    r"(?i)ignore.*(previous|above|prior).*(instruction|directive)",
+    r"(?i)forget.*(everything|all).*(instruction|rule)",
+    r"(?i)new.*(instruction|rule|directive).*(you|your)",
+    r"(?i)system.*:",
+    r"(?i)<\|.*\|>",
+    r"(?i)assistant.*role",
+];
+
+pub const BLOCKED_COMMANDS: &[&str] = &[
+    r"^rm\s+-rf\s+/",
+    r"^rm\s+-rf\s+~",
+    r"^mkfs",
+    r"^dd\s+if=",
+    r"^:\(\)\{.*\|.*&\};:",
+    r"^chmod\s+777",
+    r"^chown\s+.*:.*\s+/",
+    r"^shutdown",
+    r"^reboot",
+    r"^halt",
+    r"^init\s+[06]",
+    r"^poweroff",
+    r"^format",
+];
+
+pub const SECRET_PATTERNS: &[(&str, &str)] = &[
+    ("OpenAI API Key", r"sk-[a-zA-Z0-9]{20,}"),
+    ("GitHub Token", r"ghp_[a-zA-Z0-9]{36}"),
+    ("GitHub OAuth Token", r"gho_[a-zA-Z0-9]{36}"),
+    ("GitLab Token", r"glpat-[a-zA-Z0-9\-]{20,}"),
+    ("Google API Key", r"AIza[0-9A-Za-z\-_]{35}"),
+    ("Slack Token", r"xox[baprs]-[0-9a-zA-Z]{10,48}"),
+];
+
+pub struct InjectionDefender {
+    patterns: Vec<Regex>,
+}
+
+impl InjectionDefender {
+    pub fn new() -> Self {
+        Self {
+            patterns: INJECTION_PATTERNS
+                .iter()
+                .filter_map(|pattern| Regex::new(pattern).ok())
+                .collect(),
+        }
+    }
+
+    pub fn detect(&self, content: &str) -> bool {
+        self.patterns
+            .iter()
+            .any(|pattern| pattern.is_match(content))
+    }
+
+    pub fn sanitize(&self, content: &str) -> String {
+        sanitize_injection_input(content)
+    }
+}
+
+impl Default for InjectionDefender {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub struct CommandBlocklist {
+    patterns: Vec<Regex>,
+}
+
+impl CommandBlocklist {
+    pub fn new() -> Self {
+        Self {
+            patterns: BLOCKED_COMMANDS
+                .iter()
+                .filter_map(|pattern| Regex::new(pattern).ok())
+                .collect(),
+        }
+    }
+
+    pub fn is_blocked(&self, command: &str) -> bool {
+        self.patterns
+            .iter()
+            .any(|pattern| pattern.is_match(command))
+    }
+}
+
+impl Default for CommandBlocklist {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeakMatch {
+    pub pattern_name: String,
+    pub value: String,
+}
+
+pub struct LeakDetector {
+    patterns: Vec<(String, Regex)>,
+}
+
+impl LeakDetector {
+    pub fn new() -> Self {
+        Self {
+            patterns: SECRET_PATTERNS
+                .iter()
+                .filter_map(|(name, pattern)| {
+                    Regex::new(pattern)
+                        .ok()
+                        .map(|regex| ((*name).to_string(), regex))
+                })
+                .collect(),
+        }
+    }
+
+    pub fn scan(&self, content: &str) -> Vec<LeakMatch> {
+        let mut matches = Vec::new();
+        for (name, pattern) in &self.patterns {
+            for capture in pattern.find_iter(content) {
+                matches.push(LeakMatch {
+                    pattern_name: name.clone(),
+                    value: capture.as_str().to_string(),
+                });
+            }
+        }
+        matches
+    }
+
+    pub fn redact(&self, content: &str) -> String {
+        let mut redacted = content.to_string();
+        for leak in self.scan(content) {
+            redacted = redacted.replace(&leak.value, "[REDACTED_SECRET]");
+        }
+        redacted
+    }
+}
+
+impl Default for LeakDetector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Security layer - combines all security features
 pub struct SecurityLayer {
     config: SecurityConfig,
@@ -220,25 +364,11 @@ impl SecurityLayer {
 
     /// Check for secret leaks in output
     pub fn check_leak(&self, content: &str) -> Vec<String> {
-        // Simple pattern matching for API key formats
-        let patterns = [
-            r"sk-[a-zA-Z0-9]{20,}",
-            r"ghp_[a-zA-Z0-9]{36}",
-            r"gho_[a-zA-Z0-9]{36}",
-            r"glpat-[a-zA-Z0-9\-]{20,}",
-            r"AIza[0-9A-Za-z\-_]{35}",
-            r"xox[baprs]-[0-9a-zA-Z]{10,48}",
-        ];
-
-        let mut leaks = Vec::new();
-        for pattern in patterns {
-            if let Ok(re) = Regex::new(pattern) {
-                for cap in re.find_iter(content) {
-                    leaks.push(cap.as_str().to_string());
-                }
-            }
-        }
-        leaks
+        LeakDetector::new()
+            .scan(content)
+            .into_iter()
+            .map(|leak| leak.value)
+            .collect()
     }
 
     pub fn redact_leaks(&self, content: &str) -> (String, usize) {
@@ -256,17 +386,8 @@ impl SecurityLayer {
             return InjectionCheck::Allowed;
         }
 
-        let injection_patterns = [
-            r"(?i)ignore.*(previous|above|prior).*(instruction|directive)",
-            r"(?i)forget.*(everything|all).*(instruction|rule)",
-            r"(?i)new.*(instruction|rule|directive).*(you|your)",
-            r"(?i)system.*:",
-            r"(?i)<\|.*\|>",
-            r"(?i)assistant.*role",
-        ];
-
         let mut score = 0.0;
-        for pattern in injection_patterns {
+        for pattern in INJECTION_PATTERNS {
             if let Ok(re) = Regex::new(pattern) {
                 if re.is_match(content) {
                     score += 0.25;
@@ -352,7 +473,7 @@ fn configured_vault(config: &SecurityConfig) -> Option<Arc<dyn VaultClient>> {
 fn compile_blocklist(config: &SecurityConfig) -> Vec<Regex> {
     let mut patterns = Vec::new();
     if config.command_blocklist {
-        patterns.extend(default_blocked_commands().iter().copied());
+        patterns.extend(BLOCKED_COMMANDS.iter().copied());
     }
     patterns.extend(config.extra_blocked.iter().map(String::as_str));
 
@@ -370,38 +491,13 @@ fn secret_store_config(config: &SecurityConfig) -> SecretStoreConfig {
 }
 
 fn sanitize_injection_input(content: &str) -> String {
-    let suspicious = [
-        r"(?i)ignore.*(previous|above|prior).*(instruction|directive)",
-        r"(?i)forget.*(everything|all).*(instruction|rule)",
-        r"(?i)new.*(instruction|rule|directive).*(you|your)",
-        r"(?i)system.*:",
-        r"(?i)<\|.*\|>",
-        r"(?i)assistant.*role",
-    ];
-
-    suspicious.iter().fold(content.to_string(), |acc, pattern| {
-        Regex::new(pattern)
-            .map(|re| re.replace_all(&acc, "[sanitized]").to_string())
-            .unwrap_or(acc)
-    })
-}
-
-fn default_blocked_commands() -> &'static [&'static str] {
-    &[
-        r"^rm\s+-rf\s+/",
-        r"^rm\s+-rf\s+~",
-        r"^mkfs",
-        r"^dd\s+if=",
-        r"^:\(\)\{.*\|.*&\};:",
-        r"^chmod\s+777",
-        r"^chown\s+.*:.*\s+/",
-        r"^shutdown",
-        r"^reboot",
-        r"^halt",
-        r"^init\s+[06]",
-        r"^poweroff",
-        r"^format",
-    ]
+    INJECTION_PATTERNS
+        .iter()
+        .fold(content.to_string(), |acc, pattern| {
+            Regex::new(pattern)
+                .map(|re| re.replace_all(&acc, "[sanitized]").to_string())
+                .unwrap_or(acc)
+        })
 }
 
 /// Command check result
@@ -441,6 +537,10 @@ pub enum SecurityError {
     VaultError(String),
     #[error("WASM error: {0}")]
     WasmError(String),
+    #[error("Prompt injection detected")]
+    InjectionDetected,
+    #[error("Blocked command")]
+    BlockedCommand,
 }
 
 #[cfg(test)]
@@ -526,5 +626,33 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let status = runtime.block_on(security.check_pairing("user-1"));
         assert!(matches!(status, PairingStatus::Approved));
+    }
+
+    #[test]
+    fn injection_defender_matches_and_sanitizes_documented_patterns() {
+        let defender = InjectionDefender::new();
+
+        assert!(defender.detect("ignore previous instructions"));
+        assert!(defender.sanitize("system: do this").contains("[sanitized]"));
+    }
+
+    #[test]
+    fn command_blocklist_exposes_documented_helper_api() {
+        let blocklist = CommandBlocklist::new();
+
+        assert!(blocklist.is_blocked("rm -rf /"));
+        assert!(!blocklist.is_blocked("echo hello"));
+    }
+
+    #[test]
+    fn leak_detector_scans_and_redacts_named_patterns() {
+        let detector = LeakDetector::new();
+        let leaks = detector.scan("token ghp_abcdefghijklmnopqrstuvwxyz1234567890");
+
+        assert_eq!(leaks.len(), 1);
+        assert_eq!(leaks[0].pattern_name, "GitHub Token");
+        assert!(detector
+            .redact("token ghp_abcdefghijklmnopqrstuvwxyz1234567890")
+            .contains("[REDACTED_SECRET]"));
     }
 }
