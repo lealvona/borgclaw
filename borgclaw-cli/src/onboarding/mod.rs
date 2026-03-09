@@ -48,6 +48,16 @@ pub enum StartTarget {
     None,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExistingConfigAction {
+    Reconfigure,
+    Status,
+    Quit,
+    AddComponent,
+    DeleteComponent,
+    RegenerateEnv,
+}
+
 pub struct InitOutcome {
     pub config: AppConfig,
     pub start: StartTarget,
@@ -150,28 +160,45 @@ pub async fn run_init(
     let mut env_updates = read_env_file(&PathBuf::from(".env"));
     let has_existing = config_path.exists();
     if has_existing && !args.quick && !args.update {
-        let choices = vec![
-            "Update existing configuration",
-            "Add component via wizard",
-            "Delete component via wizard",
-            "Keep current and only regenerate .env",
-        ];
+        let choices = existing_config_choices();
         let pick = Select::with_theme(&theme)
             .with_prompt("Existing config detected. Choose action")
             .items(&choices)
             .default(0)
             .interact()
             .map_err(|e| e.to_string())?;
-        if pick == 1 {
-            component_wizard(&mut config, "add", &theme)?;
-        } else if pick == 2 {
-            component_wizard(&mut config, "delete", &theme)?;
-        } else if pick == 3 {
-            generate_env_file(&config, &env_updates, &PathBuf::from(".env"))?;
-            return Ok(InitOutcome {
-                config,
-                start: start_target_from(&args.start),
-            });
+        match existing_config_action(pick) {
+            ExistingConfigAction::Reconfigure => {}
+            ExistingConfigAction::Status => {
+                print_summary(&config);
+                return Ok(InitOutcome {
+                    config,
+                    start: StartTarget::None,
+                });
+            }
+            ExistingConfigAction::Quit => {
+                println!(
+                    "{}",
+                    paint(INFO, "Leaving current configuration unchanged.")
+                );
+                return Ok(InitOutcome {
+                    config,
+                    start: StartTarget::None,
+                });
+            }
+            ExistingConfigAction::AddComponent => {
+                component_wizard(&mut config, "add", &theme)?;
+            }
+            ExistingConfigAction::DeleteComponent => {
+                component_wizard(&mut config, "delete", &theme)?;
+            }
+            ExistingConfigAction::RegenerateEnv => {
+                generate_env_file(&config, &env_updates, &PathBuf::from(".env"))?;
+                return Ok(InitOutcome {
+                    config,
+                    start: StartTarget::None,
+                });
+            }
         }
     }
 
@@ -211,6 +238,29 @@ fn start_target_from(s: &str) -> StartTarget {
         StartTarget::None
     } else {
         StartTarget::Repl
+    }
+}
+
+fn existing_config_choices() -> Vec<&'static str> {
+    vec![
+        "Reconfigure",
+        "Status",
+        "Quit",
+        "Add component via wizard",
+        "Delete component via wizard",
+        "Keep current and only regenerate .env",
+    ]
+}
+
+fn existing_config_action(pick: usize) -> ExistingConfigAction {
+    match pick {
+        0 => ExistingConfigAction::Reconfigure,
+        1 => ExistingConfigAction::Status,
+        2 => ExistingConfigAction::Quit,
+        3 => ExistingConfigAction::AddComponent,
+        4 => ExistingConfigAction::DeleteComponent,
+        5 => ExistingConfigAction::RegenerateEnv,
+        _ => ExistingConfigAction::Reconfigure,
     }
 }
 
@@ -767,6 +817,27 @@ fn generate_env_file(
         lines.push(format!("{}={}", k, v));
     }
     std::fs::write(out_path, lines.join("\n")).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn existing_config_choices_include_documented_status_flow() {
+        let choices = existing_config_choices();
+        assert_eq!(choices[0], "Reconfigure");
+        assert_eq!(choices[1], "Status");
+        assert_eq!(choices[2], "Quit");
+        assert!(matches!(
+            existing_config_action(1),
+            ExistingConfigAction::Status
+        ));
+        assert!(matches!(
+            existing_config_action(2),
+            ExistingConfigAction::Quit
+        ));
+    }
 }
 
 async fn fetch_models(
