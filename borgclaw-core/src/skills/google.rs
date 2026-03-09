@@ -1,5 +1,6 @@
 //! Google Workspace integration - OAuth2, Gmail, Drive, Calendar, Docs, Sheets
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,6 +11,7 @@ pub struct GoogleOAuthConfig {
     pub client_id: String,
     pub client_secret: String,
     pub redirect_uri: String,
+    pub token_path: PathBuf,
     pub scopes: Vec<String>,
 }
 
@@ -19,6 +21,7 @@ impl Default for GoogleOAuthConfig {
             client_id: String::new(),
             client_secret: String::new(),
             redirect_uri: "http://localhost:8085/oauth/callback".to_string(),
+            token_path: PathBuf::from(".local/data/google_token.json"),
             scopes: vec![
                 "https://www.googleapis.com/auth/gmail.readonly".to_string(),
                 "https://www.googleapis.com/auth/gmail.send".to_string(),
@@ -55,6 +58,11 @@ impl GoogleAuth {
             token_path,
             http: reqwest::Client::new(),
         }
+    }
+
+    pub fn from_config(config: GoogleOAuthConfig) -> Self {
+        let token_path = config.token_path.clone();
+        Self::new(config, token_path)
     }
 
     pub fn with_token_override(token: GoogleToken) -> Self {
@@ -219,6 +227,82 @@ pub struct GmailMessage {
     pub snippet: Option<String>,
 }
 
+#[derive(Clone)]
+pub struct GoogleClient {
+    auth: Arc<GoogleAuth>,
+    gmail: GmailClient,
+    drive: DriveClient,
+    calendar: CalendarClient,
+}
+
+impl GoogleClient {
+    pub fn new(config: GoogleOAuthConfig) -> Self {
+        let auth = Arc::new(GoogleAuth::from_config(config));
+        let gmail = GmailClient::new(auth.clone());
+        let drive = DriveClient::new(auth.clone());
+        let calendar = CalendarClient::new(auth.clone());
+        Self {
+            auth,
+            gmail,
+            drive,
+            calendar,
+        }
+    }
+
+    pub fn auth(&self) -> Arc<GoogleAuth> {
+        self.auth.clone()
+    }
+
+    pub async fn list_messages(
+        &self,
+        query: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<GmailMessage>, GoogleError> {
+        self.gmail.list_messages(query, limit).await
+    }
+
+    pub async fn send_email(
+        &self,
+        to: &str,
+        subject: &str,
+        body: &str,
+    ) -> Result<String, GoogleError> {
+        self.gmail.send_email(to, subject, body).await
+    }
+
+    pub async fn upload_file(
+        &self,
+        name: &str,
+        content: Vec<u8>,
+        mime_type: &str,
+        folder_id: Option<&str>,
+    ) -> Result<DriveFile, GoogleError> {
+        self.drive
+            .upload_file(name, content, mime_type, folder_id)
+            .await
+    }
+
+    pub async fn search_files(&self, query: &str) -> Result<Vec<DriveFile>, GoogleError> {
+        self.drive.search_files(query).await
+    }
+
+    pub async fn list_events(
+        &self,
+        calendar_id: &str,
+        time_min: DateTime<Utc>,
+        time_max: DateTime<Utc>,
+    ) -> Result<Vec<CalendarEvent>, GoogleError> {
+        self.calendar
+            .list_events(calendar_id, time_min, time_max, 20)
+            .await
+    }
+
+    pub async fn create_event(&self, event: CalendarEvent) -> Result<CalendarEvent, GoogleError> {
+        self.calendar.create_event("primary", event).await
+    }
+}
+
+#[derive(Clone)]
 pub struct GmailClient {
     auth: Arc<GoogleAuth>,
 }
@@ -230,16 +314,19 @@ impl GmailClient {
 
     pub async fn list_messages(
         &self,
-        query: &str,
+        query: Option<&str>,
         limit: u32,
     ) -> Result<Vec<GmailMessage>, GoogleError> {
         let token = self.auth.get_token().await?;
 
-        let url = format!(
-            "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults={}&q={}",
-            limit,
-            urlencoding::encode(query)
+        let mut url = format!(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults={}",
+            limit
         );
+        if let Some(query) = query {
+            url.push_str("&q=");
+            url.push_str(&urlencoding::encode(query));
+        }
 
         let response = self
             .auth
@@ -386,6 +473,15 @@ impl GmailClient {
 
         Ok(result.id)
     }
+
+    pub async fn send_email(
+        &self,
+        to: &str,
+        subject: &str,
+        body: &str,
+    ) -> Result<String, GoogleError> {
+        self.send_message(to, subject, body).await
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -397,6 +493,7 @@ pub struct DriveFile {
     pub parents: Option<Vec<String>>,
 }
 
+#[derive(Clone)]
 pub struct DriveClient {
     auth: Arc<GoogleAuth>,
 }
@@ -472,13 +569,17 @@ impl DriveClient {
         name: &str,
         content: Vec<u8>,
         mime_type: &str,
+        folder_id: Option<&str>,
     ) -> Result<DriveFile, GoogleError> {
         let token = self.auth.get_token().await?;
 
-        let metadata = serde_json::json!({
+        let mut metadata = serde_json::json!({
             "name": name,
             "mimeType": mime_type
         });
+        if let Some(folder_id) = folder_id {
+            metadata["parents"] = serde_json::json!([folder_id]);
+        }
 
         let client = reqwest::Client::new();
         let multipart = reqwest::multipart::Part::bytes(content)
@@ -505,17 +606,35 @@ impl DriveClient {
 
         Ok(file)
     }
+
+    pub async fn search_files(&self, query: &str) -> Result<Vec<DriveFile>, GoogleError> {
+        self.list_files(Some(query), 20).await
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalendarEvent {
     pub id: String,
-    pub summary: Option<String>,
+    pub summary: String,
     pub description: Option<String>,
-    pub start: Option<String>,
-    pub end: Option<String>,
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
 }
 
+impl Default for CalendarEvent {
+    fn default() -> Self {
+        let now = Utc::now();
+        Self {
+            id: String::new(),
+            summary: String::new(),
+            description: None,
+            start: now,
+            end: now,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct CalendarClient {
     auth: Arc<GoogleAuth>,
 }
@@ -528,8 +647,8 @@ impl CalendarClient {
     pub async fn list_events(
         &self,
         calendar_id: &str,
-        time_min: &str,
-        time_max: &str,
+        time_min: DateTime<Utc>,
+        time_max: DateTime<Utc>,
         max_results: u32,
     ) -> Result<Vec<CalendarEvent>, GoogleError> {
         let token = self.auth.get_token().await?;
@@ -537,8 +656,8 @@ impl CalendarClient {
         let url = format!(
             "https://www.googleapis.com/calendar/v3/calendars/{}/events?timeMin={}&timeMax={}&maxResults={}",
             urlencoding::encode(calendar_id),
-            urlencoding::encode(time_min),
-            urlencoding::encode(time_max),
+            urlencoding::encode(&time_min.to_rfc3339()),
+            urlencoding::encode(&time_max.to_rfc3339()),
             max_results
         );
 
@@ -553,7 +672,7 @@ impl CalendarClient {
 
         #[derive(Deserialize)]
         struct ListResponse {
-            items: Option<Vec<CalendarEvent>>,
+            items: Option<Vec<ApiCalendarEvent>>,
         }
 
         let result: ListResponse = response
@@ -561,15 +680,18 @@ impl CalendarClient {
             .await
             .map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
 
-        Ok(result.items.unwrap_or_default())
+        result
+            .items
+            .unwrap_or_default()
+            .into_iter()
+            .map(CalendarEvent::try_from)
+            .collect()
     }
 
     pub async fn create_event(
         &self,
         calendar_id: &str,
-        summary: &str,
-        start: &str,
-        end: &str,
+        event: CalendarEvent,
     ) -> Result<CalendarEvent, GoogleError> {
         let token = self.auth.get_token().await?;
 
@@ -579,9 +701,10 @@ impl CalendarClient {
         );
 
         let body = serde_json::json!({
-            "summary": summary,
-            "start": { "dateTime": start },
-            "end": { "dateTime": end }
+            "summary": event.summary,
+            "description": event.description,
+            "start": { "dateTime": event.start.to_rfc3339() },
+            "end": { "dateTime": event.end.to_rfc3339() }
         });
 
         let response = self
@@ -594,13 +717,64 @@ impl CalendarClient {
             .await
             .map_err(|e| GoogleError::RequestFailed(e.to_string()))?;
 
-        let event: CalendarEvent = response
+        let event: ApiCalendarEvent = response
             .json()
             .await
             .map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
 
-        Ok(event)
+        CalendarEvent::try_from(event)
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ApiCalendarEvent {
+    id: Option<String>,
+    summary: Option<String>,
+    description: Option<String>,
+    start: Option<ApiEventDateTime>,
+    end: Option<ApiEventDateTime>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ApiEventDateTime {
+    #[serde(rename = "dateTime")]
+    date_time: Option<String>,
+    date: Option<String>,
+}
+
+impl TryFrom<ApiCalendarEvent> for CalendarEvent {
+    type Error = GoogleError;
+
+    fn try_from(value: ApiCalendarEvent) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: value.id.unwrap_or_default(),
+            summary: value.summary.unwrap_or_default(),
+            description: value.description,
+            start: parse_google_event_time(value.start)?,
+            end: parse_google_event_time(value.end)?,
+        })
+    }
+}
+
+fn parse_google_event_time(value: Option<ApiEventDateTime>) -> Result<DateTime<Utc>, GoogleError> {
+    let Some(value) = value else {
+        return Err(GoogleError::ParseFailed("missing event time".to_string()));
+    };
+
+    if let Some(date_time) = value.date_time {
+        return DateTime::parse_from_rfc3339(&date_time)
+            .map(|dt| dt.with_timezone(&Utc))
+            .map_err(|e| GoogleError::ParseFailed(e.to_string()));
+    }
+
+    if let Some(date) = value.date {
+        let date_time = format!("{}T00:00:00Z", date);
+        return DateTime::parse_from_rfc3339(&date_time)
+            .map(|dt| dt.with_timezone(&Utc))
+            .map_err(|e| GoogleError::ParseFailed(e.to_string()));
+    }
+
+    Err(GoogleError::ParseFailed("missing event time".to_string()))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -616,4 +790,43 @@ pub enum GoogleError {
 
     #[error("Not authenticated")]
     NotAuthenticated,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn google_client_uses_documented_token_path() {
+        let client = GoogleClient::new(GoogleOAuthConfig {
+            token_path: PathBuf::from(".local/data/google_token.json"),
+            ..Default::default()
+        });
+
+        assert_eq!(
+            client.auth.token_path,
+            PathBuf::from(".local/data/google_token.json")
+        );
+    }
+
+    #[test]
+    fn calendar_event_parses_google_datetime_shape() {
+        let parsed = CalendarEvent::try_from(ApiCalendarEvent {
+            id: Some("evt-1".to_string()),
+            summary: Some("Meeting".to_string()),
+            description: None,
+            start: Some(ApiEventDateTime {
+                date_time: Some("2026-03-09T10:00:00Z".to_string()),
+                date: None,
+            }),
+            end: Some(ApiEventDateTime {
+                date_time: Some("2026-03-09T11:00:00Z".to_string()),
+                date: None,
+            }),
+        })
+        .unwrap();
+
+        assert_eq!(parsed.summary, "Meeting");
+        assert_eq!(parsed.start.to_rfc3339(), "2026-03-09T10:00:00+00:00");
+    }
 }

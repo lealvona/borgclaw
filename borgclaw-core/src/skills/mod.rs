@@ -17,7 +17,10 @@ pub use browser::{
     BrowserConfig, BrowserSkill, BrowserType, CdpClient, Cookie, PlaywrightClient, PlaywrightConfig,
 };
 pub use github::{GitHubClient, GitHubConfig, GitHubSafety, OperationType, RepoAccess};
-pub use google::{CalendarClient, DriveClient, GmailClient, GoogleAuth, GoogleOAuthConfig};
+pub use google::{
+    CalendarClient, CalendarEvent, DriveClient, GmailClient, GoogleAuth, GoogleClient,
+    GoogleOAuthConfig,
+};
 pub use image::{ImageBackend, ImageClient, ImageFormat, ImageParams, ImageResult};
 pub use plugin::{PluginManifest, PluginRegistry, WasmPermission};
 pub use qr::{QrFormat, QrSkill};
