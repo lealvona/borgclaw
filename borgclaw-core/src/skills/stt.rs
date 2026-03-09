@@ -77,18 +77,26 @@ impl SttClient {
         }
     }
 
-    async fn transcribe_openai(&self, audio: &[u8], format: AudioFormat) -> Result<String, SttError> {
+    async fn transcribe_openai(
+        &self,
+        audio: &[u8],
+        format: AudioFormat,
+    ) -> Result<String, SttError> {
         let api_key = std::env::var("OPENAI_API_KEY")
             .map_err(|_| SttError::ConfigError("OPENAI_API_KEY not set".to_string()))?;
 
         let form = reqwest::multipart::Form::new()
-            .part("file", reqwest::multipart::Part::bytes(audio.to_vec())
-                .mime_str(format.mime_type())
-                .map_err(|e| SttError::RequestFailed(e.to_string()))?
-                .file_name("audio".to_string()))
+            .part(
+                "file",
+                reqwest::multipart::Part::bytes(audio.to_vec())
+                    .mime_str(format.mime_type())
+                    .map_err(|e| SttError::RequestFailed(e.to_string()))?
+                    .file_name("audio".to_string()),
+            )
             .text("model", "whisper-1".to_string());
 
-        let response = self.http
+        let response = self
+            .http
             .post("https://api.openai.com/v1/audio/transcriptions")
             .bearer_auth(&api_key)
             .multipart(form)
@@ -101,21 +109,32 @@ impl SttClient {
             text: String,
         }
 
-        let result: TranscribeResponse = response.json().await
+        let result: TranscribeResponse = response
+            .json()
+            .await
             .map_err(|e| SttError::ParseFailed(e.to_string()))?;
 
         Ok(result.text)
     }
 
-    async fn transcribe_openwebui(&self, audio: &[u8], format: AudioFormat, config: &OpenWebUiConfig) -> Result<String, SttError> {
+    async fn transcribe_openwebui(
+        &self,
+        audio: &[u8],
+        format: AudioFormat,
+        config: &OpenWebUiConfig,
+    ) -> Result<String, SttError> {
         let form = reqwest::multipart::Form::new()
-            .part("file", reqwest::multipart::Part::bytes(audio.to_vec())
-                .mime_str(format.mime_type())
-                .map_err(|e| SttError::RequestFailed(e.to_string()))?
-                .file_name("audio".to_string()))
+            .part(
+                "file",
+                reqwest::multipart::Part::bytes(audio.to_vec())
+                    .mime_str(format.mime_type())
+                    .map_err(|e| SttError::RequestFailed(e.to_string()))?
+                    .file_name("audio".to_string()),
+            )
             .text("model", config.model.clone());
 
-        let response = self.http
+        let response = self
+            .http
             .post(&format!("{}/api/v1/audio/transcriptions", config.base_url))
             .bearer_auth(&config.api_key)
             .multipart(form)
@@ -128,13 +147,20 @@ impl SttClient {
             text: String,
         }
 
-        let result: TranscribeResponse = response.json().await
+        let result: TranscribeResponse = response
+            .json()
+            .await
             .map_err(|e| SttError::ParseFailed(e.to_string()))?;
 
         Ok(result.text)
     }
 
-    async fn transcribe_whisper_cpp(&self, audio: &[u8], format: &AudioFormat, config: &WhisperCppConfig) -> Result<String, SttError> {
+    async fn transcribe_whisper_cpp(
+        &self,
+        audio: &[u8],
+        format: &AudioFormat,
+        config: &WhisperCppConfig,
+    ) -> Result<String, SttError> {
         let temp_dir = std::env::temp_dir();
         let temp_file = temp_dir.join(format!("stt_{}.", temp_dir.to_string_lossy().len()));
 
@@ -147,12 +173,13 @@ impl SttClient {
         };
 
         let temp_path = temp_dir.join(format!("stt_{}.{}", uuid::Uuid::new_v4(), ext));
-        std::fs::write(&temp_path, audio)
-            .map_err(|e| SttError::IoError(e.to_string()))?;
+        std::fs::write(&temp_path, audio).map_err(|e| SttError::IoError(e.to_string()))?;
 
         let mut args = vec![
-            "-m".to_string(), config.model_path.to_string_lossy().to_string(),
-            "-f".to_string(), temp_path.to_string_lossy().to_string(),
+            "-m".to_string(),
+            config.model_path.to_string_lossy().to_string(),
+            "-f".to_string(),
+            temp_path.to_string_lossy().to_string(),
             "-otxt".to_string(),
         ];
 
@@ -177,7 +204,8 @@ impl SttClient {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let text = stdout.lines()
+        let text = stdout
+            .lines()
             .skip_while(|line| line.contains("-->"))
             .collect::<Vec<_>>()
             .join(" ")
@@ -192,19 +220,19 @@ impl SttClient {
 pub enum SttError {
     #[error("Request failed: {0}")]
     RequestFailed(String),
-    
+
     #[error("Parse failed: {0}")]
     ParseFailed(String),
-    
+
     #[error("IO error: {0}")]
     IoError(String),
-    
+
     #[error("Execution failed: {0}")]
     ExecutionFailed(String),
-    
+
     #[error("Config error: {0}")]
     ConfigError(String),
-    
+
     #[error("Not available")]
     NotAvailable,
 }

@@ -1,27 +1,27 @@
 //! Skills module - SKILL.md parser and skill management
 
-mod parser;
+pub mod browser;
 pub mod github;
 pub mod google;
-pub mod browser;
+pub mod image;
+mod parser;
+pub mod plugin;
+pub mod qr;
 pub mod stt;
 pub mod tts;
-pub mod image;
-pub mod qr;
 pub mod url_shortener;
-pub mod plugin;
 
 pub use parser::{SkillCommand, SkillManifest};
 
-pub use github::{GitHubClient, GitHubConfig, GitHubSafety, RepoAccess, OperationType};
-pub use google::{GoogleAuth, GoogleOAuthConfig, GmailClient, DriveClient, CalendarClient};
-pub use browser::{BrowserSkill, BrowserConfig, BrowserType, PlaywrightClient, Cookie};
-pub use stt::{SttClient, SttBackend, AudioFormat};
-pub use tts::{TtsClient, ElevenLabsConfig, Voice};
-pub use image::{ImageClient, ImageBackend, ImageParams, ImageResult, ImageFormat};
-pub use qr::{QrSkill, QrFormat};
+pub use browser::{BrowserConfig, BrowserSkill, BrowserType, Cookie, PlaywrightClient};
+pub use github::{GitHubClient, GitHubConfig, GitHubSafety, OperationType, RepoAccess};
+pub use google::{CalendarClient, DriveClient, GmailClient, GoogleAuth, GoogleOAuthConfig};
+pub use image::{ImageBackend, ImageClient, ImageFormat, ImageParams, ImageResult};
+pub use plugin::{PluginManifest, PluginRegistry, WasmPermission};
+pub use qr::{QrFormat, QrSkill};
+pub use stt::{AudioFormat, SttBackend, SttClient};
+pub use tts::{ElevenLabsConfig, TtsClient, Voice};
 pub use url_shortener::{UrlShortener, UrlShortenerProvider};
-pub use plugin::{PluginRegistry, PluginManifest, WasmPermission};
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -41,18 +41,18 @@ impl SkillsRegistry {
             skills_path,
         }
     }
-    
+
     /// Load all skills from skills directory
     pub async fn load_all(&self) -> Result<(), SkillsError> {
         let mut skills = self.skills.write().await;
-        
+
         if !self.skills_path.exists() {
             return Ok(());
         }
-        
+
         let entries = std::fs::read_dir(&self.skills_path)
             .map_err(|e| SkillsError::IoError(e.to_string()))?;
-        
+
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -60,30 +60,34 @@ impl SkillsRegistry {
                 if skill_md.exists() {
                     if let Ok(content) = std::fs::read_to_string(&skill_md) {
                         if let Ok(skill) = SkillManifest::parse(&content) {
-                            let id = path.file_name()
+                            let id = path
+                                .file_name()
                                 .and_then(|n| n.to_str())
                                 .unwrap_or("unknown")
                                 .to_string();
-                            
-                            skills.insert(id, Skill {
-                                manifest: skill,
-                                path,
-                            });
+
+                            skills.insert(
+                                id,
+                                Skill {
+                                    manifest: skill,
+                                    path,
+                                },
+                            );
                         }
                     }
                 }
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Get a skill by ID
     pub async fn get(&self, id: &str) -> Option<Skill> {
         let skills = self.skills.read().await;
         skills.get(id).cloned()
     }
-    
+
     /// List all skills
     pub async fn list(&self) -> Vec<(String, String)> {
         let skills = self.skills.read().await;
@@ -92,7 +96,7 @@ impl SkillsRegistry {
             .map(|(id, s)| (id.clone(), s.manifest.name.clone()))
             .collect()
     }
-    
+
     /// Get skill by command name
     pub async fn get_by_command(&self, command: &str) -> Option<Skill> {
         let skills = self.skills.read().await;

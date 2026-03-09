@@ -62,14 +62,11 @@ impl ProviderRegistry {
                 id: "google".to_string(),
                 display: "Google Gemini".to_string(),
                 api_base: "https://generativelanguage.googleapis.com/v1beta".to_string(),
-                models_endpoint:
-                    "https://generativelanguage.googleapis.com/v1beta/models".to_string(),
+                models_endpoint: "https://generativelanguage.googleapis.com/v1beta/models"
+                    .to_string(),
                 api_key_env: Some("GOOGLE_API_KEY".to_string()),
                 default_model: "gemini-1.5-pro".to_string(),
-                static_models: vec![
-                    "gemini-1.5-pro".to_string(),
-                    "gemini-1.5-flash".to_string(),
-                ],
+                static_models: vec!["gemini-1.5-pro".to_string(), "gemini-1.5-flash".to_string()],
                 requires_auth: true,
             },
         );

@@ -39,7 +39,9 @@ pub trait ChatProvider: Send + Sync {
 pub struct ProviderFactory;
 
 impl ProviderFactory {
-    pub fn create(config: &crate::config::AgentConfig) -> Result<Box<dyn ChatProvider>, ProviderError> {
+    pub fn create(
+        config: &crate::config::AgentConfig,
+    ) -> Result<Box<dyn ChatProvider>, ProviderError> {
         match config.provider.as_str() {
             "openai" => Ok(Box::new(OpenAiProvider::from_env()?)),
             "anthropic" => Ok(Box::new(AnthropicProvider::from_env()?)),
@@ -70,7 +72,8 @@ struct OpenAiProvider {
 impl OpenAiProvider {
     fn from_env() -> Result<Self, ProviderError> {
         Ok(Self {
-            api_key: std::env::var("OPENAI_API_KEY").map_err(|_| ProviderError::MissingEnv("OPENAI_API_KEY"))?,
+            api_key: std::env::var("OPENAI_API_KEY")
+                .map_err(|_| ProviderError::MissingEnv("OPENAI_API_KEY"))?,
             http: reqwest::Client::new(),
         })
     }
@@ -117,7 +120,10 @@ impl ChatProvider for OpenAiProvider {
             .map_err(|e| ProviderError::Request(e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(ProviderError::Request(format!("http {}", response.status())));
+            return Err(ProviderError::Request(format!(
+                "http {}",
+                response.status()
+            )));
         }
 
         let body: Response = response
@@ -141,7 +147,8 @@ struct AnthropicProvider {
 impl AnthropicProvider {
     fn from_env() -> Result<Self, ProviderError> {
         Ok(Self {
-            api_key: std::env::var("ANTHROPIC_API_KEY").map_err(|_| ProviderError::MissingEnv("ANTHROPIC_API_KEY"))?,
+            api_key: std::env::var("ANTHROPIC_API_KEY")
+                .map_err(|_| ProviderError::MissingEnv("ANTHROPIC_API_KEY"))?,
             http: reqwest::Client::new(),
         })
     }
@@ -207,7 +214,10 @@ impl ChatProvider for AnthropicProvider {
             .map_err(|e| ProviderError::Request(e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(ProviderError::Request(format!("http {}", response.status())));
+            return Err(ProviderError::Request(format!(
+                "http {}",
+                response.status()
+            )));
         }
 
         let body: Response = response
@@ -239,7 +249,8 @@ struct GoogleProvider {
 impl GoogleProvider {
     fn from_env() -> Result<Self, ProviderError> {
         Ok(Self {
-            api_key: std::env::var("GOOGLE_API_KEY").map_err(|_| ProviderError::MissingEnv("GOOGLE_API_KEY"))?,
+            api_key: std::env::var("GOOGLE_API_KEY")
+                .map_err(|_| ProviderError::MissingEnv("GOOGLE_API_KEY"))?,
             http: reqwest::Client::new(),
         })
     }
@@ -306,11 +317,15 @@ impl ChatProvider for GoogleProvider {
                 "system" => system.push(message.content.as_str()),
                 "assistant" => contents.push(Content {
                     role: "model",
-                    parts: vec![Part { text: &message.content }],
+                    parts: vec![Part {
+                        text: &message.content,
+                    }],
                 }),
                 _ => contents.push(Content {
                     role: "user",
-                    parts: vec![Part { text: &message.content }],
+                    parts: vec![Part {
+                        text: &message.content,
+                    }],
                 }),
             }
         }
@@ -343,7 +358,10 @@ impl ChatProvider for GoogleProvider {
             .map_err(|e| ProviderError::Request(e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(ProviderError::Request(format!("http {}", response.status())));
+            return Err(ProviderError::Request(format!(
+                "http {}",
+                response.status()
+            )));
         }
 
         let body: Response = response
@@ -376,7 +394,8 @@ impl Default for OllamaProvider {
     fn default() -> Self {
         Self {
             http: reqwest::Client::new(),
-            base_url: std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| "http://localhost:11434".to_string()),
+            base_url: std::env::var("OLLAMA_BASE_URL")
+                .unwrap_or_else(|_| "http://localhost:11434".to_string()),
         }
     }
 }
@@ -425,7 +444,10 @@ impl ChatProvider for OllamaProvider {
             .map_err(|e| ProviderError::Request(e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(ProviderError::Request(format!("http {}", response.status())));
+            return Err(ProviderError::Request(format!(
+                "http {}",
+                response.status()
+            )));
         }
 
         let body: Response = response

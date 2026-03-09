@@ -1,10 +1,10 @@
 //! Plugin SDK - WASM plugin loading and execution
 
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
 pub enum WasmPermission {
@@ -40,8 +40,7 @@ pub struct WasmPlugin {
 
 impl WasmPlugin {
     pub fn load(wasm_path: &PathBuf) -> Result<Self, PluginError> {
-        let bytes = std::fs::read(wasm_path)
-            .map_err(|e| PluginError::IoError(e.to_string()))?;
+        let bytes = std::fs::read(wasm_path).map_err(|e| PluginError::IoError(e.to_string()))?;
 
         let manifest_path = wasm_path.with_extension("toml");
         let manifest = if manifest_path.exists() {
@@ -127,7 +126,12 @@ impl PluginRegistry {
             .map_err(|e| PluginError::WasmError(e.to_string()))
     }
 
-    fn validate_permissions(&self, manifest: &PluginManifest, function: &str, input: &str) -> Result<(), PluginError> {
+    fn validate_permissions(
+        &self,
+        manifest: &PluginManifest,
+        function: &str,
+        input: &str,
+    ) -> Result<(), PluginError> {
         for permission in &manifest.permissions {
             match permission {
                 WasmPermission::FileRead => {
@@ -161,7 +165,7 @@ impl PluginRegistry {
                     );
                     if hosts.is_empty() {
                         return Err(PluginError::PermissionDenied(
-                            "Network permission requires at least one allowed host".to_string()
+                            "Network permission requires at least one allowed host".to_string(),
                         ));
                     }
                 }
@@ -179,15 +183,16 @@ impl PluginRegistry {
                         function = %function,
                         "Plugin requesting shell access - elevated risk"
                     );
-                    if input.contains("rm ") || input.contains("del ") || input.contains("format ") {
+                    if input.contains("rm ") || input.contains("del ") || input.contains("format ")
+                    {
                         return Err(PluginError::PermissionDenied(
-                            "Shell permission does not allow destructive commands".to_string()
+                            "Shell permission does not allow destructive commands".to_string(),
                         ));
                     }
                 }
             }
         }
-        
+
         Ok(())
     }
 
@@ -201,7 +206,11 @@ impl PluginRegistry {
     }
 
     pub async fn get(&self, name: &str) -> Option<PluginManifest> {
-        self.plugins.read().await.get(name).map(|p| p.manifest.clone())
+        self.plugins
+            .read()
+            .await
+            .get(name)
+            .map(|p| p.manifest.clone())
     }
 }
 
@@ -215,16 +224,16 @@ impl Default for PluginRegistry {
 pub enum PluginError {
     #[error("IO error: {0}")]
     IoError(String),
-    
+
     #[error("Parse failed: {0}")]
     ParseFailed(String),
-    
+
     #[error("Plugin not found: {0}")]
     NotFound(String),
-    
+
     #[error("WASM error: {0}")]
     WasmError(String),
-    
+
     #[error("Permission denied: {0}")]
     PermissionDenied(String),
 }

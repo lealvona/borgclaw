@@ -106,21 +106,19 @@ async fn main() {
     match cli.command {
         Commands::Repl => repl(config, config_path).await,
         Commands::Send { message } => send_message(config, message).await,
-        Commands::Init(args) => {
-            match run_init(&config_path, config, &args).await {
-                Ok(outcome) => {
-                    if let Err(e) = save_config(&outcome.config, &config_path) {
-                        error!("Failed to save config: {}", e);
-                        return;
-                    }
-                    println!("Saved config to {:?}", config_path);
-                    if outcome.start == StartTarget::Repl {
-                        repl(outcome.config, config_path).await;
-                    }
+        Commands::Init(args) => match run_init(&config_path, config, &args).await {
+            Ok(outcome) => {
+                if let Err(e) = save_config(&outcome.config, &config_path) {
+                    error!("Failed to save config: {}", e);
+                    return;
                 }
-                Err(e) => error!("Init failed: {}", e),
+                println!("Saved config to {:?}", config_path);
+                if outcome.start == StartTarget::Repl {
+                    repl(outcome.config, config_path).await;
+                }
             }
-        }
+            Err(e) => error!("Init failed: {}", e),
+        },
         Commands::Config { action } => config_action(&config_path, config, action).await,
         Commands::Skills { action } => skills_action(&config, action).await,
         Commands::Status => status(config).await,
@@ -293,11 +291,12 @@ async fn skills_action(config: &AppConfig, action: SkillsAction) {
                         let skills = filter_registry_skills(skills, filter.as_deref());
                         println!("\nRegistry skills:");
                         for skill in skills {
-                            let status = if installed_ids.contains(&registry_skill_install_id(&skill)) {
-                                "installed"
-                            } else {
-                                "available"
-                            };
+                            let status =
+                                if installed_ids.contains(&registry_skill_install_id(&skill)) {
+                                    "installed"
+                                } else {
+                                    "available"
+                                };
                             println!("  - {} [{}]", skill, status);
                         }
                     }
@@ -307,7 +306,13 @@ async fn skills_action(config: &AppConfig, action: SkillsAction) {
             }
         }
         SkillsAction::Install { name } => {
-            match install_skill(&config.skills.skills_path, &name, config.skills.registry_url.as_deref()).await {
+            match install_skill(
+                &config.skills.skills_path,
+                &name,
+                config.skills.registry_url.as_deref(),
+            )
+            .await
+            {
                 Ok(path) => println!("Installed skill to {:?}", path),
                 Err(err) => println!("{}", err),
             }
@@ -325,14 +330,16 @@ async fn status(config: AppConfig) {
     println!(
         "Provider auth: {}",
         provider_env_var(&config.agent.provider)
-            .map(|key| if std::env::var(key).is_ok() { "configured" } else { "missing env" })
+            .map(|key| if std::env::var(key).is_ok() {
+                "configured"
+            } else {
+                "missing env"
+            })
             .unwrap_or("unknown")
     );
     println!(
         "Security: wasm={}, docker={}, approval={:?}",
-        config.security.wasm_sandbox,
-        config.security.docker_sandbox,
-        config.security.approval_mode
+        config.security.wasm_sandbox, config.security.docker_sandbox, config.security.approval_mode
     );
     println!(
         "Vault: {}",
@@ -347,7 +354,15 @@ async fn status(config: AppConfig) {
     println!("Skills path: {:?}", config.skills.skills_path);
     println!("\nChannels:");
     for (name, channel) in &config.channels {
-        println!("  - {}: {}", name, if channel.enabled { "enabled" } else { "disabled" });
+        println!(
+            "  - {}: {}",
+            name,
+            if channel.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
     }
 }
 
@@ -363,20 +378,28 @@ async fn doctor(config: AppConfig) {
     let security = SecurityLayer::new();
     let check = security.check_command("rm -rf /");
     match check {
-        borgclaw_core::security::CommandCheck::Blocked(_) => println!("✓ Command blocklist working"),
+        borgclaw_core::security::CommandCheck::Blocked(_) => {
+            println!("✓ Command blocklist working")
+        }
         _ => println!("✗ Command blocklist not working"),
     }
     match provider_env_var(&config.agent.provider) {
-        Some(env_key) if std::env::var(env_key).is_ok() => println!("✓ Provider credential env present ({})", env_key),
+        Some(env_key) if std::env::var(env_key).is_ok() => {
+            println!("✓ Provider credential env present ({})", env_key)
+        }
         Some(env_key) => println!("✗ Provider credential env missing ({})", env_key),
         None => println!("✗ Unknown provider '{}'", config.agent.provider),
     }
-    if std::fs::create_dir_all(&config.memory.memory_path).is_ok() && config.memory.memory_path.exists() {
+    if std::fs::create_dir_all(&config.memory.memory_path).is_ok()
+        && config.memory.memory_path.exists()
+    {
         println!("✓ Memory path available");
     } else {
         println!("✗ Memory path unavailable: {:?}", config.memory.memory_path);
     }
-    if std::fs::create_dir_all(&config.skills.skills_path).is_ok() && config.skills.skills_path.exists() {
+    if std::fs::create_dir_all(&config.skills.skills_path).is_ok()
+        && config.skills.skills_path.exists()
+    {
         println!("✓ Skills path available");
     } else {
         println!("✗ Skills path unavailable: {:?}", config.skills.skills_path);
@@ -404,10 +427,7 @@ fn provider_env_var(provider: &str) -> Option<&'static str> {
 
 fn cli_in_path(binary: &str) -> bool {
     std::env::var_os("PATH")
-        .map(|paths| {
-            std::env::split_paths(&paths)
-                .any(|dir| dir.join(binary).exists())
-        })
+        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(binary).exists()))
         .unwrap_or(false)
 }
 
@@ -476,7 +496,10 @@ fn install_skill_manifest(
 async fn fetch_skill_manifest(url: &str) -> Result<String, String> {
     let response = reqwest::get(url).await.map_err(|e| e.to_string())?;
     if !response.status().is_success() {
-        return Err(format!("failed to download skill manifest: http {}", response.status()));
+        return Err(format!(
+            "failed to download skill manifest: http {}",
+            response.status()
+        ));
     }
 
     let content = response.text().await.map_err(|e| e.to_string())?;
@@ -514,12 +537,16 @@ fn github_registry_base(registry_url: &str) -> Option<String> {
     let mut parts = repo.split('/');
     let owner = parts.next()?;
     let name = parts.next()?;
-    Some(format!("https://raw.githubusercontent.com/{}/{}/main", owner, name))
+    Some(format!(
+        "https://raw.githubusercontent.com/{}/{}/main",
+        owner, name
+    ))
 }
 
 async fn fetch_registry_skills(registry_url: &str) -> Result<Vec<String>, String> {
-    let (owner, repo) = github_registry_repo(registry_url)
-        .ok_or_else(|| "registry listing currently supports GitHub repositories only".to_string())?;
+    let (owner, repo) = github_registry_repo(registry_url).ok_or_else(|| {
+        "registry listing currently supports GitHub repositories only".to_string()
+    })?;
 
     let client = reqwest::Client::builder()
         .user_agent("BorgClaw/0.1")
@@ -600,7 +627,10 @@ fn skill_install_id(source: &str) -> Result<String, String> {
     Ok(tail.to_string())
 }
 
-fn copy_dir_recursive(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
+fn copy_dir_recursive(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> Result<(), String> {
     std::fs::create_dir_all(destination).map_err(|e| e.to_string())?;
     for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
@@ -621,7 +651,8 @@ mod tests {
 
     #[test]
     fn installs_local_skill_directory() {
-        let root = std::env::temp_dir().join(format!("borgclaw_cli_skill_test_{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_cli_skill_test_{}", uuid::Uuid::new_v4()));
         let source = root.join("source-skill");
         let skills_path = root.join("installed");
         std::fs::create_dir_all(&source).unwrap();
@@ -636,13 +667,23 @@ mod tests {
     #[test]
     fn builds_github_repo_skill_url() {
         let url = skill_source_url("openclaw/weather", None).unwrap();
-        assert_eq!(url, "https://raw.githubusercontent.com/openclaw/weather/main/SKILL.md");
+        assert_eq!(
+            url,
+            "https://raw.githubusercontent.com/openclaw/weather/main/SKILL.md"
+        );
     }
 
     #[test]
     fn builds_registry_backed_skill_url() {
-        let url = skill_source_url("openclaw/weather", Some("https://github.com/openclaw/clawhub")).unwrap();
-        assert_eq!(url, "https://raw.githubusercontent.com/openclaw/clawhub/main/openclaw/weather/SKILL.md");
+        let url = skill_source_url(
+            "openclaw/weather",
+            Some("https://github.com/openclaw/clawhub"),
+        )
+        .unwrap();
+        assert_eq!(
+            url,
+            "https://raw.githubusercontent.com/openclaw/clawhub/main/openclaw/weather/SKILL.md"
+        );
     }
 
     #[test]
@@ -654,12 +695,18 @@ mod tests {
     #[test]
     fn derives_skill_id_from_sources() {
         assert_eq!(skill_install_id("openclaw/weather").unwrap(), "weather");
-        assert_eq!(skill_install_id("https://example.com/skills/weather/SKILL.md").unwrap(), "weather");
+        assert_eq!(
+            skill_install_id("https://example.com/skills/weather/SKILL.md").unwrap(),
+            "weather"
+        );
     }
 
     #[test]
     fn installs_downloaded_skill_manifest() {
-        let root = std::env::temp_dir().join(format!("borgclaw_cli_remote_skill_test_{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_cli_remote_skill_test_{}",
+            uuid::Uuid::new_v4()
+        ));
         let skills_path = root.join("installed");
         let destination = install_skill_manifest(
             &skills_path,
@@ -693,7 +740,10 @@ mod tests {
 
         assert_eq!(
             extract_registry_skills(&tree),
-            vec!["openclaw/calendar".to_string(), "openclaw/weather".to_string()]
+            vec![
+                "openclaw/calendar".to_string(),
+                "openclaw/weather".to_string()
+            ]
         );
     }
 

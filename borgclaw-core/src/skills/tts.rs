@@ -1,8 +1,8 @@
 //! Text-to-Speech (ElevenLabs)
 
-use serde::{Deserialize, Serialize};
 use futures_core::Stream;
 use futures_util::StreamExt;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElevenLabsConfig {
@@ -61,7 +61,8 @@ impl TtsClient {
             }
         });
 
-        let response = self.http
+        let response = self
+            .http
             .post(&url)
             .header("xi-api-key", &self.config.api_key)
             .header("Content-Type", "application/json")
@@ -76,14 +77,19 @@ impl TtsClient {
             return Err(TtsError::RequestFailed(format!("{}: {}", status, text)));
         }
 
-        let bytes = response.bytes().await
+        let bytes = response
+            .bytes()
+            .await
             .map_err(|e| TtsError::RequestFailed(e.to_string()))?
             .to_vec();
 
         Ok(bytes)
     }
 
-    pub async fn speak_stream(&self, text: &str) -> Result<impl Stream<Item = Result<bytes::Bytes, TtsError>>, TtsError> {
+    pub async fn speak_stream(
+        &self,
+        text: &str,
+    ) -> Result<impl Stream<Item = Result<bytes::Bytes, TtsError>>, TtsError> {
         let url = format!(
             "https://api.elevenlabs.io/v1/text-to-speech/{}/stream",
             self.config.voice_id
@@ -98,7 +104,8 @@ impl TtsClient {
             }
         });
 
-        let request = self.http
+        let request = self
+            .http
             .post(&url)
             .header("xi-api-key", &self.config.api_key)
             .header("Content-Type", "application/json")
@@ -106,18 +113,25 @@ impl TtsClient {
             .build()
             .map_err(|e| TtsError::RequestFailed(e.to_string()))?;
 
-        let response = self.http.execute(request).await
+        let response = self
+            .http
+            .execute(request)
+            .await
             .map_err(|e| TtsError::RequestFailed(e.to_string()))?;
 
         if !response.status().is_success() {
             return Err(TtsError::RequestFailed(format!("{}", response.status())));
         }
 
-        Ok(response.bytes_stream().map(|b| b.map_err(|e| TtsError::RequestFailed(e.to_string()))).boxed())
+        Ok(response
+            .bytes_stream()
+            .map(|b| b.map_err(|e| TtsError::RequestFailed(e.to_string())))
+            .boxed())
     }
 
     pub async fn list_voices(&self) -> Result<Vec<Voice>, TtsError> {
-        let response = self.http
+        let response = self
+            .http
             .get("https://api.elevenlabs.io/v1/voices")
             .header("xi-api-key", &self.config.api_key)
             .send()
@@ -129,7 +143,9 @@ impl TtsClient {
             voices: Vec<Voice>,
         }
 
-        let result: VoicesResponse = response.json().await
+        let result: VoicesResponse = response
+            .json()
+            .await
             .map_err(|e| TtsError::ParseFailed(e.to_string()))?;
 
         Ok(result.voices)
@@ -144,7 +160,7 @@ impl TtsClient {
 pub enum TtsError {
     #[error("Request failed: {0}")]
     RequestFailed(String),
-    
+
     #[error("Parse failed: {0}")]
     ParseFailed(String),
 }

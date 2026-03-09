@@ -1,8 +1,10 @@
 //! Tools module - defines tools agents can use
 
-use crate::memory::{new_entry, Memory, MemoryQuery, SqliteMemory};
 use crate::mcp::client::{McpClient, McpClientConfig};
-use crate::mcp::transport::{McpTransportConfig, SseTransportConfig, StdioTransportConfig, WebSocketTransportConfig};
+use crate::mcp::transport::{
+    McpTransportConfig, SseTransportConfig, StdioTransportConfig, WebSocketTransportConfig,
+};
+use crate::memory::{new_entry, Memory, MemoryQuery, SqliteMemory};
 use crate::scheduler::{new_job, JobTrigger, Scheduler, SchedulerTrait};
 use crate::security::{CommandCheck, SecurityLayer};
 use crate::skills::PluginRegistry;
@@ -38,17 +40,17 @@ impl Tool {
             tags: Vec::new(),
         }
     }
-    
+
     pub fn with_schema(mut self, schema: ToolSchema) -> Self {
         self.input_schema = schema;
         self
     }
-    
+
     pub fn with_approval(mut self, requires: bool) -> Self {
         self.requires_approval = requires;
         self
     }
-    
+
     pub fn with_tags(mut self, tags: Vec<String>) -> Self {
         self.tags = tags;
         self
@@ -92,7 +94,7 @@ impl ToolSchema {
             description: None,
         }
     }
-    
+
     pub fn string() -> Self {
         Self {
             schema_type: "string".to_string(),
@@ -128,12 +130,12 @@ impl ToolCall {
             error: None,
         }
     }
-    
+
     pub fn with_result(mut self, result: ToolResult) -> Self {
         self.result = Some(result);
         self
     }
-    
+
     pub fn with_error(mut self, error: impl Into<String>) -> Self {
         self.error = Some(error.into());
         self
@@ -162,7 +164,7 @@ impl ToolResult {
             metadata: HashMap::new(),
         }
     }
-    
+
     pub fn err(error: impl Into<String>) -> Self {
         Self {
             success: false,
@@ -171,7 +173,7 @@ impl ToolResult {
             metadata: HashMap::new(),
         }
     }
-    
+
     pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.metadata.insert(key.into(), value.into());
         self
@@ -283,14 +285,21 @@ fn sanitize_tool_result(mut result: ToolResult, runtime: &ToolRuntime) -> ToolRe
     let (redacted, count) = runtime.security.redact_leaks(&result.output);
     if count > 0 {
         result.output = redacted;
-        result.metadata.insert("secret_redactions".to_string(), count.to_string());
-        result.metadata.insert("security_redacted".to_string(), "true".to_string());
+        result
+            .metadata
+            .insert("secret_redactions".to_string(), count.to_string());
+        result
+            .metadata
+            .insert("security_redacted".to_string(), "true".to_string());
     }
 
     result
 }
 
-async fn memory_store(arguments: &HashMap<String, serde_json::Value>, runtime: &ToolRuntime) -> ToolResult {
+async fn memory_store(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
     let key = match get_required_string(arguments, "key") {
         Ok(value) => value,
         Err(err) => return ToolResult::err(err),
@@ -307,7 +316,10 @@ async fn memory_store(arguments: &HashMap<String, serde_json::Value>, runtime: &
     }
 }
 
-async fn memory_recall(arguments: &HashMap<String, serde_json::Value>, runtime: &ToolRuntime) -> ToolResult {
+async fn memory_recall(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
     let query = match get_required_string(arguments, "query") {
         Ok(value) => value,
         Err(err) => return ToolResult::err(err),
@@ -336,20 +348,29 @@ async fn memory_recall(arguments: &HashMap<String, serde_json::Value>, runtime: 
     }
 }
 
-async fn execute_command(arguments: &HashMap<String, serde_json::Value>, runtime: &ToolRuntime) -> ToolResult {
+async fn execute_command(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
     let command = match get_required_string(arguments, "command") {
         Ok(value) => value,
         Err(err) => return ToolResult::err(err),
     };
     let timeout_secs = get_u64(arguments, "timeout").unwrap_or(60);
-    let approval_token = arguments.get("approval_token").and_then(|value| value.as_str());
+    let approval_token = arguments
+        .get("approval_token")
+        .and_then(|value| value.as_str());
 
     if runtime
         .security
         .needs_approval("execute_command", runtime.security.approval_mode())
     {
         if let Some(token) = approval_token {
-            if let Err(err) = runtime.security.consume_approval("execute_command", token).await {
+            if let Err(err) = runtime
+                .security
+                .consume_approval("execute_command", token)
+                .await
+            {
                 return ToolResult::err(err.to_string());
             }
         } else {
@@ -408,7 +429,10 @@ async fn execute_command(arguments: &HashMap<String, serde_json::Value>, runtime
     }
 }
 
-async fn read_file(arguments: &HashMap<String, serde_json::Value>, runtime: &ToolRuntime) -> ToolResult {
+async fn read_file(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
     let path = match get_required_string(arguments, "path") {
         Ok(value) => value,
         Err(err) => return ToolResult::err(err),
@@ -438,7 +462,10 @@ async fn read_file(arguments: &HashMap<String, serde_json::Value>, runtime: &Too
     ToolResult::ok(lines)
 }
 
-async fn list_directory(arguments: &HashMap<String, serde_json::Value>, runtime: &ToolRuntime) -> ToolResult {
+async fn list_directory(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
     let path = arguments
         .get("path")
         .and_then(|value| value.as_str())
@@ -494,7 +521,10 @@ fn message(arguments: &HashMap<String, serde_json::Value>) -> ToolResult {
     }
 }
 
-async fn schedule_task(arguments: &HashMap<String, serde_json::Value>, runtime: &ToolRuntime) -> ToolResult {
+async fn schedule_task(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
     let message = match get_required_string(arguments, "message") {
         Ok(value) => value,
         Err(err) => return ToolResult::err(err),
@@ -580,13 +610,21 @@ async fn plugin_list(runtime: &ToolRuntime) -> ToolResult {
     ToolResult::ok(
         plugins
             .into_iter()
-            .map(|plugin| format!("{} {} - {}", plugin.name, plugin.version, plugin.description))
+            .map(|plugin| {
+                format!(
+                    "{} {} - {}",
+                    plugin.name, plugin.version, plugin.description
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n"),
     )
 }
 
-async fn plugin_invoke(arguments: &HashMap<String, serde_json::Value>, runtime: &ToolRuntime) -> ToolResult {
+async fn plugin_invoke(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
     let plugin = match get_required_string(arguments, "plugin") {
         Ok(value) => value,
         Err(err) => return ToolResult::err(err),
@@ -605,7 +643,11 @@ async fn plugin_invoke(arguments: &HashMap<String, serde_json::Value>, runtime: 
         Err(err) => return ToolResult::err(err.to_string()),
     };
 
-    match runtime.plugins.invoke(&plugin, &function, &input_json).await {
+    match runtime
+        .plugins
+        .invoke(&plugin, &function, &input_json)
+        .await
+    {
         Ok(output) => ToolResult::ok(output)
             .with_metadata("plugin", plugin)
             .with_metadata("function", function),
@@ -613,7 +655,10 @@ async fn plugin_invoke(arguments: &HashMap<String, serde_json::Value>, runtime: 
     }
 }
 
-async fn mcp_list_tools(arguments: &HashMap<String, serde_json::Value>, runtime: &ToolRuntime) -> ToolResult {
+async fn mcp_list_tools(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
     let server = match get_required_string(arguments, "server") {
         Ok(value) => value,
         Err(err) => return ToolResult::err(err),
@@ -641,7 +686,10 @@ async fn mcp_list_tools(arguments: &HashMap<String, serde_json::Value>, runtime:
     }
 }
 
-async fn mcp_call_tool(arguments: &HashMap<String, serde_json::Value>, runtime: &ToolRuntime) -> ToolResult {
+async fn mcp_call_tool(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
     let server = match get_required_string(arguments, "server") {
         Ok(value) => value,
         Err(err) => return ToolResult::err(err),
@@ -672,8 +720,12 @@ async fn mcp_call_tool(arguments: &HashMap<String, serde_json::Value>, runtime: 
                 .into_iter()
                 .map(|content| match content {
                     crate::mcp::types::McpContent::Text { text } => text,
-                    crate::mcp::types::McpContent::Image { mime_type, .. } => format!("[image:{}]", mime_type),
-                    crate::mcp::types::McpContent::Resource { resource } => format!("[resource:{}]", resource),
+                    crate::mcp::types::McpContent::Image { mime_type, .. } => {
+                        format!("[image:{}]", mime_type)
+                    }
+                    crate::mcp::types::McpContent::Resource { resource } => {
+                        format!("[resource:{}]", resource)
+                    }
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
@@ -696,16 +748,25 @@ fn mcp_client_for_server(runtime: &ToolRuntime, server: &str) -> Result<McpClien
         .ok_or_else(|| format!("unknown mcp server '{}'", server))?;
     let transport_config = match config.transport.as_str() {
         "stdio" => McpTransportConfig::Stdio(StdioTransportConfig {
-            command: config.command.clone().ok_or_else(|| "missing MCP command".to_string())?,
+            command: config
+                .command
+                .clone()
+                .ok_or_else(|| "missing MCP command".to_string())?,
             args: config.args.clone(),
             env: config.env.clone(),
         }),
         "sse" => McpTransportConfig::Sse(SseTransportConfig {
-            url: config.url.clone().ok_or_else(|| "missing MCP url".to_string())?,
+            url: config
+                .url
+                .clone()
+                .ok_or_else(|| "missing MCP url".to_string())?,
             headers: config.headers.clone(),
         }),
         "websocket" => McpTransportConfig::WebSocket(WebSocketTransportConfig {
-            url: config.url.clone().ok_or_else(|| "missing MCP url".to_string())?,
+            url: config
+                .url
+                .clone()
+                .ok_or_else(|| "missing MCP url".to_string())?,
         }),
         other => return Err(format!("unsupported MCP transport '{}'", other)),
     };
@@ -717,7 +778,10 @@ fn mcp_client_for_server(runtime: &ToolRuntime, server: &str) -> Result<McpClien
     }))
 }
 
-async fn approve_tool(arguments: &HashMap<String, serde_json::Value>, runtime: &ToolRuntime) -> ToolResult {
+async fn approve_tool(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
     let tool = match get_required_string(arguments, "tool") {
         Ok(value) => value,
         Err(err) => return ToolResult::err(err),
@@ -736,7 +800,10 @@ async fn approve_tool(arguments: &HashMap<String, serde_json::Value>, runtime: &
     }
 }
 
-fn get_required_string(arguments: &HashMap<String, serde_json::Value>, key: &str) -> Result<String, String> {
+fn get_required_string(
+    arguments: &HashMap<String, serde_json::Value>,
+    key: &str,
+) -> Result<String, String> {
     arguments
         .get(key)
         .and_then(|value| value.as_str())
@@ -755,12 +822,19 @@ fn resolve_workspace_path(workspace_root: &Path, requested: &str) -> Result<Path
         workspace_root.join(requested)
     };
 
-    let normalized = std::fs::canonicalize(&candidate).or_else(|_| {
-        candidate
-            .parent()
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "path has no parent"))
-            .and_then(|parent| std::fs::canonicalize(parent).map(|canon| canon.join(candidate.file_name().unwrap_or_default())))
-    }).map_err(|e| e.to_string())?;
+    let normalized = std::fs::canonicalize(&candidate)
+        .or_else(|_| {
+            candidate
+                .parent()
+                .ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::NotFound, "path has no parent")
+                })
+                .and_then(|parent| {
+                    std::fs::canonicalize(parent)
+                        .map(|canon| canon.join(candidate.file_name().unwrap_or_default()))
+                })
+        })
+        .map_err(|e| e.to_string())?;
 
     if normalized.starts_with(workspace_root) {
         Ok(normalized)
@@ -806,7 +880,11 @@ fn parse_duckduckgo_results(body: &str, limit: usize) -> Vec<SearchResult> {
             Some(SearchResult {
                 title,
                 url,
-                snippet: if snippet.is_empty() { None } else { Some(snippet) },
+                snippet: if snippet.is_empty() {
+                    None
+                } else {
+                    Some(snippet)
+                },
             })
         })
         .collect()
@@ -826,7 +904,9 @@ fn decode_html_entities(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AgentConfig, ApprovalMode, McpConfig, McpServerConfig, MemoryConfig, SecurityConfig};
+    use crate::config::{
+        AgentConfig, ApprovalMode, McpConfig, McpServerConfig, MemoryConfig, SecurityConfig,
+    };
 
     #[test]
     fn parses_json_tool_command() {
@@ -844,7 +924,8 @@ mod tests {
 
     #[test]
     fn blocks_workspace_escape() {
-        let workspace = std::env::temp_dir().join(format!("borgclaw_tools_test_{}", uuid::Uuid::new_v4()));
+        let workspace =
+            std::env::temp_dir().join(format!("borgclaw_tools_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&workspace).unwrap();
         let escaped = resolve_workspace_path(&workspace, "../outside.txt");
         std::fs::remove_dir_all(&workspace).unwrap();
@@ -853,7 +934,8 @@ mod tests {
 
     #[tokio::test]
     async fn supervised_command_requires_then_uses_approval() {
-        let root = std::env::temp_dir().join(format!("borgclaw_runtime_test_{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_runtime_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
 
         let runtime = ToolRuntime::from_config(
@@ -887,7 +969,10 @@ mod tests {
         )
         .await;
 
-        assert_eq!(first.metadata.get("approval_required").map(String::as_str), Some("true"));
+        assert_eq!(
+            first.metadata.get("approval_required").map(String::as_str),
+            Some("true")
+        );
         let token = first.metadata.get("approval_token").cloned().unwrap();
 
         let approval = execute_tool(
@@ -942,7 +1027,10 @@ mod tests {
 
     #[tokio::test]
     async fn plugin_list_reports_empty_registry() {
-        let root = std::env::temp_dir().join(format!("borgclaw_plugin_list_test_{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_plugin_list_test_{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&root).unwrap();
 
         let runtime = ToolRuntime::from_config(
@@ -973,7 +1061,10 @@ mod tests {
 
     #[tokio::test]
     async fn plugin_invoke_fails_for_missing_plugin() {
-        let root = std::env::temp_dir().join(format!("borgclaw_plugin_invoke_test_{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_plugin_invoke_test_{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&root).unwrap();
 
         let runtime = ToolRuntime::from_config(
@@ -1011,7 +1102,8 @@ mod tests {
 
     #[tokio::test]
     async fn execute_command_receives_security_secret_env() {
-        let root = std::env::temp_dir().join(format!("borgclaw_secret_env_test_{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_secret_env_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
 
         let runtime = ToolRuntime::from_config(
@@ -1058,7 +1150,8 @@ mod tests {
 
     #[tokio::test]
     async fn execute_tool_redacts_detected_secret_leaks() {
-        let root = std::env::temp_dir().join(format!("borgclaw_redact_test_{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_redact_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
 
         let runtime = ToolRuntime::from_config(
@@ -1095,14 +1188,19 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
         assert!(result.success);
         assert_eq!(result.output, "[REDACTED_SECRET]");
-        assert_eq!(result.metadata.get("security_redacted").map(String::as_str), Some("true"));
+        assert_eq!(
+            result.metadata.get("security_redacted").map(String::as_str),
+            Some("true")
+        );
     }
 
     #[test]
     fn mcp_client_requires_known_server() {
         let runtime = ToolRuntime {
             workspace_root: PathBuf::from("."),
-            memory: Arc::new(SqliteMemory::new(std::env::temp_dir().join("borgclaw_mcp_unknown_memory"))),
+            memory: Arc::new(SqliteMemory::new(
+                std::env::temp_dir().join("borgclaw_mcp_unknown_memory"),
+            )),
             scheduler: Arc::new(Mutex::new(Scheduler::new())),
             plugins: Arc::new(PluginRegistry::new()),
             mcp_servers: HashMap::new(),
@@ -1120,7 +1218,9 @@ mod tests {
     fn mcp_client_rejects_unsupported_transport() {
         let runtime = ToolRuntime {
             workspace_root: PathBuf::from("."),
-            memory: Arc::new(SqliteMemory::new(std::env::temp_dir().join("borgclaw_mcp_transport_memory"))),
+            memory: Arc::new(SqliteMemory::new(
+                std::env::temp_dir().join("borgclaw_mcp_transport_memory"),
+            )),
             scheduler: Arc::new(Mutex::new(Scheduler::new())),
             plugins: Arc::new(PluginRegistry::new()),
             mcp_servers: HashMap::from([(
@@ -1142,7 +1242,10 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_loads_mcp_servers_from_config() {
-        let root = std::env::temp_dir().join(format!("borgclaw_mcp_runtime_test_{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_mcp_runtime_test_{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&root).unwrap();
 
         let runtime = ToolRuntime::from_config(
@@ -1181,311 +1284,347 @@ mod tests {
 /// Built-in tools
 pub fn builtin_tools() -> Vec<Tool> {
     vec![
-        Tool::new(
-            "memory_store",
-            "Store information in long-term memory",
-        )
-        .with_schema(ToolSchema::object(
-            [
-                ("key".to_string(), PropertySchema {
-                    prop_type: "string".to_string(),
-                    description: Some("Memory key".to_string()),
-                    default: None,
-                    enum_values: None,
-                }),
-                ("value".to_string(), PropertySchema {
-                    prop_type: "string".to_string(),
-                    description: Some("Information to store".to_string()),
-                    default: None,
-                    enum_values: None,
-                }),
-            ].into(),
-            vec!["key".to_string(), "value".to_string()],
-        ))
-        .with_tags(vec!["memory".to_string()]),
-        
-        Tool::new(
-            "memory_recall",
-            "Recall information from long-term memory",
-        )
-        .with_schema(ToolSchema::object(
-            [
-                ("query".to_string(), PropertySchema {
-                    prop_type: "string".to_string(),
-                    description: Some("Search query".to_string()),
-                    default: None,
-                    enum_values: None,
-                }),
-                ("limit".to_string(), PropertySchema {
-                    prop_type: "number".to_string(),
-                    description: Some("Max results".to_string()),
-                    default: Some(serde_json::json!(5)),
-                    enum_values: None,
-                }),
-            ].into(),
-            vec!["query".to_string()],
-        ))
-        .with_tags(vec!["memory".to_string()]),
-        
-        Tool::new(
-            "execute_command",
-            "Execute a shell command",
-        )
-        .with_schema(ToolSchema::object(
-            [
-                ("command".to_string(), PropertySchema {
-                    prop_type: "string".to_string(),
-                    description: Some("Command to execute".to_string()),
-                    default: None,
-                    enum_values: None,
-                }),
-                ("timeout".to_string(), PropertySchema {
-                    prop_type: "number".to_string(),
-                    description: Some("Timeout in seconds".to_string()),
-                    default: Some(serde_json::json!(60)),
-                    enum_values: None,
-                }),
-                ("approval_token".to_string(), PropertySchema {
-                    prop_type: "string".to_string(),
-                    description: Some("Approval token for protected commands".to_string()),
-                    default: None,
-                    enum_values: None,
-                }),
-            ].into(),
-            vec!["command".to_string()],
-        ))
-        .with_approval(true)
-        .with_tags(vec!["system".to_string()]),
-        
-        Tool::new(
-            "read_file",
-            "Read a file from the filesystem",
-        )
-        .with_schema(ToolSchema::object(
-            [
-                ("path".to_string(), PropertySchema {
-                    prop_type: "string".to_string(),
-                    description: Some("File path".to_string()),
-                    default: None,
-                    enum_values: None,
-                }),
-                ("offset".to_string(), PropertySchema {
-                    prop_type: "number".to_string(),
-                    description: Some("Line offset".to_string()),
-                    default: Some(serde_json::json!(0)),
-                    enum_values: None,
-                }),
-                ("limit".to_string(), PropertySchema {
-                    prop_type: "number".to_string(),
-                    description: Some("Number of lines".to_string()),
-                    default: Some(serde_json::json!(100)),
-                    enum_values: None,
-                }),
-            ].into(),
-            vec!["path".to_string()],
-        ))
-        .with_tags(vec!["filesystem".to_string()]),
-        
-        Tool::new(
-            "list_directory",
-            "List files in a directory",
-        )
-        .with_schema(ToolSchema::object(
-            [
-                ("path".to_string(), PropertySchema {
-                    prop_type: "string".to_string(),
-                    description: Some("Directory path".to_string()),
-                    default: None,
-                    enum_values: None,
-                }),
-            ].into(),
-            vec!["path".to_string()],
-        ))
-        .with_tags(vec!["filesystem".to_string()]),
-        
-        Tool::new(
-            "web_search",
-            "Search the web",
-        )
-        .with_schema(ToolSchema::object(
-            [
-                ("query".to_string(), PropertySchema {
-                    prop_type: "string".to_string(),
-                    description: Some("Search query".to_string()),
-                    default: None,
-                    enum_values: None,
-                }),
-                ("num_results".to_string(), PropertySchema {
-                    prop_type: "number".to_string(),
-                    description: Some("Number of results".to_string()),
-                    default: Some(serde_json::json!(5)),
-                    enum_values: None,
-                }),
-            ].into(),
-            vec!["query".to_string()],
-        ))
-        .with_tags(vec!["web".to_string()]),
-
-        Tool::new(
-            "plugin_list",
-            "List loaded WASM plugins",
-        )
-        .with_schema(ToolSchema::object(HashMap::new(), Vec::new()))
-        .with_tags(vec!["plugin".to_string()]),
-
-        Tool::new(
-            "plugin_invoke",
-            "Invoke a loaded WASM plugin",
-        )
-        .with_schema(ToolSchema::object(
-            [
-                ("plugin".to_string(), PropertySchema {
-                    prop_type: "string".to_string(),
-                    description: Some("Plugin name".to_string()),
-                    default: None,
-                    enum_values: None,
-                }),
-                ("function".to_string(), PropertySchema {
-                    prop_type: "string".to_string(),
-                    description: Some("Exported function to call".to_string()),
-                    default: Some(serde_json::json!("invoke")),
-                    enum_values: None,
-                }),
-                ("input".to_string(), PropertySchema {
-                    prop_type: "object".to_string(),
-                    description: Some("JSON input passed to the plugin".to_string()),
-                    default: Some(serde_json::json!({})),
-                    enum_values: None,
-                }),
-            ].into(),
-            vec!["plugin".to_string()],
-        ))
-        .with_tags(vec!["plugin".to_string()]),
-
+        Tool::new("memory_store", "Store information in long-term memory")
+            .with_schema(ToolSchema::object(
+                [
+                    (
+                        "key".to_string(),
+                        PropertySchema {
+                            prop_type: "string".to_string(),
+                            description: Some("Memory key".to_string()),
+                            default: None,
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "value".to_string(),
+                        PropertySchema {
+                            prop_type: "string".to_string(),
+                            description: Some("Information to store".to_string()),
+                            default: None,
+                            enum_values: None,
+                        },
+                    ),
+                ]
+                .into(),
+                vec!["key".to_string(), "value".to_string()],
+            ))
+            .with_tags(vec!["memory".to_string()]),
+        Tool::new("memory_recall", "Recall information from long-term memory")
+            .with_schema(ToolSchema::object(
+                [
+                    (
+                        "query".to_string(),
+                        PropertySchema {
+                            prop_type: "string".to_string(),
+                            description: Some("Search query".to_string()),
+                            default: None,
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "limit".to_string(),
+                        PropertySchema {
+                            prop_type: "number".to_string(),
+                            description: Some("Max results".to_string()),
+                            default: Some(serde_json::json!(5)),
+                            enum_values: None,
+                        },
+                    ),
+                ]
+                .into(),
+                vec!["query".to_string()],
+            ))
+            .with_tags(vec!["memory".to_string()]),
+        Tool::new("execute_command", "Execute a shell command")
+            .with_schema(ToolSchema::object(
+                [
+                    (
+                        "command".to_string(),
+                        PropertySchema {
+                            prop_type: "string".to_string(),
+                            description: Some("Command to execute".to_string()),
+                            default: None,
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "timeout".to_string(),
+                        PropertySchema {
+                            prop_type: "number".to_string(),
+                            description: Some("Timeout in seconds".to_string()),
+                            default: Some(serde_json::json!(60)),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "approval_token".to_string(),
+                        PropertySchema {
+                            prop_type: "string".to_string(),
+                            description: Some("Approval token for protected commands".to_string()),
+                            default: None,
+                            enum_values: None,
+                        },
+                    ),
+                ]
+                .into(),
+                vec!["command".to_string()],
+            ))
+            .with_approval(true)
+            .with_tags(vec!["system".to_string()]),
+        Tool::new("read_file", "Read a file from the filesystem")
+            .with_schema(ToolSchema::object(
+                [
+                    (
+                        "path".to_string(),
+                        PropertySchema {
+                            prop_type: "string".to_string(),
+                            description: Some("File path".to_string()),
+                            default: None,
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "offset".to_string(),
+                        PropertySchema {
+                            prop_type: "number".to_string(),
+                            description: Some("Line offset".to_string()),
+                            default: Some(serde_json::json!(0)),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "limit".to_string(),
+                        PropertySchema {
+                            prop_type: "number".to_string(),
+                            description: Some("Number of lines".to_string()),
+                            default: Some(serde_json::json!(100)),
+                            enum_values: None,
+                        },
+                    ),
+                ]
+                .into(),
+                vec!["path".to_string()],
+            ))
+            .with_tags(vec!["filesystem".to_string()]),
+        Tool::new("list_directory", "List files in a directory")
+            .with_schema(ToolSchema::object(
+                [(
+                    "path".to_string(),
+                    PropertySchema {
+                        prop_type: "string".to_string(),
+                        description: Some("Directory path".to_string()),
+                        default: None,
+                        enum_values: None,
+                    },
+                )]
+                .into(),
+                vec!["path".to_string()],
+            ))
+            .with_tags(vec!["filesystem".to_string()]),
+        Tool::new("web_search", "Search the web")
+            .with_schema(ToolSchema::object(
+                [
+                    (
+                        "query".to_string(),
+                        PropertySchema {
+                            prop_type: "string".to_string(),
+                            description: Some("Search query".to_string()),
+                            default: None,
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "num_results".to_string(),
+                        PropertySchema {
+                            prop_type: "number".to_string(),
+                            description: Some("Number of results".to_string()),
+                            default: Some(serde_json::json!(5)),
+                            enum_values: None,
+                        },
+                    ),
+                ]
+                .into(),
+                vec!["query".to_string()],
+            ))
+            .with_tags(vec!["web".to_string()]),
+        Tool::new("plugin_list", "List loaded WASM plugins")
+            .with_schema(ToolSchema::object(HashMap::new(), Vec::new()))
+            .with_tags(vec!["plugin".to_string()]),
+        Tool::new("plugin_invoke", "Invoke a loaded WASM plugin")
+            .with_schema(ToolSchema::object(
+                [
+                    (
+                        "plugin".to_string(),
+                        PropertySchema {
+                            prop_type: "string".to_string(),
+                            description: Some("Plugin name".to_string()),
+                            default: None,
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "function".to_string(),
+                        PropertySchema {
+                            prop_type: "string".to_string(),
+                            description: Some("Exported function to call".to_string()),
+                            default: Some(serde_json::json!("invoke")),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "input".to_string(),
+                        PropertySchema {
+                            prop_type: "object".to_string(),
+                            description: Some("JSON input passed to the plugin".to_string()),
+                            default: Some(serde_json::json!({})),
+                            enum_values: None,
+                        },
+                    ),
+                ]
+                .into(),
+                vec!["plugin".to_string()],
+            ))
+            .with_tags(vec!["plugin".to_string()]),
         Tool::new(
             "mcp_list_tools",
             "List tools exposed by a configured MCP server",
         )
         .with_schema(ToolSchema::object(
-            [
-                ("server".to_string(), PropertySchema {
+            [(
+                "server".to_string(),
+                PropertySchema {
                     prop_type: "string".to_string(),
                     description: Some("Configured MCP server name".to_string()),
                     default: None,
                     enum_values: None,
-                }),
-            ].into(),
+                },
+            )]
+            .into(),
             vec!["server".to_string()],
         ))
         .with_tags(vec!["mcp".to_string(), "integration".to_string()]),
-
         Tool::new(
             "mcp_call_tool",
             "Call a tool exposed by a configured MCP server",
         )
         .with_schema(ToolSchema::object(
             [
-                ("server".to_string(), PropertySchema {
-                    prop_type: "string".to_string(),
-                    description: Some("Configured MCP server name".to_string()),
-                    default: None,
-                    enum_values: None,
-                }),
-                ("tool".to_string(), PropertySchema {
-                    prop_type: "string".to_string(),
-                    description: Some("Remote MCP tool name".to_string()),
-                    default: None,
-                    enum_values: None,
-                }),
-                ("input".to_string(), PropertySchema {
-                    prop_type: "object".to_string(),
-                    description: Some("JSON input object passed to the remote tool".to_string()),
-                    default: Some(serde_json::json!({})),
-                    enum_values: None,
-                }),
-            ].into(),
+                (
+                    "server".to_string(),
+                    PropertySchema {
+                        prop_type: "string".to_string(),
+                        description: Some("Configured MCP server name".to_string()),
+                        default: None,
+                        enum_values: None,
+                    },
+                ),
+                (
+                    "tool".to_string(),
+                    PropertySchema {
+                        prop_type: "string".to_string(),
+                        description: Some("Remote MCP tool name".to_string()),
+                        default: None,
+                        enum_values: None,
+                    },
+                ),
+                (
+                    "input".to_string(),
+                    PropertySchema {
+                        prop_type: "object".to_string(),
+                        description: Some(
+                            "JSON input object passed to the remote tool".to_string(),
+                        ),
+                        default: Some(serde_json::json!({})),
+                        enum_values: None,
+                    },
+                ),
+            ]
+            .into(),
             vec!["server".to_string(), "tool".to_string()],
         ))
         .with_tags(vec!["mcp".to_string(), "integration".to_string()]),
-        
-        Tool::new(
-            "fetch_url",
-            "Fetch content from a URL",
-        )
-        .with_schema(ToolSchema::object(
-            [
-                ("url".to_string(), PropertySchema {
-                    prop_type: "string".to_string(),
-                    description: Some("URL to fetch".to_string()),
-                    default: None,
-                    enum_values: None,
-                }),
-            ].into(),
-            vec!["url".to_string()],
-        ))
-        .with_tags(vec!["web".to_string()]),
-        
-        Tool::new(
-            "message",
-            "Send a message to the user",
-        )
-        .with_schema(ToolSchema::object(
-            [
-                ("text".to_string(), PropertySchema {
-                    prop_type: "string".to_string(),
-                    description: Some("Message text".to_string()),
-                    default: None,
-                    enum_values: None,
-                }),
-            ].into(),
-            vec!["text".to_string()],
-        ))
-        .with_tags(vec!["communication".to_string()]),
-        
-        Tool::new(
-            "schedule_task",
-            "Schedule a task to run later",
-        )
-        .with_schema(ToolSchema::object(
-            [
-                ("message".to_string(), PropertySchema {
-                    prop_type: "string".to_string(),
-                    description: Some("Task description".to_string()),
-                    default: None,
-                    enum_values: None,
-                }),
-                ("cron".to_string(), PropertySchema {
-                    prop_type: "string".to_string(),
-                    description: Some("Cron expression".to_string()),
-                    default: None,
-                    enum_values: None,
-                }),
-            ].into(),
-            vec!["message".to_string()],
-        ))
-        .with_tags(vec!["scheduling".to_string()]),
-
-        Tool::new(
-            "approve",
-            "Approve a pending protected tool operation",
-        )
-        .with_schema(ToolSchema::object(
-            [
-                ("tool".to_string(), PropertySchema {
-                    prop_type: "string".to_string(),
-                    description: Some("Tool name being approved".to_string()),
-                    default: None,
-                    enum_values: None,
-                }),
-                ("token".to_string(), PropertySchema {
-                    prop_type: "string".to_string(),
-                    description: Some("Approval token".to_string()),
-                    default: None,
-                    enum_values: None,
-                }),
-            ].into(),
-            vec!["tool".to_string(), "token".to_string()],
-        ))
-        .with_tags(vec!["security".to_string()]),
+        Tool::new("fetch_url", "Fetch content from a URL")
+            .with_schema(ToolSchema::object(
+                [(
+                    "url".to_string(),
+                    PropertySchema {
+                        prop_type: "string".to_string(),
+                        description: Some("URL to fetch".to_string()),
+                        default: None,
+                        enum_values: None,
+                    },
+                )]
+                .into(),
+                vec!["url".to_string()],
+            ))
+            .with_tags(vec!["web".to_string()]),
+        Tool::new("message", "Send a message to the user")
+            .with_schema(ToolSchema::object(
+                [(
+                    "text".to_string(),
+                    PropertySchema {
+                        prop_type: "string".to_string(),
+                        description: Some("Message text".to_string()),
+                        default: None,
+                        enum_values: None,
+                    },
+                )]
+                .into(),
+                vec!["text".to_string()],
+            ))
+            .with_tags(vec!["communication".to_string()]),
+        Tool::new("schedule_task", "Schedule a task to run later")
+            .with_schema(ToolSchema::object(
+                [
+                    (
+                        "message".to_string(),
+                        PropertySchema {
+                            prop_type: "string".to_string(),
+                            description: Some("Task description".to_string()),
+                            default: None,
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "cron".to_string(),
+                        PropertySchema {
+                            prop_type: "string".to_string(),
+                            description: Some("Cron expression".to_string()),
+                            default: None,
+                            enum_values: None,
+                        },
+                    ),
+                ]
+                .into(),
+                vec!["message".to_string()],
+            ))
+            .with_tags(vec!["scheduling".to_string()]),
+        Tool::new("approve", "Approve a pending protected tool operation")
+            .with_schema(ToolSchema::object(
+                [
+                    (
+                        "tool".to_string(),
+                        PropertySchema {
+                            prop_type: "string".to_string(),
+                            description: Some("Tool name being approved".to_string()),
+                            default: None,
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "token".to_string(),
+                        PropertySchema {
+                            prop_type: "string".to_string(),
+                            description: Some("Approval token".to_string()),
+                            default: None,
+                            enum_values: None,
+                        },
+                    ),
+                ]
+                .into(),
+                vec!["tool".to_string(), "token".to_string()],
+            ))
+            .with_tags(vec!["security".to_string()]),
     ]
 }

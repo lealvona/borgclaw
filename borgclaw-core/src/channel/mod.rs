@@ -6,7 +6,7 @@ mod telegram;
 mod traits;
 mod webhook;
 
-pub use cli::{CliChannel, create_cli_message};
+pub use cli::{create_cli_message, CliChannel};
 pub use signal::{SignalChannel, SignalChannelBuilder};
 pub use telegram::TelegramChannel;
 pub use traits::{Channel, ChannelSender, ChannelStatus};
@@ -25,14 +25,28 @@ impl ChannelType {
     pub fn new(s: impl Into<String>) -> Self {
         Self(s.into())
     }
-    
-    pub fn cli() -> Self { Self("cli".to_string()) }
-    pub fn telegram() -> Self { Self("telegram".to_string()) }
-    pub fn discord() -> Self { Self("discord".to_string()) }
-    pub fn signal() -> Self { Self("signal".to_string()) }
-    pub fn slack() -> Self { Self("slack".to_string()) }
-    pub fn whatsapp() -> Self { Self("whatsapp".to_string()) }
-    pub fn websocket() -> Self { Self("websocket".to_string()) }
+
+    pub fn cli() -> Self {
+        Self("cli".to_string())
+    }
+    pub fn telegram() -> Self {
+        Self("telegram".to_string())
+    }
+    pub fn discord() -> Self {
+        Self("discord".to_string())
+    }
+    pub fn signal() -> Self {
+        Self("signal".to_string())
+    }
+    pub fn slack() -> Self {
+        Self("slack".to_string())
+    }
+    pub fn whatsapp() -> Self {
+        Self("whatsapp".to_string())
+    }
+    pub fn websocket() -> Self {
+        Self("websocket".to_string())
+    }
 }
 
 impl Default for ChannelType {
@@ -77,7 +91,7 @@ impl Sender {
             avatar: None,
         }
     }
-    
+
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
@@ -109,7 +123,7 @@ impl OutboundMessage {
             group_id: None,
         }
     }
-    
+
     pub fn with_reply(mut self, reply_to: impl Into<String>) -> Self {
         self.reply_to = Some(reply_to.into());
         self
@@ -141,13 +155,16 @@ impl MessagePayload {
     pub fn text(s: impl Into<String>) -> Self {
         Self::Text(s.into())
     }
-    
+
     pub fn markdown(s: impl Into<String>) -> Self {
         Self::Markdown(s.into())
     }
-    
+
     pub fn media(url: impl Into<String>, mime: impl Into<String>) -> Self {
-        Self::Media { url: url.into(), mime_type: mime.into() }
+        Self::Media {
+            url: url.into(),
+            mime_type: mime.into(),
+        }
     }
 }
 
@@ -220,7 +237,9 @@ impl MessageRouter {
 
         Self {
             agent: Arc::new(Mutex::new(agent)),
-            security: Arc::new(crate::security::SecurityLayer::with_config(config.security.clone())),
+            security: Arc::new(crate::security::SecurityLayer::with_config(
+                config.security.clone(),
+            )),
             channel_configs: config.channels.clone(),
             sessions: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -250,7 +269,9 @@ impl MessageRouter {
         }
 
         let content = match &msg.content {
-            MessagePayload::Text(text) | MessagePayload::Markdown(text) | MessagePayload::Html(text) => text.clone(),
+            MessagePayload::Text(text)
+            | MessagePayload::Markdown(text)
+            | MessagePayload::Html(text) => text.clone(),
             MessagePayload::Media { url, .. } => url.clone(),
             MessagePayload::File { path, .. } => path.clone(),
         };
@@ -284,23 +305,39 @@ impl MessageRouter {
     }
 
     async fn enforce_sender_policy(&self, msg: &InboundMessage) -> Result<(), ChannelError> {
-        let config = self.channel_configs.get(&msg.channel.0).cloned().unwrap_or_default();
+        let config = self
+            .channel_configs
+            .get(&msg.channel.0)
+            .cloned()
+            .unwrap_or_default();
 
-        if !config.allow_from.is_empty() && !config.allow_from.iter().any(|allowed| allowed == &msg.sender.id) {
-            return Err(ChannelError::AuthFailed(format!("sender '{}' is not allowed", msg.sender.id)));
+        if !config.allow_from.is_empty()
+            && !config
+                .allow_from
+                .iter()
+                .any(|allowed| allowed == &msg.sender.id)
+        {
+            return Err(ChannelError::AuthFailed(format!(
+                "sender '{}' is not allowed",
+                msg.sender.id
+            )));
         }
 
         if msg.group_id.is_none() {
             match config.dm_policy {
                 crate::config::DmPolicy::Open => {}
                 crate::config::DmPolicy::Closed => {
-                    return Err(ChannelError::AuthFailed("direct messages are disabled".to_string()));
+                    return Err(ChannelError::AuthFailed(
+                        "direct messages are disabled".to_string(),
+                    ));
                 }
                 crate::config::DmPolicy::Pairing => {
                     match self.security.check_pairing(&msg.sender.id).await {
                         crate::security::PairingStatus::Approved => {}
                         crate::security::PairingStatus::Pending => {
-                            return Err(ChannelError::AuthFailed("pairing pending approval".to_string()));
+                            return Err(ChannelError::AuthFailed(
+                                "pairing pending approval".to_string(),
+                            ));
                         }
                         crate::security::PairingStatus::Unknown => {
                             return Err(ChannelError::AuthFailed("pairing required".to_string()));
@@ -371,7 +408,9 @@ mod tests {
         };
 
         let first = router.route(inbound.clone()).await;
-        assert!(matches!(first, Err(ChannelError::AuthFailed(message)) if message == "pairing required"));
+        assert!(
+            matches!(first, Err(ChannelError::AuthFailed(message)) if message == "pairing required")
+        );
 
         let code = router.request_pairing_code("client-1").await.unwrap();
         let approved = router.approve_pairing_code(&code).await.unwrap();

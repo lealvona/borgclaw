@@ -1,9 +1,9 @@
 //! Vault integration - Bitwarden (primary) and 1Password (secondary)
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use chrono::{DateTime, Utc};
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,7 +28,12 @@ pub enum VaultItemType {
 pub trait VaultClient: Send + Sync {
     async fn get_secret(&self, name: &str) -> Result<String, VaultError>;
     async fn list_items(&self, folder: Option<&str>) -> Result<Vec<VaultItem>, VaultError>;
-    async fn create_item(&self, name: &str, value: &str, folder: Option<&str>) -> Result<String, VaultError>;
+    async fn create_item(
+        &self,
+        name: &str,
+        value: &str,
+        folder: Option<&str>,
+    ) -> Result<String, VaultError>;
     async fn update_item(&self, id: &str, value: &str) -> Result<(), VaultError>;
     async fn delete_item(&self, id: &str) -> Result<(), VaultError>;
 }
@@ -110,7 +115,7 @@ impl BitwardenClient {
 impl VaultClient for BitwardenClient {
     async fn get_secret(&self, name: &str) -> Result<String, VaultError> {
         let output = self.run_bw(&["get", "item", name]).await?;
-        
+
         #[derive(Deserialize)]
         struct BwItem {
             login: Option<Login>,
@@ -122,8 +127,8 @@ impl VaultClient for BitwardenClient {
             password: Option<String>,
         }
 
-        let item: BwItem = serde_json::from_str(&output)
-            .map_err(|e| VaultError::ParseFailed(e.to_string()))?;
+        let item: BwItem =
+            serde_json::from_str(&output).map_err(|e| VaultError::ParseFailed(e.to_string()))?;
 
         if let Some(login) = item.login {
             if let Some(password) = login.password {
@@ -146,8 +151,10 @@ impl VaultClient for BitwardenClient {
 
         let mut args = vec!["list", "items"];
         args.extend(folder_arg.iter().map(|s| *s));
-        
-        let output = self.run_bw(&args.iter().map(|s| *s).collect::<Vec<_>>()).await?;
+
+        let output = self
+            .run_bw(&args.iter().map(|s| *s).collect::<Vec<_>>())
+            .await?;
 
         #[derive(Deserialize)]
         struct BwListItem {
@@ -163,26 +170,42 @@ impl VaultClient for BitwardenClient {
             revision_time: Option<String>,
         }
 
-        let items: Vec<BwListItem> = serde_json::from_str(&output)
-            .map_err(|e| VaultError::ParseFailed(e.to_string()))?;
+        let items: Vec<BwListItem> =
+            serde_json::from_str(&output).map_err(|e| VaultError::ParseFailed(e.to_string()))?;
 
-        Ok(items.into_iter().map(|i| VaultItem {
-            id: i.id,
-            name: i.name,
-            folder: i.folder_id,
-            item_type: match i.item_type {
-                1 => VaultItemType::Login,
-                2 => VaultItemType::SecureNote,
-                3 => VaultItemType::Card,
-                4 => VaultItemType::Identity,
-                _ => VaultItemType::SecureNote,
-            },
-            created_at: i.creation_time.and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))),
-            modified_at: i.revision_time.and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))),
-        }).collect())
+        Ok(items
+            .into_iter()
+            .map(|i| VaultItem {
+                id: i.id,
+                name: i.name,
+                folder: i.folder_id,
+                item_type: match i.item_type {
+                    1 => VaultItemType::Login,
+                    2 => VaultItemType::SecureNote,
+                    3 => VaultItemType::Card,
+                    4 => VaultItemType::Identity,
+                    _ => VaultItemType::SecureNote,
+                },
+                created_at: i.creation_time.and_then(|s| {
+                    DateTime::parse_from_rfc3339(&s)
+                        .ok()
+                        .map(|dt| dt.with_timezone(&Utc))
+                }),
+                modified_at: i.revision_time.and_then(|s| {
+                    DateTime::parse_from_rfc3339(&s)
+                        .ok()
+                        .map(|dt| dt.with_timezone(&Utc))
+                }),
+            })
+            .collect())
     }
 
-    async fn create_item(&self, name: &str, value: &str, folder: Option<&str>) -> Result<String, VaultError> {
+    async fn create_item(
+        &self,
+        name: &str,
+        value: &str,
+        folder: Option<&str>,
+    ) -> Result<String, VaultError> {
         let item_json = serde_json::json!({
             "name": name,
             "notes": value,
@@ -194,7 +217,9 @@ impl VaultClient for BitwardenClient {
         std::fs::write(&temp_path, item_json.to_string())
             .map_err(|e| VaultError::IoError(e.to_string()))?;
 
-        let output = self.run_bw(&["create", "item", &temp_path.to_string_lossy()]).await;
+        let output = self
+            .run_bw(&["create", "item", &temp_path.to_string_lossy()])
+            .await;
 
         let _ = std::fs::remove_file(&temp_path);
 
@@ -203,8 +228,8 @@ impl VaultClient for BitwardenClient {
             id: String,
         }
 
-        let response: BwCreateResponse = serde_json::from_str(&output?)
-            .map_err(|e| VaultError::ParseFailed(e.to_string()))?;
+        let response: BwCreateResponse =
+            serde_json::from_str(&output?).map_err(|e| VaultError::ParseFailed(e.to_string()))?;
 
         Ok(response.id)
     }
@@ -218,7 +243,9 @@ impl VaultClient for BitwardenClient {
         std::fs::write(&temp_path, item_json.to_string())
             .map_err(|e| VaultError::IoError(e.to_string()))?;
 
-        let output = self.run_bw(&["edit", "item", id, &temp_path.to_string_lossy()]).await;
+        let output = self
+            .run_bw(&["edit", "item", id, &temp_path.to_string_lossy()])
+            .await;
 
         let _ = std::fs::remove_file(&temp_path);
 
@@ -251,7 +278,7 @@ impl OnePasswordClient {
 impl VaultClient for OnePasswordClient {
     async fn get_secret(&self, name: &str) -> Result<String, VaultError> {
         let mut args = vec!["item", "get", name, "--format", "json"];
-        
+
         if let Some(ref vault) = self.config.vault {
             args.extend(&["--vault", vault]);
         }
@@ -305,7 +332,7 @@ impl VaultClient for OnePasswordClient {
 
     async fn list_items(&self, _folder: Option<&str>) -> Result<Vec<VaultItem>, VaultError> {
         let mut args = vec!["item", "list", "--format", "json"];
-        
+
         if let Some(ref vault) = self.config.vault {
             args.extend(&["--vault", vault]);
         }
@@ -336,27 +363,35 @@ impl VaultClient for OnePasswordClient {
         let items: Vec<OpListItem> = serde_json::from_str(&String::from_utf8_lossy(&output.stdout))
             .map_err(|e| VaultError::ParseFailed(e.to_string()))?;
 
-        Ok(items.into_iter().map(|i| VaultItem {
-            id: i.id,
-            name: i.title,
-            folder: i.vault,
-            item_type: VaultItemType::Login,
-            created_at: None,
-            modified_at: None,
-        }).collect())
+        Ok(items
+            .into_iter()
+            .map(|i| VaultItem {
+                id: i.id,
+                name: i.title,
+                folder: i.vault,
+                item_type: VaultItemType::Login,
+                created_at: None,
+                modified_at: None,
+            })
+            .collect())
     }
 
-    async fn create_item(&self, name: &str, value: &str, folder: Option<&str>) -> Result<String, VaultError> {
+    async fn create_item(
+        &self,
+        name: &str,
+        value: &str,
+        folder: Option<&str>,
+    ) -> Result<String, VaultError> {
         let mut args = vec![
             "item".to_string(),
             "create".to_string(),
             "--format".to_string(),
             "json".to_string(),
         ];
-        
+
         args.push(format!("--title={}", name));
         args.push(format!("notesPlain={}", value));
-        
+
         if let Some(folder) = folder {
             args.extend(["--vault".to_string(), folder.to_string()]);
         } else if let Some(ref vault) = self.config.vault {
@@ -396,9 +431,9 @@ impl VaultClient for OnePasswordClient {
             "--format".to_string(),
             "json".to_string(),
         ];
-        
+
         args.push(format!("notesPlain={}", value));
-        
+
         if let Some(ref vault) = self.config.vault {
             args.extend(["--vault".to_string(), vault.clone()]);
         }
@@ -422,7 +457,7 @@ impl VaultClient for OnePasswordClient {
 
     async fn delete_item(&self, id: &str) -> Result<(), VaultError> {
         let mut args = vec!["item", "delete", id];
-        
+
         if let Some(ref vault) = self.config.vault {
             args.extend(&["--vault", vault]);
         }
@@ -449,19 +484,19 @@ impl VaultClient for OnePasswordClient {
 pub enum VaultError {
     #[error("CLI error: {0}")]
     CliError(String),
-    
+
     #[error("Parse failed: {0}")]
     ParseFailed(String),
-    
+
     #[error("IO error: {0}")]
     IoError(String),
-    
+
     #[error("Not authenticated")]
     NotAuthenticated,
-    
+
     #[error("Not found: {0}")]
     NotFound(String),
-    
+
     #[error("Not supported: {0}")]
     NotSupported(String),
 }

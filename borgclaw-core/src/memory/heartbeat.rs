@@ -1,12 +1,12 @@
 //! Heartbeat engine for periodic task execution
 
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use cron::Schedule;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
-use chrono::{DateTime, Utc};
-use async_trait::async_trait;
-use cron::Schedule;
 
 pub struct HeartbeatEngine {
     tasks: Arc<RwLock<HashMap<String, HeartbeatTask>>>,
@@ -71,7 +71,9 @@ impl HeartbeatTask {
     }
 
     pub fn parse_schedule(&self) -> Result<Schedule, String> {
-        self.schedule.parse().map_err(|e: cron::error::Error| e.to_string())
+        self.schedule
+            .parse()
+            .map_err(|e: cron::error::Error| e.to_string())
     }
 
     pub fn calculate_next_run(&mut self) {
@@ -155,10 +157,10 @@ impl HeartbeatEngine {
         let mut task = task;
         task.calculate_next_run();
         let id = task.id.clone();
-        
+
         let mut tasks = self.tasks.write().await;
         tasks.insert(id.clone(), task);
-        
+
         id
     }
 
@@ -167,7 +169,10 @@ impl HeartbeatEngine {
         task_name: impl Into<String>,
         handler: Arc<dyn HeartbeatHandler>,
     ) {
-        self.handlers.write().await.insert(task_name.into(), handler);
+        self.handlers
+            .write()
+            .await
+            .insert(task_name.into(), handler);
     }
 
     pub async fn unregister(&self, id: &str) -> bool {
@@ -209,12 +214,10 @@ impl HeartbeatEngine {
     pub async fn list_due(&self) -> Vec<HeartbeatTask> {
         let tasks = self.tasks.read().await;
         let now = chrono::Utc::now();
-        
+
         tasks
             .values()
-            .filter(|t| {
-                t.enabled && t.next_run.map(|nr| nr <= now).unwrap_or(false)
-            })
+            .filter(|t| t.enabled && t.next_run.map(|nr| nr <= now).unwrap_or(false))
             .cloned()
             .collect()
     }
@@ -245,10 +248,13 @@ impl HeartbeatEngine {
 
         for task in due_tasks {
             let task_id = task.id.clone();
-            let _ = self.sender.send(HeartbeatEvent::TaskTriggered(task_id.clone())).await;
+            let _ = self
+                .sender
+                .send(HeartbeatEvent::TaskTriggered(task_id.clone()))
+                .await;
 
             let result = self.execute_task(&task).await;
-            
+
             {
                 let mut tasks = self.tasks.write().await;
                 if let Some(t) = tasks.get_mut(&task_id) {
@@ -260,9 +266,21 @@ impl HeartbeatEngine {
             }
 
             if result.success {
-                let _ = self.sender.send(HeartbeatEvent::TaskCompleted(task_id.clone(), result.clone())).await;
+                let _ = self
+                    .sender
+                    .send(HeartbeatEvent::TaskCompleted(
+                        task_id.clone(),
+                        result.clone(),
+                    ))
+                    .await;
             } else {
-                let _ = self.sender.send(HeartbeatEvent::TaskFailed(task_id.clone(), result.message.clone())).await;
+                let _ = self
+                    .sender
+                    .send(HeartbeatEvent::TaskFailed(
+                        task_id.clone(),
+                        result.message.clone(),
+                    ))
+                    .await;
             }
 
             results.push((task_id, result));
@@ -275,7 +293,10 @@ impl HeartbeatEngine {
         let start = std::time::Instant::now();
 
         if let Some(handler) = self.handlers.read().await.get(&task.name).cloned() {
-            return handler.handle(task).await.with_duration(start.elapsed().as_millis() as u64);
+            return handler
+                .handle(task)
+                .await
+                .with_duration(start.elapsed().as_millis() as u64);
         }
 
         let result = match task.name.as_str() {
@@ -283,8 +304,10 @@ impl HeartbeatEngine {
                 .with_data(serde_json::json!({"operation": "memory_cleanup"})),
             "health_check" => HeartbeatResult::success(&task.id, "Health check passed")
                 .with_data(serde_json::json!({"operation": "health_check"})),
-            "session_compaction" => HeartbeatResult::success(&task.id, "Session compaction completed")
-                .with_data(serde_json::json!({"operation": "session_compaction"})),
+            "session_compaction" => {
+                HeartbeatResult::success(&task.id, "Session compaction completed")
+                    .with_data(serde_json::json!({"operation": "session_compaction"}))
+            }
             _ => {
                 if let Some(action) = task.metadata.get("action") {
                     HeartbeatResult::success(&task.id, format!("Action '{}' executed", action))
@@ -357,7 +380,9 @@ mod tests {
         let engine = HeartbeatEngine::new();
         let task = HeartbeatTask::new("custom_task", "0 0 0 * * *");
         let id = task.id.clone();
-        engine.register_handler("custom_task", Arc::new(CustomHandler)).await;
+        engine
+            .register_handler("custom_task", Arc::new(CustomHandler))
+            .await;
         engine.register(task).await;
 
         let result = engine.run_task_now(&id).await.unwrap();

@@ -1,19 +1,19 @@
 //! Memory module - hybrid vector + keyword search with per-group isolation
 
-mod storage;
+mod heartbeat;
 mod session;
 mod solution;
-mod heartbeat;
+mod storage;
 
+pub use heartbeat::{HeartbeatEngine, HeartbeatResult, HeartbeatTask};
+pub use session::{SessionCompactor, SessionMemory, SessionMessage};
+pub use solution::{Solution, SolutionMemory, SolutionPattern};
 pub use storage::SqliteMemory;
-pub use session::{SessionMemory, SessionMessage, SessionCompactor};
-pub use solution::{SolutionMemory, Solution, SolutionPattern};
-pub use heartbeat::{HeartbeatEngine, HeartbeatTask, HeartbeatResult};
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use chrono::{DateTime, Utc};
 
 /// Memory entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,28 +84,28 @@ pub struct MemoryResult {
 pub trait Memory: Send + Sync {
     /// Store a memory
     async fn store(&self, entry: MemoryEntry) -> Result<(), MemoryError>;
-    
+
     /// Recall memories
     async fn recall(&self, query: &MemoryQuery) -> Result<Vec<MemoryResult>, MemoryError>;
-    
+
     /// Get a specific memory
     async fn get(&self, id: &str) -> Result<Option<MemoryEntry>, MemoryError>;
-    
+
     /// Delete a memory
     async fn delete(&self, id: &str) -> Result<(), MemoryError>;
-    
+
     /// Update a memory
     async fn update(&self, entry: &MemoryEntry) -> Result<(), MemoryError>;
-    
+
     /// List all keys
     async fn keys(&self) -> Result<Vec<String>, MemoryError>;
-    
+
     /// Clear all memories
     async fn clear(&self) -> Result<(), MemoryError>;
-    
+
     /// Clear memories for a specific group
     async fn clear_group(&self, group_id: &str) -> Result<(), MemoryError>;
-    
+
     /// Get all group IDs
     async fn groups(&self) -> Result<Vec<String>, MemoryError>;
 }

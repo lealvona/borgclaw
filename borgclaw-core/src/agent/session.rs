@@ -13,7 +13,7 @@ impl SessionId {
     pub fn new() -> Self {
         Self(Uuid::new_v4().to_string())
     }
-    
+
     pub fn from_string(s: impl Into<String>) -> Self {
         Self(s.into())
     }
@@ -50,7 +50,7 @@ impl Message {
             tool_calls: Vec::new(),
         }
     }
-    
+
     pub fn assistant(content: impl Into<String>) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
@@ -60,7 +60,7 @@ impl Message {
             tool_calls: Vec::new(),
         }
     }
-    
+
     pub fn system(content: impl Into<String>) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
@@ -116,7 +116,7 @@ impl Session {
             max_messages,
         }
     }
-    
+
     pub fn add_message(&mut self, msg: Message) {
         if self.messages.len() >= self.max_messages {
             self.messages.pop_front();
@@ -125,7 +125,7 @@ impl Session {
         self.last_activity = Utc::now();
         self.message_count += 1;
     }
-    
+
     pub fn messages(&self) -> &VecDeque<Message> {
         &self.messages
     }
@@ -133,7 +133,7 @@ impl Session {
     pub fn len(&self) -> usize {
         self.messages.len()
     }
-    
+
     pub fn system_prompt(&self) -> String {
         self.messages
             .iter()
@@ -142,7 +142,7 @@ impl Session {
             .collect::<Vec<_>>()
             .join("\n\n")
     }
-    
+
     pub fn conversation_history(&self) -> String {
         self.messages
             .iter()
@@ -151,22 +151,23 @@ impl Session {
             .collect::<Vec<_>>()
             .join("\n")
     }
-    
+
     /// Compact session by summarizing old messages
     pub fn compact(&mut self, summary: &str) {
-        let system = self.messages
+        let system = self
+            .messages
             .iter()
             .filter(|m| m.role == MessageRole::System)
             .cloned()
             .collect::<Vec<_>>();
-        
+
         self.messages.clear();
-        
+
         // Add system messages
         for msg in system {
             self.messages.push_back(msg);
         }
-        
+
         // Add summary as system message
         self.messages.push_back(Message::system(format!(
             "[Previous conversation summarized]: {}",
@@ -175,12 +176,14 @@ impl Session {
     }
 
     pub fn compact_with_recent(&mut self, summary: &str, keep_recent: usize) {
-        let system = self.messages
+        let system = self
+            .messages
             .iter()
             .filter(|m| m.role == MessageRole::System)
             .cloned()
             .collect::<Vec<_>>();
-        let recent = self.messages
+        let recent = self
+            .messages
             .iter()
             .filter(|m| m.role != MessageRole::System)
             .rev()

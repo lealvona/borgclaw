@@ -1,7 +1,9 @@
 mod colors;
 mod providers;
 
-use crate::onboarding::colors::{banner, paint, HEADER, INFO, MANDATORY, OPTIONAL, PROMPT, SUCCESS, WARN};
+use crate::onboarding::colors::{
+    banner, paint, HEADER, INFO, MANDATORY, OPTIONAL, PROMPT, SUCCESS, WARN,
+};
 use crate::onboarding::providers::{ProviderDef, ProviderRegistry};
 use borgclaw_core::config::{AppConfig, ChannelConfig, DmPolicy};
 use clap::Args;
@@ -20,9 +22,15 @@ pub struct InitArgs {
     pub reset: bool,
     #[arg(long = "list-providers", help = "List providers from registry")]
     pub list_providers: bool,
-    #[arg(long = "refresh-models", help = "Fetch latest model lists from providers")]
+    #[arg(
+        long = "refresh-models",
+        help = "Fetch latest model lists from providers"
+    )]
     pub refresh_models: bool,
-    #[arg(long = "generate-env", help = "Generate .env from current configuration")]
+    #[arg(
+        long = "generate-env",
+        help = "Generate .env from current configuration"
+    )]
     pub generate_env: bool,
     #[arg(long, help = "Registrar title/component type")]
     pub component: Option<String>,
@@ -45,7 +53,11 @@ pub struct InitOutcome {
     pub start: StartTarget,
 }
 
-pub async fn run_init(config_path: &PathBuf, mut config: AppConfig, args: &InitArgs) -> Result<InitOutcome, String> {
+pub async fn run_init(
+    config_path: &PathBuf,
+    mut config: AppConfig,
+    args: &InitArgs,
+) -> Result<InitOutcome, String> {
     let theme = ColorfulTheme::default();
     let providers_path = config_path
         .parent()
@@ -67,7 +79,10 @@ pub async fn run_init(config_path: &PathBuf, mut config: AppConfig, args: &InitA
                 paint(INFO, ")")
             );
         }
-        println!("{}", paint(INFO, format!("Registry path: {}", providers_path.display())));
+        println!(
+            "{}",
+            paint(INFO, format!("Registry path: {}", providers_path.display()))
+        );
         return Ok(InitOutcome {
             config,
             start: StartTarget::None,
@@ -123,8 +138,14 @@ pub async fn run_init(config_path: &PathBuf, mut config: AppConfig, args: &InitA
     }
 
     banner("BORGCLAW // NEON ONBOARDING");
-    println!("{}", paint(INFO, "Mandatory fields are marked in neon red."));
-    println!("{}", paint(OPTIONAL, "Optional fields are marked in neon yellow."));
+    println!(
+        "{}",
+        paint(INFO, "Mandatory fields are marked in neon red.")
+    );
+    println!(
+        "{}",
+        paint(OPTIONAL, "Optional fields are marked in neon yellow.")
+    );
 
     let mut env_updates = read_env_file(&PathBuf::from(".env"));
     let has_existing = config_path.exists();
@@ -154,7 +175,8 @@ pub async fn run_init(config_path: &PathBuf, mut config: AppConfig, args: &InitA
         }
     }
 
-    configure_provider_and_model(&mut config, &registry, &theme, &mut env_updates, args.quick).await?;
+    configure_provider_and_model(&mut config, &registry, &theme, &mut env_updates, args.quick)
+        .await?;
     configure_channels(&mut config, &theme, args.quick)?;
     configure_security(&mut config, &theme, args.quick)?;
     configure_memory(&mut config, &theme, args.quick)?;
@@ -170,7 +192,13 @@ pub async fn run_init(config_path: &PathBuf, mut config: AppConfig, args: &InitA
     }
 
     generate_env_file(&config, &env_updates, &PathBuf::from(".env"))?;
-    println!("{}", paint(SUCCESS, "Generated .env with working defaults and credentials."));
+    println!(
+        "{}",
+        paint(
+            SUCCESS,
+            "Generated .env with working defaults and credentials."
+        )
+    );
 
     Ok(InitOutcome {
         config,
@@ -209,7 +237,10 @@ async fn configure_provider_and_model(
     env_updates: &mut HashMap<String, String>,
     quick: bool,
 ) -> Result<(), String> {
-    println!("{}", paint(MANDATORY, "[MANDATORY] Provider and model selection"));
+    println!(
+        "{}",
+        paint(MANDATORY, "[MANDATORY] Provider and model selection")
+    );
     println!(
         "{}",
         paint(
@@ -246,7 +277,11 @@ async fn configure_provider_and_model(
     let default_idx = model_options
         .iter()
         .position(|m| m == &config.agent.model)
-        .or_else(|| model_options.iter().position(|m| m == &provider.default_model))
+        .or_else(|| {
+            model_options
+                .iter()
+                .position(|m| m == &provider.default_model)
+        })
         .unwrap_or(0);
     let model_idx = Select::with_theme(theme)
         .with_prompt(paint(PROMPT, "Choose model"))
@@ -282,11 +317,18 @@ async fn configure_provider_and_model(
     Ok(())
 }
 
-fn configure_channels(config: &mut AppConfig, theme: &ColorfulTheme, quick: bool) -> Result<(), String> {
+fn configure_channels(
+    config: &mut AppConfig,
+    theme: &ColorfulTheme,
+    quick: bool,
+) -> Result<(), String> {
     println!("{}", paint(OPTIONAL, "[OPTIONAL] Channel configuration"));
     println!(
         "{}",
-        paint(WARN, "Ramifications: Telegram/Signal route message metadata through third-party services.")
+        paint(
+            WARN,
+            "Ramifications: Telegram/Signal route message metadata through third-party services."
+        )
     );
     if quick {
         let ws = config
@@ -327,7 +369,9 @@ fn configure_channels(config: &mut AppConfig, theme: &ColorfulTheme, quick: bool
                 )
                 .interact_text()
                 .map_err(|e| e.to_string())?;
-            entry.extra.insert("port".to_string(), toml::Value::Integer(port));
+            entry
+                .extra
+                .insert("port".to_string(), toml::Value::Integer(port));
         }
         if channel == "Telegram" {
             // Telegram: offer existing token OR create new via @BotFather
@@ -340,7 +384,7 @@ fn configure_channels(config: &mut AppConfig, theme: &ColorfulTheme, quick: bool
                 .default(0)
                 .interact()
                 .map_err(|e| e.to_string())?;
-            
+
             let token = match token_choice {
                 0 => {
                     // Existing token - prompt for it
@@ -354,7 +398,10 @@ fn configure_channels(config: &mut AppConfig, theme: &ColorfulTheme, quick: bool
                     // Show instructions for creating new bot
                     println!();
                     println!("{}", paint(INFO, "To create a new Telegram bot:"));
-                    println!("{}", paint(INFO, "1. Open Telegram and search for @BotFather"));
+                    println!(
+                        "{}",
+                        paint(INFO, "1. Open Telegram and search for @BotFather")
+                    );
                     println!("{}", paint(INFO, "2. Send /newbot command"));
                     println!("{}", paint(INFO, "3. Follow prompts to name your bot"));
                     println!("{}", paint(INFO, "4. Copy the token provided"));
@@ -363,7 +410,7 @@ fn configure_channels(config: &mut AppConfig, theme: &ColorfulTheme, quick: bool
                         .with_prompt("Press Enter when you have your token...")
                         .default(true)
                         .interact();
-                    
+
                     Password::with_theme(theme)
                         .with_prompt("Enter your Telegram bot token")
                         .allow_empty_password(false)
@@ -372,11 +419,11 @@ fn configure_channels(config: &mut AppConfig, theme: &ColorfulTheme, quick: bool
                 }
                 _ => String::new(),
             };
-            
+
             if !token.is_empty() {
                 entry.credentials = Some(token);
             }
-            
+
             let bot_name: String = Input::with_theme(theme)
                 .with_prompt("Telegram bot username (optional, e.g., mybot)")
                 .allow_empty(true)
@@ -405,11 +452,18 @@ fn configure_channels(config: &mut AppConfig, theme: &ColorfulTheme, quick: bool
     Ok(())
 }
 
-fn configure_security(config: &mut AppConfig, theme: &ColorfulTheme, quick: bool) -> Result<(), String> {
+fn configure_security(
+    config: &mut AppConfig,
+    theme: &ColorfulTheme,
+    quick: bool,
+) -> Result<(), String> {
     println!("{}", paint(OPTIONAL, "[OPTIONAL] Sandbox and security"));
     println!(
         "{}",
-        paint(WARN, "Ramifications: disabling sandbox increases capability and operational risk.")
+        paint(
+            WARN,
+            "Ramifications: disabling sandbox increases capability and operational risk."
+        )
     );
     if quick {
         config.security.wasm_sandbox = true;
@@ -429,12 +483,20 @@ fn configure_security(config: &mut AppConfig, theme: &ColorfulTheme, quick: bool
     Ok(())
 }
 
-fn configure_memory(config: &mut AppConfig, theme: &ColorfulTheme, quick: bool) -> Result<(), String> {
+fn configure_memory(
+    config: &mut AppConfig,
+    theme: &ColorfulTheme,
+    quick: bool,
+) -> Result<(), String> {
     println!("{}", paint(OPTIONAL, "[OPTIONAL] Memory backend"));
     if quick {
         return Ok(());
     }
-    let choices = vec!["SQLite + FTS5 (default)", "PostgreSQL + pgvector", "In-memory only"];
+    let choices = vec![
+        "SQLite + FTS5 (default)",
+        "PostgreSQL + pgvector",
+        "In-memory only",
+    ];
     let idx = Select::with_theme(theme)
         .with_prompt("Select memory backend")
         .items(&choices)
@@ -477,11 +539,18 @@ fn configure_memory(config: &mut AppConfig, theme: &ColorfulTheme, quick: bool) 
     Ok(())
 }
 
-fn configure_skills_registry(config: &mut AppConfig, theme: &ColorfulTheme, quick: bool) -> Result<(), String> {
+fn configure_skills_registry(
+    config: &mut AppConfig,
+    theme: &ColorfulTheme,
+    quick: bool,
+) -> Result<(), String> {
     println!("{}", paint(OPTIONAL, "[OPTIONAL] Skills registries"));
     println!(
         "{}",
-        paint(WARN, "Ramifications: community registries can contain unsafe skills; review before install.")
+        paint(
+            WARN,
+            "Ramifications: community registries can contain unsafe skills; review before install."
+        )
     );
     if quick {
         config.skills.registry_url = Some("https://github.com/openclaw/clawhub".to_string());
@@ -516,12 +585,32 @@ fn print_summary(config: &AppConfig) {
     println!("{} {}", paint(INFO, "Provider:"), config.agent.provider);
     println!("{} {}", paint(INFO, "Model:"), config.agent.model);
     println!("{} {:?}", paint(INFO, "Workspace:"), config.agent.workspace);
-    println!("{} {}", paint(INFO, "WASM sandbox:"), config.security.wasm_sandbox);
-    println!("{} {}", paint(INFO, "Docker sandbox:"), config.security.docker_sandbox);
-    println!("{} {:?}", paint(INFO, "Registry:"), config.skills.registry_url);
+    println!(
+        "{} {}",
+        paint(INFO, "WASM sandbox:"),
+        config.security.wasm_sandbox
+    );
+    println!(
+        "{} {}",
+        paint(INFO, "Docker sandbox:"),
+        config.security.docker_sandbox
+    );
+    println!(
+        "{} {:?}",
+        paint(INFO, "Registry:"),
+        config.skills.registry_url
+    );
     println!("{}", paint(SUCCESS, "Channels:"));
     for (name, channel) in &config.channels {
-        println!("  - {}: {}", name, if channel.enabled { "enabled" } else { "disabled" });
+        println!(
+            "  - {}: {}",
+            name,
+            if channel.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
     }
 }
 
@@ -540,7 +629,10 @@ fn apply_component_action(
             if title == "channel" {
                 config.channels.remove(chapter);
             }
-            println!("{}", paint(SUCCESS, format!("Deleted {}:{}", title, chapter)));
+            println!(
+                "{}",
+                paint(SUCCESS, format!("Deleted {}:{}", title, chapter))
+            );
         }
         _ => {
             config
@@ -570,13 +662,20 @@ fn apply_component_action(
                     .or_default()
                     .push(format!("docker_image={}", image));
             }
-            println!("{}", paint(SUCCESS, format!("Registered {}:{}", title, chapter)));
+            println!(
+                "{}",
+                paint(SUCCESS, format!("Registered {}:{}", title, chapter))
+            );
         }
     }
     Ok(())
 }
 
-fn component_wizard(config: &mut AppConfig, action: &str, theme: &ColorfulTheme) -> Result<(), String> {
+fn component_wizard(
+    config: &mut AppConfig,
+    action: &str,
+    theme: &ColorfulTheme,
+) -> Result<(), String> {
     let title: String = Input::with_theme(theme)
         .with_prompt("Title (component type, e.g., channel/sandbox/memory/skill)")
         .interact_text()
@@ -615,7 +714,10 @@ fn build_postgres_connection(theme: &ColorfulTheme) -> Result<String, String> {
         .allow_empty_password(true)
         .interact()
         .map_err(|e| e.to_string())?;
-    Ok(format!("postgres://{}:{}@{}:{}/{}", user, pass, host, port, db))
+    Ok(format!(
+        "postgres://{}:{}@{}:{}/{}",
+        user, pass, host, port, db
+    ))
 }
 
 fn read_env_file(path: &PathBuf) -> HashMap<String, String> {
@@ -643,7 +745,10 @@ fn generate_env_file(
     for (k, v) in env_updates {
         env.insert(k.clone(), v.clone());
     }
-    env.insert("BORGCLAW_PROVIDER".to_string(), config.agent.provider.clone());
+    env.insert(
+        "BORGCLAW_PROVIDER".to_string(),
+        config.agent.provider.clone(),
+    );
     env.insert("BORGCLAW_MODEL".to_string(), config.agent.model.clone());
 
     let mut lines = Vec::new();
@@ -664,7 +769,10 @@ fn generate_env_file(
     std::fs::write(out_path, lines.join("\n")).map_err(|e| e.to_string())
 }
 
-async fn fetch_models(provider: &ProviderDef, api_key: Option<&str>) -> Result<Vec<String>, String> {
+async fn fetch_models(
+    provider: &ProviderDef,
+    api_key: Option<&str>,
+) -> Result<Vec<String>, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
         .build()

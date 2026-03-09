@@ -6,13 +6,13 @@ use super::{
 };
 use async_trait::async_trait;
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{sleep, Duration};
-use serde::{Deserialize, Serialize};
 
 pub struct SignalChannel {
     channel_type: ChannelType,
@@ -159,26 +159,36 @@ impl SignalChannel {
                             if let Ok(msg) = serde_json::from_str::<SignalMessage>(line) {
                                 if let Some(ref data_msg) = msg.envelope.dataMessage {
                                     if let Some(ref text) = data_msg.message {
-                                        let source = msg.envelope.sourceNumber
+                                        let source = msg
+                                            .envelope
+                                            .sourceNumber
                                             .clone()
                                             .unwrap_or_else(|| msg.envelope.source.clone());
-                                        let source_name = msg.envelope.sourceName.clone().unwrap_or_default();
-                                        let raw = serde_json::to_value(&msg).unwrap_or(serde_json::json!({}));
-                                        let group_id = data_msg.groupInfo.as_ref().map(|g| g.groupId.clone());
+                                        let source_name =
+                                            msg.envelope.sourceName.clone().unwrap_or_default();
+                                        let raw = serde_json::to_value(&msg)
+                                            .unwrap_or(serde_json::json!({}));
+                                        let group_id =
+                                            data_msg.groupInfo.as_ref().map(|g| g.groupId.clone());
                                         let timestamp = chrono::DateTime::from_timestamp(
                                             data_msg.timestamp / 1000,
                                             0,
-                                        ).unwrap_or_else(Utc::now);
+                                        )
+                                        .unwrap_or_else(Utc::now);
 
-                                        if !allowed_users.is_empty() && !allowed_users.contains(&source) {
-                                            log::debug!("Signal: Ignoring message from unallowed user: {}", source);
+                                        if !allowed_users.is_empty()
+                                            && !allowed_users.contains(&source)
+                                        {
+                                            log::debug!(
+                                                "Signal: Ignoring message from unallowed user: {}",
+                                                source
+                                            );
                                             continue;
                                         }
 
                                         let inbound = InboundMessage {
                                             channel: channel_type.clone(),
-                                            sender: Sender::new(&source)
-                                                .with_name(source_name),
+                                            sender: Sender::new(&source).with_name(source_name),
                                             content: MessagePayload::Text(text.clone()),
                                             group_id,
                                             timestamp,
@@ -231,7 +241,8 @@ impl Channel for SignalChannel {
     async fn init(&mut self, config: &ChannelConfig) -> Result<(), ChannelError> {
         self.check_signal_cli_available()?;
 
-        self.phone_number = config.extra
+        self.phone_number = config
+            .extra
             .get("phone")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
@@ -252,8 +263,9 @@ impl Channel for SignalChannel {
 
         self.allowed_users = config.allow_from.clone();
 
-        std::fs::create_dir_all(&self.data_path)
-            .map_err(|e| ChannelError::ConnectionFailed(format!("Failed to create data dir: {}", e)))?;
+        std::fs::create_dir_all(&self.data_path).map_err(|e| {
+            ChannelError::ConnectionFailed(format!("Failed to create data dir: {}", e))
+        })?;
 
         let phone = self.phone_number.as_ref().unwrap();
         let output = Command::new(&self.signal_cli_path)
@@ -270,7 +282,8 @@ impl Channel for SignalChannel {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if stderr.contains("not registered") || stderr.contains("DeviceId") {
                 return Err(ChannelError::AuthFailed(
-                    "Signal number not registered. Run 'signal-cli -u <phone> register' first.".to_string(),
+                    "Signal number not registered. Run 'signal-cli -u <phone> register' first."
+                        .to_string(),
                 ));
             }
         }
@@ -281,9 +294,14 @@ impl Channel for SignalChannel {
         Ok(())
     }
 
-    async fn start_receiving(&self, sender: mpsc::Sender<InboundMessage>) -> Result<(), ChannelError> {
+    async fn start_receiving(
+        &self,
+        sender: mpsc::Sender<InboundMessage>,
+    ) -> Result<(), ChannelError> {
         if !self.status.read().await.connected {
-            return Err(ChannelError::ConnectionFailed("Channel not initialized".to_string()));
+            return Err(ChannelError::ConnectionFailed(
+                "Channel not initialized".to_string(),
+            ));
         }
 
         self.running.store(true, Ordering::Relaxed);
@@ -293,12 +311,15 @@ impl Channel for SignalChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> Result<(), ChannelError> {
-        let phone = self.phone_number.as_ref().ok_or_else(|| {
-            ChannelError::SendFailed("Phone number not configured".to_string())
-        })?;
+        let phone = self
+            .phone_number
+            .as_ref()
+            .ok_or_else(|| ChannelError::SendFailed("Phone number not configured".to_string()))?;
 
         if !self.status.read().await.connected {
-            return Err(ChannelError::ConnectionFailed("Channel not connected".to_string()));
+            return Err(ChannelError::ConnectionFailed(
+                "Channel not connected".to_string(),
+            ));
         }
 
         let text = match &message.content {
@@ -323,8 +344,9 @@ impl Channel for SignalChannel {
             cmd.arg("-g").arg(group_id);
         }
 
-        let output = cmd.output()
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to execute signal-cli: {}", e)))?;
+        let output = cmd.output().map_err(|e| {
+            ChannelError::SendFailed(format!("Failed to execute signal-cli: {}", e))
+        })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
