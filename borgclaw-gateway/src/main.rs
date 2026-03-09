@@ -69,6 +69,7 @@ async fn main() {
 
     let websocket_app = Router::new()
         .route("/", get(index))
+        .route("/health", get(api_status))
         .route("/ws", get(websocket_handler))
         .route("/api/status", get(api_status))
         .route("/api/chat", get(api_chat_get))
@@ -608,5 +609,17 @@ mod tests {
             .enabled = true;
 
         assert_eq!(webhook_port(&config), Some(8080));
+    }
+
+    #[tokio::test]
+    async fn api_status_reports_running_state() {
+        let state = GatewayState {
+            config: Arc::new(AppConfig::default()),
+            router: Arc::new(MessageRouter::from_config(&AppConfig::default())),
+            webhook: None,
+        };
+
+        let response = api_status(State(state)).await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }
