@@ -116,7 +116,7 @@ pub async fn run_init(
     }
 
     if args.generate_env {
-        generate_env_file(&config, &HashMap::new(), &PathBuf::from(".env"))?;
+        generate_env_file(&config, &HashMap::new(), &PathBuf::from(".env")).await?;
         println!("{}", paint(SUCCESS, "Generated .env"));
         return Ok(InitOutcome {
             config,
@@ -194,7 +194,7 @@ pub async fn run_init(
                 component_wizard(&mut config, "delete", &theme)?;
             }
             ExistingConfigAction::RegenerateEnv => {
-                generate_env_file(&config, &env_updates, &PathBuf::from(".env"))?;
+                generate_env_file(&config, &env_updates, &PathBuf::from(".env")).await?;
                 return Ok(InitOutcome {
                     config,
                     start: StartTarget::None,
@@ -219,7 +219,7 @@ pub async fn run_init(
         print_summary(&config);
     }
 
-    generate_env_file(&config, &env_updates, &PathBuf::from(".env"))?;
+    generate_env_file(&config, &env_updates, &PathBuf::from(".env")).await?;
     println!(
         "{}",
         paint(
@@ -788,7 +788,7 @@ fn read_env_file(path: &PathBuf) -> HashMap<String, String> {
     out
 }
 
-fn generate_env_file(
+async fn generate_env_file(
     config: &AppConfig,
     env_updates: &HashMap<String, String>,
     out_path: &PathBuf,
@@ -802,6 +802,10 @@ fn generate_env_file(
         config.agent.provider.clone(),
     );
     env.insert("BORGCLAW_MODEL".to_string(), config.agent.model.clone());
+
+    if let Some((env_key, env_value)) = provider_env_entry(config).await {
+        env.insert(env_key, env_value);
+    }
 
     let mut lines = Vec::new();
     lines.push("# BorgClaw Environment (generated)".to_string());
@@ -819,6 +823,26 @@ fn generate_env_file(
         lines.push(format!("{}={}", k, v));
     }
     std::fs::write(out_path, lines.join("\n")).map_err(|e| e.to_string())
+}
+
+async fn provider_env_entry(config: &AppConfig) -> Option<(String, String)> {
+    let env_key = match config.agent.provider.as_str() {
+        "openai" => "OPENAI_API_KEY",
+        "anthropic" => "ANTHROPIC_API_KEY",
+        "google" => "GOOGLE_API_KEY",
+        _ => return None,
+    };
+
+    if let Ok(value) = std::env::var(env_key) {
+        if !value.trim().is_empty() {
+            return Some((env_key.to_string(), value));
+        }
+    }
+
+    SecurityLayer::with_config(config.security.clone())
+        .get_secret(env_key)
+        .await
+        .map(|value| (env_key.to_string(), value))
 }
 
 async fn store_provider_secret(
@@ -873,6 +897,38 @@ mod tests {
         let restored = runtime
             .block_on(SecurityLayer::with_config(security.clone()).get_secret("ANTHROPIC_API_KEY"));
         assert_eq!(restored.as_deref(), Some("secret-value"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn generate_env_includes_provider_secret_from_secure_store() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_onboarding_env_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let mut config = AppConfig::default();
+        config.agent.provider = "anthropic".to_string();
+        config.security.secrets_path = root.join("secrets.enc");
+
+        let env_path = root.join(".env");
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime
+            .block_on(store_provider_secret(
+                &config.security,
+                "ANTHROPIC_API_KEY",
+                "secret-value",
+            ))
+            .unwrap();
+        runtime
+            .block_on(generate_env_file(&config, &HashMap::new(), &env_path))
+            .unwrap();
+
+        let env = std::fs::read_to_string(&env_path).unwrap();
+        assert!(env.contains("BORGCLAW_PROVIDER=anthropic"));
+        assert!(env.contains("ANTHROPIC_API_KEY=secret-value"));
+
         std::fs::remove_dir_all(root).unwrap();
     }
 }
