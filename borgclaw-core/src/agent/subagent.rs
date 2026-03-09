@@ -1,7 +1,7 @@
 //! Background sub-agents for parallel task execution
 
 use crate::agent::{builtin_tools, Agent, AgentContext, SenderInfo, SessionId, SimpleAgent};
-use crate::config::{AgentConfig, MemoryConfig, SecurityConfig, SkillsConfig};
+use crate::config::{AgentConfig, McpConfig, MemoryConfig, SecurityConfig, SkillsConfig};
 use crate::memory::{new_entry_for_group, Memory, SqliteMemory};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -111,6 +111,7 @@ pub struct SubAgentCoordinator {
     config: AgentConfig,
     memory_config: MemoryConfig,
     skills_config: SkillsConfig,
+    mcp_config: McpConfig,
     security_config: SecurityConfig,
     tasks: Arc<RwLock<HashMap<String, SubAgentTask>>>,
     result_sender: mpsc::Sender<SubAgentResult>,
@@ -123,6 +124,7 @@ impl SubAgentCoordinator {
             config,
             MemoryConfig::default(),
             SkillsConfig::default(),
+            McpConfig::default(),
             SecurityConfig::default(),
             result_sender,
         )
@@ -132,6 +134,7 @@ impl SubAgentCoordinator {
         config: AgentConfig,
         memory_config: MemoryConfig,
         skills_config: SkillsConfig,
+        mcp_config: McpConfig,
         security_config: SecurityConfig,
         result_sender: mpsc::Sender<SubAgentResult>,
     ) -> Self {
@@ -139,6 +142,7 @@ impl SubAgentCoordinator {
             config,
             memory_config,
             skills_config,
+            mcp_config,
             security_config,
             tasks: Arc::new(RwLock::new(HashMap::new())),
             result_sender,
@@ -276,6 +280,7 @@ impl SubAgentCoordinator {
             self.config.clone(),
             Some(self.memory_config.clone()),
             Some(self.skills_config.clone()),
+            Some(self.mcp_config.clone()),
             Some(self.security_config.clone()),
         );
         let tools = builtin_tools()
@@ -448,6 +453,7 @@ mod tests {
                 ..Default::default()
             },
             SkillsConfig::default(),
+            McpConfig::default(),
             SecurityConfig::default(),
             sender,
         );

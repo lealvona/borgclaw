@@ -1,9 +1,9 @@
 //! MCP Client implementation
 
+use serde::Deserialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::{oneshot, RwLock};
-use std::collections::HashMap;
+use tokio::sync::RwLock;
 
 use super::types::*;
 use super::transport::{McpTransport, McpTransportConfig, TransportError};
@@ -18,7 +18,6 @@ pub struct McpClient {
     config: McpClientConfig,
     transport: Box<dyn McpTransport>,
     request_id: AtomicU64,
-    pending: Arc<RwLock<HashMap<u64, oneshot::Sender<McpJsonRpcResponse>>>>,
     initialized: Arc<RwLock<bool>>,
     server_info: Arc<RwLock<Option<McpServerInfo>>>,
 }
@@ -35,7 +34,6 @@ impl McpClient {
             config,
             transport,
             request_id: AtomicU64::new(0),
-            pending: Arc::new(RwLock::new(HashMap::new())),
             initialized: Arc::new(RwLock::new(false)),
             server_info: Arc::new(RwLock::new(None)),
         }
@@ -83,25 +81,16 @@ impl McpClient {
         }
     }
 
-    async fn send_request(&self, request: McpJsonRpcRequest) -> Result<McpJsonRpcResponse, McpError> {
-        let id = self.request_id.fetch_add(1, Ordering::Relaxed);
-        
-        let (tx, rx) = oneshot::channel();
-        self.pending.write().await.insert(id, tx);
-
+    async fn send_request(&mut self, request: McpJsonRpcRequest) -> Result<McpJsonRpcResponse, McpError> {
         let request_json = serde_json::to_string(&request)
             .map_err(|e| McpError::ParseFailed(e.to_string()))?;
         
         self.transport.send(&request_json).await.map_err(McpError::Transport)?;
-
-        let response = rx.await.map_err(|_| McpError::Timeout)?;
-        
-        self.pending.write().await.remove(&id);
-        
-        Ok(response)
+        let response_json = self.transport.receive().await.map_err(McpError::Transport)?;
+        serde_json::from_str(&response_json).map_err(|e| McpError::ParseFailed(e.to_string()))
     }
 
-    async fn send_notification(&self, request: McpJsonRpcRequest) -> Result<(), McpError> {
+    async fn send_notification(&mut self, request: McpJsonRpcRequest) -> Result<(), McpError> {
         let request_json = serde_json::to_string(&request)
             .map_err(|e| McpError::ParseFailed(e.to_string()))?;
         
@@ -109,7 +98,7 @@ impl McpClient {
         Ok(())
     }
 
-    pub async fn list_tools(&self) -> Result<Vec<McpTool>, McpError> {
+    pub async fn list_tools(&mut self) -> Result<Vec<McpTool>, McpError> {
         let request = McpJsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: serde_json::json!(self.request_id.fetch_add(1, Ordering::Relaxed)),
@@ -133,7 +122,7 @@ impl McpClient {
         }
     }
 
-    pub async fn call_tool(&self, name: &str, arguments: serde_json::Value) -> Result<McpToolResult, McpError> {
+    pub async fn call_tool(&mut self, name: &str, arguments: serde_json::Value) -> Result<McpToolResult, McpError> {
         let request = McpJsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: serde_json::json!(self.request_id.fetch_add(1, Ordering::Relaxed)),
@@ -155,7 +144,7 @@ impl McpClient {
         }
     }
 
-    pub async fn list_resources(&self) -> Result<Vec<McpResource>, McpError> {
+    pub async fn list_resources(&mut self) -> Result<Vec<McpResource>, McpError> {
         let request = McpJsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: serde_json::json!(self.request_id.fetch_add(1, Ordering::Relaxed)),
@@ -179,7 +168,7 @@ impl McpClient {
         }
     }
 
-    pub async fn read_resource(&self, uri: &str) -> Result<McpResourceContent, McpError> {
+    pub async fn read_resource(&mut self, uri: &str) -> Result<McpResourceContent, McpError> {
         let request = McpJsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: serde_json::json!(self.request_id.fetch_add(1, Ordering::Relaxed)),

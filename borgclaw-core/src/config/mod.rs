@@ -20,6 +20,8 @@ pub struct AppConfig {
     pub scheduler: SchedulerConfig,
     /// Skills configuration
     pub skills: SkillsConfig,
+    /// MCP server configuration
+    pub mcp: McpConfig,
     /// Onboarding registrar (title/chapter tracking)
     pub registrar: RegistrarConfig,
 }
@@ -33,6 +35,7 @@ impl Default for AppConfig {
             memory: MemoryConfig::default(),
             scheduler: SchedulerConfig::default(),
             skills: SkillsConfig::default(),
+            mcp: McpConfig::default(),
             registrar: RegistrarConfig::default(),
         }
     }
@@ -251,6 +254,25 @@ impl Default for SkillsConfig {
             registry_url: None,
         }
     }
+}
+
+/// MCP configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct McpConfig {
+    pub servers: HashMap<String, McpServerConfig>,
+}
+
+/// MCP server configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct McpServerConfig {
+    pub transport: String,
+    pub command: Option<String>,
+    pub args: Vec<String>,
+    pub env: HashMap<String, String>,
+    pub url: Option<String>,
+    pub headers: HashMap<String, String>,
 }
 
 /// Load configuration from file
