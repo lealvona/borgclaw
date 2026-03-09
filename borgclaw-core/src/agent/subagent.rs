@@ -88,6 +88,16 @@ pub enum TaskStatus {
     Timeout,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SubAgentStatus {
+    Pending,
+    Running,
+    Completed(super::AgentResponse),
+    Failed(String),
+    Cancelled,
+    Timeout(String),
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum MemoryAccessType {
@@ -107,6 +117,7 @@ pub struct SubAgentResult {
     pub error: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct SubAgentCoordinator {
     config: AgentConfig,
     memory_config: MemoryConfig,
@@ -162,9 +173,50 @@ impl SubAgentCoordinator {
         id
     }
 
+    pub async fn spawn(
+        &self,
+        name: impl Into<String>,
+        ctx: AgentContext,
+        priority: TaskPriority,
+    ) -> Result<String, SubAgentError> {
+        let task = SubAgentTask::new(name, ctx.message).with_priority(priority);
+        let task_id = self.submit(task).await;
+        let coordinator = self.clone();
+        let execute_id = task_id.clone();
+        tokio::spawn(async move {
+            let _ = coordinator.execute(&execute_id).await;
+        });
+        Ok(task_id)
+    }
+
     pub async fn get_task(&self, id: &str) -> Option<SubAgentTask> {
         let tasks = self.tasks.read().await;
         tasks.get(id).cloned()
+    }
+
+    pub async fn status(&self, id: &str) -> SubAgentStatus {
+        let Some(task) = self.get_task(id).await else {
+            return SubAgentStatus::Failed(format!("Task not found: {}", id));
+        };
+
+        match task.status {
+            TaskStatus::Pending => SubAgentStatus::Pending,
+            TaskStatus::Running => SubAgentStatus::Running,
+            TaskStatus::Completed => SubAgentStatus::Completed(agent_response_from_task(&task)),
+            TaskStatus::Failed => SubAgentStatus::Failed(
+                task.result
+                    .as_ref()
+                    .and_then(|result| result.error.clone())
+                    .unwrap_or_else(|| "Task failed".to_string()),
+            ),
+            TaskStatus::Cancelled => SubAgentStatus::Cancelled,
+            TaskStatus::Timeout => SubAgentStatus::Timeout(
+                task.result
+                    .as_ref()
+                    .and_then(|result| result.error.clone())
+                    .unwrap_or_else(|| "Task timed out".to_string()),
+            ),
+        }
     }
 
     pub async fn list_tasks(&self) -> Vec<SubAgentTask> {
@@ -365,6 +417,15 @@ struct InnerTaskResult {
     memory_entries_created: usize,
 }
 
+fn agent_response_from_task(task: &SubAgentTask) -> super::AgentResponse {
+    let text = task
+        .result
+        .as_ref()
+        .map(|result| result.output.clone())
+        .unwrap_or_default();
+    super::AgentResponse::text(text)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum SubAgentError {
     #[error("Task not found: {0}")]
@@ -489,5 +550,65 @@ mod tests {
         assert!(result.success);
         assert_eq!(result.memory_entries_created, 1);
         assert_eq!(emitted.task_id, task_id);
+    }
+
+    #[tokio::test]
+    async fn subagent_spawn_runs_in_background_and_reports_status() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_subagent_spawn_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let (sender, _receiver) = mpsc::channel(4);
+        let coordinator = SubAgentCoordinator::with_configs(
+            AgentConfig {
+                provider: "unsupported".to_string(),
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            SkillsConfig::default(),
+            McpConfig::default(),
+            SecurityConfig::default(),
+            sender,
+        );
+
+        let task_id = coordinator
+            .spawn(
+                "background-summary",
+                AgentContext {
+                    session_id: SessionId::new(),
+                    message: "hello from docs".to_string(),
+                    sender: SenderInfo {
+                        id: "user-1".to_string(),
+                        name: Some("User".to_string()),
+                        channel: "cli".to_string(),
+                    },
+                    metadata: HashMap::new(),
+                },
+                TaskPriority::Low,
+            )
+            .await
+            .unwrap();
+
+        let final_status = loop {
+            match coordinator.status(&task_id).await {
+                SubAgentStatus::Pending | SubAgentStatus::Running => {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                other => break other,
+            }
+        };
+
+        std::fs::remove_dir_all(&root).unwrap();
+        match final_status {
+            SubAgentStatus::Completed(response) => {
+                assert!(response.text.contains("Provider 'unsupported'"));
+            }
+            other => panic!("unexpected status: {:?}", other),
+        }
     }
 }
