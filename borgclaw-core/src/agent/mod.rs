@@ -143,6 +143,7 @@ pub struct ToolRequest {
 pub struct SimpleAgent {
     config: super::config::AgentConfig,
     memory_config: super::config::MemoryConfig,
+    skills_config: super::config::SkillsConfig,
     security_config: super::config::SecurityConfig,
     tools: Vec<Tool>,
     state: AgentState,
@@ -155,12 +156,14 @@ impl SimpleAgent {
     pub fn new(
         config: super::config::AgentConfig,
         memory_config: Option<super::config::MemoryConfig>,
+        skills_config: Option<super::config::SkillsConfig>,
         security_config: Option<super::config::SecurityConfig>,
     ) -> Self {
         let provider = ProviderFactory::create(&config).ok();
         Self {
             config,
             memory_config: memory_config.unwrap_or_default(),
+            skills_config: skills_config.unwrap_or_default(),
             security_config: security_config.unwrap_or_default(),
             tools: Vec::new(),
             state: AgentState::Idle,
@@ -190,6 +193,7 @@ impl SimpleAgent {
             let runtime = ToolRuntime::from_config(
                 &self.config,
                 &self.memory_config,
+                &self.skills_config,
                 &self.security_config,
             )
             .await

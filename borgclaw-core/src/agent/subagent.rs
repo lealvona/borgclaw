@@ -1,7 +1,7 @@
 //! Background sub-agents for parallel task execution
 
 use crate::agent::{builtin_tools, Agent, AgentContext, SenderInfo, SessionId, SimpleAgent};
-use crate::config::{AgentConfig, MemoryConfig, SecurityConfig};
+use crate::config::{AgentConfig, MemoryConfig, SecurityConfig, SkillsConfig};
 use crate::memory::{new_entry_for_group, Memory, SqliteMemory};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -110,6 +110,7 @@ pub struct SubAgentResult {
 pub struct SubAgentCoordinator {
     config: AgentConfig,
     memory_config: MemoryConfig,
+    skills_config: SkillsConfig,
     security_config: SecurityConfig,
     tasks: Arc<RwLock<HashMap<String, SubAgentTask>>>,
     result_sender: mpsc::Sender<SubAgentResult>,
@@ -121,6 +122,7 @@ impl SubAgentCoordinator {
         Self::with_configs(
             config,
             MemoryConfig::default(),
+            SkillsConfig::default(),
             SecurityConfig::default(),
             result_sender,
         )
@@ -129,12 +131,14 @@ impl SubAgentCoordinator {
     pub fn with_configs(
         config: AgentConfig,
         memory_config: MemoryConfig,
+        skills_config: SkillsConfig,
         security_config: SecurityConfig,
         result_sender: mpsc::Sender<SubAgentResult>,
     ) -> Self {
         Self {
             config,
             memory_config,
+            skills_config,
             security_config,
             tasks: Arc::new(RwLock::new(HashMap::new())),
             result_sender,
@@ -271,6 +275,7 @@ impl SubAgentCoordinator {
         let mut agent = SimpleAgent::new(
             self.config.clone(),
             Some(self.memory_config.clone()),
+            Some(self.skills_config.clone()),
             Some(self.security_config.clone()),
         );
         let tools = builtin_tools()
@@ -442,6 +447,7 @@ mod tests {
                 memory_path: root.join("memory"),
                 ..Default::default()
             },
+            SkillsConfig::default(),
             SecurityConfig::default(),
             sender,
         );

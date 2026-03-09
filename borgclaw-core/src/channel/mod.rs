@@ -210,6 +210,7 @@ impl MessageRouter {
         let mut agent = crate::agent::SimpleAgent::new(
             config.agent.clone(),
             Some(config.memory.clone()),
+            Some(config.skills.clone()),
             Some(config.security.clone()),
         );
         for tool in crate::agent::builtin_tools() {
