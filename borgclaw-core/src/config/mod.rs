@@ -132,22 +132,57 @@ impl Default for ChannelConfig {
 pub struct SecurityConfig {
     /// Enable WASM sandbox
     pub wasm_sandbox: bool,
+    /// Max registered WASM sandbox instances
+    pub wasm_max_instances: usize,
     /// Enable Docker sandbox
     pub docker_sandbox: bool,
-    /// Command blocklist (regex patterns)
-    pub command_blocklist: Vec<String>,
+    /// Enable the default command blocklist
+    pub command_blocklist: bool,
+    /// Additional blocklist entries
+    pub extra_blocked: Vec<String>,
     /// Execution approval mode
     pub approval_mode: ApprovalMode,
-    /// Pairing code length
-    pub pairing_code_length: usize,
-    /// Pairing code expiry seconds
-    pub pairing_code_expiry: u64,
+    /// Pairing configuration
+    pub pairing: PairingConfig,
     /// Enable prompt injection defense
     pub prompt_injection_defense: bool,
+    /// Prompt injection action
+    pub injection_action: InjectionAction,
     /// Enable secret leak detection
     pub secret_leak_detection: bool,
+    /// Enable encrypted secret persistence
+    pub secrets_encryption: bool,
+    /// Encrypted secrets file path
+    pub secrets_path: PathBuf,
     /// Optional vault integration
     pub vault: VaultConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PairingConfig {
+    pub enabled: bool,
+    pub code_length: usize,
+    pub expiry_seconds: u64,
+}
+
+impl Default for PairingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            code_length: 6,
+            expiry_seconds: 300,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InjectionAction {
+    #[default]
+    Block,
+    Sanitize,
+    Warn,
 }
 
 /// Execution approval mode
@@ -167,21 +202,17 @@ impl Default for SecurityConfig {
     fn default() -> Self {
         Self {
             wasm_sandbox: true,
+            wasm_max_instances: 10,
             docker_sandbox: false,
-            command_blocklist: vec![
-                r"rm\s+-rf\s+/".to_string(),
-                r"dd\s+if=".to_string(),
-                r"mkfs".to_string(),
-                r"format".to_string(),
-                r"shutdown".to_string(),
-                r"reboot".to_string(),
-                r"poweroff".to_string(),
-            ],
+            command_blocklist: true,
+            extra_blocked: Vec::new(),
             approval_mode: ApprovalMode::Autonomous,
-            pairing_code_length: 6,
-            pairing_code_expiry: 300,
+            pairing: PairingConfig::default(),
             prompt_injection_defense: true,
+            injection_action: InjectionAction::Block,
             secret_leak_detection: true,
+            secrets_encryption: true,
+            secrets_path: PathBuf::from(".borgclaw/secrets.enc"),
             vault: VaultConfig::default(),
         }
     }
@@ -339,5 +370,50 @@ mod config {
         Parse(#[from] toml::de::Error),
         #[error("TOML serialize error: {0}")]
         Serialize(#[from] toml::ser::Error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn security_config_parses_documented_contract_shape() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [security]
+            wasm_sandbox = true
+            wasm_max_instances = 10
+            command_blocklist = true
+            extra_blocked = ["^custom_dangerous_command"]
+            prompt_injection_defense = true
+            injection_action = "sanitize"
+            secrets_encryption = true
+            secrets_path = ".local/data/secrets.enc"
+
+            [security.pairing]
+            enabled = true
+            code_length = 6
+            expiry_seconds = 300
+            "#,
+        )
+        .unwrap();
+
+        assert!(config.security.command_blocklist);
+        assert_eq!(
+            config.security.extra_blocked,
+            vec!["^custom_dangerous_command"]
+        );
+        assert!(matches!(
+            config.security.injection_action,
+            InjectionAction::Sanitize
+        ));
+        assert_eq!(
+            config.security.secrets_path,
+            PathBuf::from(".local/data/secrets.enc")
+        );
+        assert!(config.security.pairing.enabled);
+        assert_eq!(config.security.pairing.code_length, 6);
+        assert_eq!(config.security.pairing.expiry_seconds, 300);
     }
 }
