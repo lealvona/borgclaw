@@ -42,6 +42,13 @@ async fn main() {
     // Initialize app state
     let config = Arc::new(AppConfig::default());
     let router = Arc::new(MessageRouter::from_config(&config));
+    let port = config
+        .channels
+        .get("websocket")
+        .and_then(|channel| channel.extra.get("port"))
+        .and_then(|value| value.as_integer())
+        .and_then(|value| u16::try_from(value).ok())
+        .unwrap_or(18789);
     let state = GatewayState { config, router };
 
     // CORS layer
@@ -59,7 +66,7 @@ async fn main() {
         .layer(cors)
         .with_state(state);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 18789));
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!("Gateway listening on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
@@ -84,7 +91,16 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
         .config
         .channels
         .get("websocket")
-        .map(|channel| matches!(channel.dm_policy, borgclaw_core::config::DmPolicy::Pairing))
+        .map(|channel| {
+            channel
+                .extra
+                .get("require_pairing")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(matches!(
+                    channel.dm_policy,
+                    borgclaw_core::config::DmPolicy::Pairing
+                ))
+        })
         .unwrap_or(true);
 
     info!("New WebSocket connection: {}", client_id);

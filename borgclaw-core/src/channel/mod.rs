@@ -326,7 +326,7 @@ impl MessageRouter {
         if msg.group_id.is_none() {
             match config.dm_policy {
                 crate::config::DmPolicy::Open => {}
-                crate::config::DmPolicy::Closed => {
+                crate::config::DmPolicy::Blocked => {
                     return Err(ChannelError::AuthFailed(
                         "direct messages are disabled".to_string(),
                     ));
