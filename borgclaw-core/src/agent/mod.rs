@@ -9,7 +9,7 @@ pub use provider::{ChatMessage, ChatProvider, ProviderFactory, ProviderRequest};
 pub use session::{Message, MessageRole, Session, SessionId};
 pub use subagent::{
     MemoryAccessType, SubAgentBuilder, SubAgentCoordinator, SubAgentError, SubAgentResult,
-    SubAgentTask, TaskPriority, TaskStatus,
+    SubAgentStatus, SubAgentTask, TaskPriority, TaskStatus,
 };
 pub use tools::{
     builtin_tools, execute_tool, parse_tool_command, Tool, ToolCall, ToolResult, ToolRuntime,
