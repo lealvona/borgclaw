@@ -144,6 +144,7 @@ pub struct SimpleAgent {
     config: super::config::AgentConfig,
     memory_config: super::config::MemoryConfig,
     skills_config: super::config::SkillsConfig,
+    mcp_config: super::config::McpConfig,
     security_config: super::config::SecurityConfig,
     tools: Vec<Tool>,
     state: AgentState,
@@ -157,6 +158,7 @@ impl SimpleAgent {
         config: super::config::AgentConfig,
         memory_config: Option<super::config::MemoryConfig>,
         skills_config: Option<super::config::SkillsConfig>,
+        mcp_config: Option<super::config::McpConfig>,
         security_config: Option<super::config::SecurityConfig>,
     ) -> Self {
         let provider = ProviderFactory::create(&config).ok();
@@ -164,6 +166,7 @@ impl SimpleAgent {
             config,
             memory_config: memory_config.unwrap_or_default(),
             skills_config: skills_config.unwrap_or_default(),
+            mcp_config: mcp_config.unwrap_or_default(),
             security_config: security_config.unwrap_or_default(),
             tools: Vec::new(),
             state: AgentState::Idle,
@@ -194,6 +197,7 @@ impl SimpleAgent {
                 &self.config,
                 &self.memory_config,
                 &self.skills_config,
+                &self.mcp_config,
                 &self.security_config,
             )
             .await

@@ -1,11 +1,13 @@
 //! MCP Transport implementations
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufStream};
+use tokio::net::TcpStream;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
+use tokio_tungstenite::MaybeTlsStream;
+use tokio_tungstenite::tungstenite::Message;
 
 #[async_trait]
 pub trait McpTransport: Send + Sync {
@@ -44,7 +46,7 @@ pub struct StdioTransport {
     config: StdioTransportConfig,
     child: Option<tokio::process::Child>,
     stdin: Option<tokio::io::BufWriter<tokio::process::ChildStdin>>,
-    stdout: Option<BufStream<tokio::process::ChildStdout>>,
+    stdout: Option<BufReader<tokio::process::ChildStdout>>,
 }
 
 impl StdioTransport {
@@ -64,9 +66,9 @@ impl McpTransport for StdioTransport {
         let mut cmd = tokio::process::Command::new(&self.config.command);
         cmd.args(&self.config.args);
         cmd.envs(&self.config.env);
-        cmd.stdin(tokio::process::Stdio::piped());
-        cmd.stdout(tokio::process::Stdio::piped());
-        cmd.stderr(tokio::process::Stdio::piped());
+        cmd.stdin(std::process::Stdio::piped());
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
 
         let mut child = cmd.spawn().map_err(|e| TransportError::ConnectionFailed(e.to_string()))?;
 
@@ -74,7 +76,7 @@ impl McpTransport for StdioTransport {
         let stdout = child.stdout.take().ok_or_else(|| TransportError::ConnectionFailed("No stdout".to_string()))?;
 
         self.stdin = Some(tokio::io::BufWriter::new(stdin));
-        self.stdout = Some(BufStream::new(stdout));
+        self.stdout = Some(BufReader::new(stdout));
         self.child = Some(child);
 
         Ok(())
@@ -131,12 +133,13 @@ impl McpTransport for SseTransport {
         let headers = self.config.headers.clone();
         
         tokio::spawn(async move {
-            let mut request = reqwest::get(&url);
+            let client = reqwest::Client::new();
+            let mut request = client.get(&url);
             for (k, v) in &headers {
                 request = request.header(k, v);
             }
 
-            if let Ok(response) = request.await {
+            if let Ok(response) = request.send().await {
                 let mut stream = response.bytes_stream();
                 while let Some(chunk) = stream.next().await {
                     if let Ok(bytes) = chunk {
@@ -173,7 +176,7 @@ impl McpTransport for SseTransport {
 
 pub struct WebSocketTransport {
     config: WebSocketTransportConfig,
-    ws: Option<tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>>,
+    ws: Option<tokio_tungstenite::WebSocketStream<MaybeTlsStream<TcpStream>>>,
 }
 
 impl WebSocketTransport {
@@ -198,7 +201,7 @@ impl McpTransport for WebSocketTransport {
 
     async fn send(&mut self, message: &str) -> Result<(), TransportError> {
         let ws = self.ws.as_mut().ok_or(TransportError::NotConnected)?;
-        ws.send(tokio_tungstenite::Message::Text(message.into()))
+        ws.send(Message::Text(message.into()))
             .await
             .map_err(|e| TransportError::SendFailed(e.to_string()))?;
         Ok(())
@@ -207,8 +210,8 @@ impl McpTransport for WebSocketTransport {
     async fn receive(&mut self) -> Result<String, TransportError> {
         let ws = self.ws.as_mut().ok_or(TransportError::NotConnected)?;
         match ws.next().await {
-            Some(Ok(tokio_tungstenite::Message::Text(text))) => Ok(text.to_string()),
-            Some(Ok(tokio_tungstenite::Message::Close(_))) => Err(TransportError::ReceiveFailed("Connection closed".to_string())),
+            Some(Ok(Message::Text(text))) => Ok(text.to_string()),
+            Some(Ok(Message::Close(_))) => Err(TransportError::ReceiveFailed("Connection closed".to_string())),
             Some(Err(e)) => Err(TransportError::ReceiveFailed(e.to_string())),
             None => Err(TransportError::ReceiveFailed("Stream ended".to_string())),
             _ => Err(TransportError::ReceiveFailed("Unexpected message type".to_string())),
@@ -217,7 +220,7 @@ impl McpTransport for WebSocketTransport {
 
     async fn close(&mut self) -> Result<(), TransportError> {
         if let Some(mut ws) = self.ws.take() {
-            ws.close().await.map_err(|e| TransportError::CloseFailed(e.to_string()))?;
+            ws.close(None).await.map_err(|e| TransportError::CloseFailed(e.to_string()))?;
         }
         Ok(())
     }

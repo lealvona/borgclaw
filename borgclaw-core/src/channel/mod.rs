@@ -211,6 +211,7 @@ impl MessageRouter {
             config.agent.clone(),
             Some(config.memory.clone()),
             Some(config.skills.clone()),
+            Some(config.mcp.clone()),
             Some(config.security.clone()),
         );
         for tool in crate::agent::builtin_tools() {

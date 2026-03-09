@@ -7,6 +7,7 @@ pub mod agent;
 pub mod channel;
 pub mod config;
 pub mod memory;
+pub mod mcp;
 pub mod scheduler;
 pub mod security;
 pub mod skills;

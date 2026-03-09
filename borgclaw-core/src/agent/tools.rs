@@ -1,6 +1,8 @@
 //! Tools module - defines tools agents can use
 
 use crate::memory::{new_entry, Memory, MemoryQuery, SqliteMemory};
+use crate::mcp::client::{McpClient, McpClientConfig};
+use crate::mcp::transport::{McpTransportConfig, SseTransportConfig, StdioTransportConfig, WebSocketTransportConfig};
 use crate::scheduler::{new_job, JobTrigger, Scheduler, SchedulerTrait};
 use crate::security::{CommandCheck, SecurityLayer};
 use crate::skills::PluginRegistry;
@@ -182,6 +184,7 @@ pub struct ToolRuntime {
     pub memory: Arc<SqliteMemory>,
     pub scheduler: Arc<Mutex<Scheduler>>,
     pub plugins: Arc<PluginRegistry>,
+    pub mcp_servers: HashMap<String, crate::config::McpServerConfig>,
     pub security: Arc<SecurityLayer>,
 }
 
@@ -190,6 +193,7 @@ impl ToolRuntime {
         agent: &crate::config::AgentConfig,
         memory_config: &crate::config::MemoryConfig,
         skills_config: &crate::config::SkillsConfig,
+        mcp_config: &crate::config::McpConfig,
         security_config: &crate::config::SecurityConfig,
     ) -> Result<Self, String> {
         let workspace_root = canonical_or_current(&agent.workspace);
@@ -206,6 +210,7 @@ impl ToolRuntime {
             memory,
             scheduler: Arc::new(Mutex::new(Scheduler::new())),
             plugins,
+            mcp_servers: mcp_config.servers.clone(),
             security: Arc::new(SecurityLayer::with_config(security_config.clone())),
         })
     }
@@ -262,6 +267,8 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "web_search" => web_search(&call.arguments).await,
         "plugin_list" => plugin_list(runtime).await,
         "plugin_invoke" => plugin_invoke(&call.arguments, runtime).await,
+        "mcp_list_tools" => mcp_list_tools(&call.arguments, runtime).await,
+        "mcp_call_tool" => mcp_call_tool(&call.arguments, runtime).await,
         other => ToolResult::err(format!("unknown tool: {}", other)),
     }
 }
@@ -587,6 +594,110 @@ async fn plugin_invoke(arguments: &HashMap<String, serde_json::Value>, runtime: 
     }
 }
 
+async fn mcp_list_tools(arguments: &HashMap<String, serde_json::Value>, runtime: &ToolRuntime) -> ToolResult {
+    let server = match get_required_string(arguments, "server") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let mut client = match mcp_client_for_server(runtime, &server) {
+        Ok(client) => client,
+        Err(err) => return ToolResult::err(err),
+    };
+    if let Err(err) = client.connect().await {
+        return ToolResult::err(err.to_string());
+    }
+    let result = client.list_tools().await;
+    let _ = client.disconnect().await;
+
+    match result {
+        Ok(tools) if tools.is_empty() => ToolResult::ok("no tools"),
+        Ok(tools) => ToolResult::ok(
+            tools
+                .into_iter()
+                .map(|tool| format!("{} - {}", tool.name, tool.description.unwrap_or_default()))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn mcp_call_tool(arguments: &HashMap<String, serde_json::Value>, runtime: &ToolRuntime) -> ToolResult {
+    let server = match get_required_string(arguments, "server") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let tool = match get_required_string(arguments, "tool") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let input = arguments
+        .get("input")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    let mut client = match mcp_client_for_server(runtime, &server) {
+        Ok(client) => client,
+        Err(err) => return ToolResult::err(err),
+    };
+    if let Err(err) = client.connect().await {
+        return ToolResult::err(err.to_string());
+    }
+    let result = client.call_tool(&tool, input).await;
+    let _ = client.disconnect().await;
+
+    match result {
+        Ok(result) => {
+            let output = result
+                .content
+                .into_iter()
+                .map(|content| match content {
+                    crate::mcp::types::McpContent::Text { text } => text,
+                    crate::mcp::types::McpContent::Image { mime_type, .. } => format!("[image:{}]", mime_type),
+                    crate::mcp::types::McpContent::Resource { resource } => format!("[resource:{}]", resource),
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if result.is_error.unwrap_or(false) {
+                ToolResult::err(output)
+            } else {
+                ToolResult::ok(output)
+                    .with_metadata("server", server)
+                    .with_metadata("tool", tool)
+            }
+        }
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+fn mcp_client_for_server(runtime: &ToolRuntime, server: &str) -> Result<McpClient, String> {
+    let config = runtime
+        .mcp_servers
+        .get(server)
+        .ok_or_else(|| format!("unknown mcp server '{}'", server))?;
+    let transport_config = match config.transport.as_str() {
+        "stdio" => McpTransportConfig::Stdio(StdioTransportConfig {
+            command: config.command.clone().ok_or_else(|| "missing MCP command".to_string())?,
+            args: config.args.clone(),
+            env: config.env.clone(),
+        }),
+        "sse" => McpTransportConfig::Sse(SseTransportConfig {
+            url: config.url.clone().ok_or_else(|| "missing MCP url".to_string())?,
+            headers: config.headers.clone(),
+        }),
+        "websocket" => McpTransportConfig::WebSocket(WebSocketTransportConfig {
+            url: config.url.clone().ok_or_else(|| "missing MCP url".to_string())?,
+        }),
+        other => return Err(format!("unsupported MCP transport '{}'", other)),
+    };
+
+    Ok(McpClient::new(McpClientConfig {
+        name: "borgclaw".to_string(),
+        transport_config,
+        protocol_version: "2024-11-05".to_string(),
+    }))
+}
+
 async fn approve_tool(arguments: &HashMap<String, serde_json::Value>, runtime: &ToolRuntime) -> ToolResult {
     let tool = match get_required_string(arguments, "tool") {
         Ok(value) => value,
@@ -696,7 +807,7 @@ fn decode_html_entities(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AgentConfig, ApprovalMode, MemoryConfig, SecurityConfig};
+    use crate::config::{AgentConfig, ApprovalMode, McpConfig, McpServerConfig, MemoryConfig, SecurityConfig};
 
     #[test]
     fn parses_json_tool_command() {
@@ -739,6 +850,7 @@ mod tests {
                 skills_path: root.join("skills"),
                 ..Default::default()
             },
+            &crate::config::McpConfig::default(),
             &SecurityConfig {
                 approval_mode: ApprovalMode::Supervised,
                 ..Default::default()
@@ -827,6 +939,7 @@ mod tests {
                 skills_path: root.join("skills"),
                 ..Default::default()
             },
+            &crate::config::McpConfig::default(),
             &SecurityConfig::default(),
         )
         .await
@@ -857,6 +970,7 @@ mod tests {
                 skills_path: root.join("skills"),
                 ..Default::default()
             },
+            &crate::config::McpConfig::default(),
             &SecurityConfig::default(),
         )
         .await
@@ -874,6 +988,85 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
         assert!(!result.success);
         assert!(result.output.contains("Plugin not found"));
+    }
+
+    #[test]
+    fn mcp_client_requires_known_server() {
+        let runtime = ToolRuntime {
+            workspace_root: PathBuf::from("."),
+            memory: Arc::new(SqliteMemory::new(std::env::temp_dir().join("borgclaw_mcp_unknown_memory"))),
+            scheduler: Arc::new(Mutex::new(Scheduler::new())),
+            plugins: Arc::new(PluginRegistry::new()),
+            mcp_servers: HashMap::new(),
+            security: Arc::new(SecurityLayer::with_config(SecurityConfig::default())),
+        };
+
+        let err = match mcp_client_for_server(&runtime, "missing") {
+            Ok(_) => panic!("expected unknown server error"),
+            Err(err) => err,
+        };
+        assert!(err.contains("unknown mcp server"));
+    }
+
+    #[test]
+    fn mcp_client_rejects_unsupported_transport() {
+        let runtime = ToolRuntime {
+            workspace_root: PathBuf::from("."),
+            memory: Arc::new(SqliteMemory::new(std::env::temp_dir().join("borgclaw_mcp_transport_memory"))),
+            scheduler: Arc::new(Mutex::new(Scheduler::new())),
+            plugins: Arc::new(PluginRegistry::new()),
+            mcp_servers: HashMap::from([(
+                "bad".to_string(),
+                McpServerConfig {
+                    transport: "invalid".to_string(),
+                    ..Default::default()
+                },
+            )]),
+            security: Arc::new(SecurityLayer::with_config(SecurityConfig::default())),
+        };
+
+        let err = match mcp_client_for_server(&runtime, "bad") {
+            Ok(_) => panic!("expected unsupported transport error"),
+            Err(err) => err,
+        };
+        assert!(err.contains("unsupported MCP transport"));
+    }
+
+    #[tokio::test]
+    async fn runtime_loads_mcp_servers_from_config() {
+        let root = std::env::temp_dir().join(format!("borgclaw_mcp_runtime_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                memory_path: root.join("memory"),
+                ..Default::default()
+            },
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &McpConfig {
+                servers: HashMap::from([(
+                    "filesystem".to_string(),
+                    McpServerConfig {
+                        transport: "stdio".to_string(),
+                        command: Some("mcp-filesystem".to_string()),
+                        ..Default::default()
+                    },
+                )]),
+            },
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(runtime.mcp_servers.contains_key("filesystem"));
     }
 }
 
@@ -1060,6 +1253,52 @@ pub fn builtin_tools() -> Vec<Tool> {
             vec!["plugin".to_string()],
         ))
         .with_tags(vec!["plugin".to_string()]),
+
+        Tool::new(
+            "mcp_list_tools",
+            "List tools exposed by a configured MCP server",
+        )
+        .with_schema(ToolSchema::object(
+            [
+                ("server".to_string(), PropertySchema {
+                    prop_type: "string".to_string(),
+                    description: Some("Configured MCP server name".to_string()),
+                    default: None,
+                    enum_values: None,
+                }),
+            ].into(),
+            vec!["server".to_string()],
+        ))
+        .with_tags(vec!["mcp".to_string(), "integration".to_string()]),
+
+        Tool::new(
+            "mcp_call_tool",
+            "Call a tool exposed by a configured MCP server",
+        )
+        .with_schema(ToolSchema::object(
+            [
+                ("server".to_string(), PropertySchema {
+                    prop_type: "string".to_string(),
+                    description: Some("Configured MCP server name".to_string()),
+                    default: None,
+                    enum_values: None,
+                }),
+                ("tool".to_string(), PropertySchema {
+                    prop_type: "string".to_string(),
+                    description: Some("Remote MCP tool name".to_string()),
+                    default: None,
+                    enum_values: None,
+                }),
+                ("input".to_string(), PropertySchema {
+                    prop_type: "object".to_string(),
+                    description: Some("JSON input object passed to the remote tool".to_string()),
+                    default: Some(serde_json::json!({})),
+                    enum_values: None,
+                }),
+            ].into(),
+            vec!["server".to_string(), "tool".to_string()],
+        ))
+        .with_tags(vec!["mcp".to_string(), "integration".to_string()]),
         
         Tool::new(
             "fetch_url",
