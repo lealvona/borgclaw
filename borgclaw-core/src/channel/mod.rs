@@ -10,7 +10,7 @@ pub use cli::{create_cli_message, CliChannel};
 pub use signal::{SignalChannel, SignalChannelBuilder};
 pub use telegram::TelegramChannel;
 pub use traits::{Channel, ChannelSender, ChannelStatus};
-pub use webhook::{WebhookChannel, WebhookTrigger};
+pub use webhook::{WebhookChannel, WebhookError, WebhookResponse, WebhookTrigger};
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
