@@ -6,6 +6,7 @@ use crate::onboarding::colors::{
 };
 use crate::onboarding::providers::{ProviderDef, ProviderRegistry};
 use borgclaw_core::config::{AppConfig, ChannelConfig, DmPolicy};
+use borgclaw_core::security::SecurityLayer;
 use clap::Args;
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Password, Select};
 use serde_json::Value;
@@ -361,7 +362,8 @@ async fn configure_provider_and_model(
                 .allow_empty_password(false)
                 .interact()
                 .map_err(|e| e.to_string())?;
-            env_updates.insert(env_key, key);
+            store_provider_secret(&config.security, &env_key, &key).await?;
+            env_updates.remove(&env_key);
         }
     }
     Ok(())
@@ -819,6 +821,17 @@ fn generate_env_file(
     std::fs::write(out_path, lines.join("\n")).map_err(|e| e.to_string())
 }
 
+async fn store_provider_secret(
+    security_config: &borgclaw_core::config::SecurityConfig,
+    env_key: &str,
+    value: &str,
+) -> Result<(), String> {
+    SecurityLayer::with_config(security_config.clone())
+        .store_secret(env_key, value)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -837,6 +850,30 @@ mod tests {
             existing_config_action(2),
             ExistingConfigAction::Quit
         ));
+    }
+
+    #[test]
+    fn provider_secret_is_persisted_without_env_file_copy() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_onboarding_secret_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut security = borgclaw_core::config::SecurityConfig::default();
+        security.secrets_path = root.join("secrets.enc");
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime
+            .block_on(store_provider_secret(
+                &security,
+                "ANTHROPIC_API_KEY",
+                "secret-value",
+            ))
+            .unwrap();
+        let restored = runtime
+            .block_on(SecurityLayer::with_config(security.clone()).get_secret("ANTHROPIC_API_KEY"));
+        assert_eq!(restored.as_deref(), Some("secret-value"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
 

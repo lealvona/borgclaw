@@ -1,4 +1,5 @@
 use super::session::{Message, MessageRole};
+use crate::{config::SecurityConfig, security::SecurityLayer};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -39,13 +40,20 @@ pub trait ChatProvider: Send + Sync {
 pub struct ProviderFactory;
 
 impl ProviderFactory {
-    pub fn create(
+    pub async fn create(
         config: &crate::config::AgentConfig,
+        security_config: &SecurityConfig,
     ) -> Result<Box<dyn ChatProvider>, ProviderError> {
         match config.provider.as_str() {
-            "openai" => Ok(Box::new(OpenAiProvider::from_env()?)),
-            "anthropic" => Ok(Box::new(AnthropicProvider::from_env()?)),
-            "google" => Ok(Box::new(GoogleProvider::from_env()?)),
+            "openai" => Ok(Box::new(
+                OpenAiProvider::from_security(security_config).await?,
+            )),
+            "anthropic" => Ok(Box::new(
+                AnthropicProvider::from_security(security_config).await?,
+            )),
+            "google" => Ok(Box::new(
+                GoogleProvider::from_security(security_config).await?,
+            )),
             "ollama" => Ok(Box::new(OllamaProvider::default())),
             other => Err(ProviderError::UnsupportedProvider(other.to_string())),
         }
@@ -70,10 +78,9 @@ struct OpenAiProvider {
 }
 
 impl OpenAiProvider {
-    fn from_env() -> Result<Self, ProviderError> {
+    async fn from_security(config: &SecurityConfig) -> Result<Self, ProviderError> {
         Ok(Self {
-            api_key: std::env::var("OPENAI_API_KEY")
-                .map_err(|_| ProviderError::MissingEnv("OPENAI_API_KEY"))?,
+            api_key: resolve_provider_secret(config, "OPENAI_API_KEY").await?,
             http: reqwest::Client::new(),
         })
     }
@@ -145,10 +152,9 @@ struct AnthropicProvider {
 }
 
 impl AnthropicProvider {
-    fn from_env() -> Result<Self, ProviderError> {
+    async fn from_security(config: &SecurityConfig) -> Result<Self, ProviderError> {
         Ok(Self {
-            api_key: std::env::var("ANTHROPIC_API_KEY")
-                .map_err(|_| ProviderError::MissingEnv("ANTHROPIC_API_KEY"))?,
+            api_key: resolve_provider_secret(config, "ANTHROPIC_API_KEY").await?,
             http: reqwest::Client::new(),
         })
     }
@@ -247,13 +253,28 @@ struct GoogleProvider {
 }
 
 impl GoogleProvider {
-    fn from_env() -> Result<Self, ProviderError> {
+    async fn from_security(config: &SecurityConfig) -> Result<Self, ProviderError> {
         Ok(Self {
-            api_key: std::env::var("GOOGLE_API_KEY")
-                .map_err(|_| ProviderError::MissingEnv("GOOGLE_API_KEY"))?,
+            api_key: resolve_provider_secret(config, "GOOGLE_API_KEY").await?,
             http: reqwest::Client::new(),
         })
     }
+}
+
+async fn resolve_provider_secret(
+    config: &SecurityConfig,
+    env_key: &'static str,
+) -> Result<String, ProviderError> {
+    if let Ok(value) = std::env::var(env_key) {
+        if !value.trim().is_empty() {
+            return Ok(value);
+        }
+    }
+
+    SecurityLayer::with_config(config.clone())
+        .get_secret(env_key)
+        .await
+        .ok_or(ProviderError::MissingEnv(env_key))
 }
 
 #[async_trait]
@@ -479,16 +500,39 @@ mod tests {
         assert_eq!(chat.content, "hello");
     }
 
-    #[test]
-    fn rejects_unknown_provider() {
+    #[tokio::test]
+    async fn rejects_unknown_provider() {
         let config = crate::config::AgentConfig {
             provider: "unknown".to_string(),
             ..Default::default()
         };
 
         assert!(matches!(
-            ProviderFactory::create(&config),
+            ProviderFactory::create(&config, &SecurityConfig::default()).await,
             Err(ProviderError::UnsupportedProvider(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn provider_factory_reads_secret_store_when_env_missing() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_provider_secret_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut security = SecurityConfig::default();
+        security.secrets_path = root.join("secrets.enc");
+        SecurityLayer::with_config(security.clone())
+            .store_secret("OPENAI_API_KEY", "from-store")
+            .await
+            .unwrap();
+
+        let config = crate::config::AgentConfig {
+            provider: "openai".to_string(),
+            ..Default::default()
+        };
+
+        assert!(ProviderFactory::create(&config, &security).await.is_ok());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

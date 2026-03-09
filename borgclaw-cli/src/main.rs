@@ -393,12 +393,19 @@ async fn doctor(config: AppConfig) {
         }
         _ => println!("✗ Command blocklist not working"),
     }
-    match provider_env_var(&config.agent.provider) {
-        Some(env_key) if std::env::var(env_key).is_ok() => {
+    match provider_credential_status(&config).await {
+        ProviderCredentialStatus::Env(env_key) => {
             println!("✓ Provider credential env present ({})", env_key)
         }
-        Some(env_key) => println!("✗ Provider credential env missing ({})", env_key),
-        None => println!("✗ Unknown provider '{}'", config.agent.provider),
+        ProviderCredentialStatus::SecureStore(env_key) => {
+            println!("✓ Provider credential stored securely ({})", env_key)
+        }
+        ProviderCredentialStatus::Missing(env_key) => {
+            println!("✗ Provider credential missing ({})", env_key)
+        }
+        ProviderCredentialStatus::UnknownProvider => {
+            println!("✗ Unknown provider '{}'", config.agent.provider)
+        }
     }
     if let Some(parent) = config.memory.database_path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -436,6 +443,30 @@ fn provider_env_var(provider: &str) -> Option<&'static str> {
         "google" => Some("GOOGLE_API_KEY"),
         "ollama" => None,
         _ => None,
+    }
+}
+
+enum ProviderCredentialStatus {
+    Env(&'static str),
+    SecureStore(&'static str),
+    Missing(&'static str),
+    UnknownProvider,
+}
+
+async fn provider_credential_status(config: &AppConfig) -> ProviderCredentialStatus {
+    let Some(env_key) = provider_env_var(&config.agent.provider) else {
+        return ProviderCredentialStatus::UnknownProvider;
+    };
+
+    if std::env::var(env_key).is_ok() {
+        return ProviderCredentialStatus::Env(env_key);
+    }
+
+    let security = SecurityLayer::with_config(config.security.clone());
+    if security.get_secret(env_key).await.is_some() {
+        ProviderCredentialStatus::SecureStore(env_key)
+    } else {
+        ProviderCredentialStatus::Missing(env_key)
     }
 }
 
