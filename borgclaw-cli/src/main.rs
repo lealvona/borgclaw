@@ -304,6 +304,15 @@ async fn status(config: AppConfig) {
         config.security.docker_sandbox,
         config.security.approval_mode
     );
+    println!(
+        "Vault: {}",
+        config
+            .security
+            .vault
+            .provider
+            .as_deref()
+            .unwrap_or("disabled")
+    );
     println!("Memory path: {:?}", config.memory.memory_path);
     println!("Skills path: {:?}", config.skills.skills_path);
     println!("\nChannels:");
@@ -342,6 +351,14 @@ async fn doctor(config: AppConfig) {
     } else {
         println!("✗ Skills path unavailable: {:?}", config.skills.skills_path);
     }
+    match config.security.vault.provider.as_deref() {
+        Some("bitwarden") if cli_in_path("bw") => println!("✓ Bitwarden CLI available"),
+        Some("bitwarden") => println!("✗ Bitwarden CLI missing (bw)"),
+        Some("1password") if cli_in_path("op") => println!("✓ 1Password CLI available"),
+        Some("1password") => println!("✗ 1Password CLI missing (op)"),
+        Some(other) => println!("✗ Unsupported vault provider '{}'", other),
+        None => println!("• Vault integration disabled"),
+    }
     println!("\nDiagnostics complete.");
 }
 
@@ -353,6 +370,15 @@ fn provider_env_var(provider: &str) -> Option<&'static str> {
         "ollama" => None,
         _ => None,
     }
+}
+
+fn cli_in_path(binary: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| {
+            std::env::split_paths(&paths)
+                .any(|dir| dir.join(binary).exists())
+        })
+        .unwrap_or(false)
 }
 
 fn install_local_skill(skills_path: &std::path::Path, source: &str) -> Result<std::path::PathBuf, String> {

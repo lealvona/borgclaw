@@ -2,9 +2,9 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::sync::Arc;
 use chrono::{DateTime, Utc};
+use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultItem {
@@ -347,18 +347,23 @@ impl VaultClient for OnePasswordClient {
     }
 
     async fn create_item(&self, name: &str, value: &str, folder: Option<&str>) -> Result<String, VaultError> {
-        let mut args = vec!["item", "create", "--format", "json"];
+        let mut args = vec![
+            "item".to_string(),
+            "create".to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+        ];
         
-        args.push(&format!("--title={}", name));
-        args.push(&format!("notesPlain={}", value));
+        args.push(format!("--title={}", name));
+        args.push(format!("notesPlain={}", value));
         
         if let Some(folder) = folder {
-            args.extend(&["--vault", folder]);
+            args.extend(["--vault".to_string(), folder.to_string()]);
         } else if let Some(ref vault) = self.config.vault {
-            args.extend(&["--vault", vault]);
+            args.extend(["--vault".to_string(), vault.clone()]);
         }
         if let Some(ref account) = self.config.account {
-            args.extend(&["--account", account]);
+            args.extend(["--account".to_string(), account.clone()]);
         }
 
         let output = tokio::process::Command::new("op")
@@ -384,15 +389,21 @@ impl VaultClient for OnePasswordClient {
     }
 
     async fn update_item(&self, id: &str, value: &str) -> Result<(), VaultError> {
-        let mut args = vec!["item", "edit", id, "--format", "json"];
+        let mut args = vec![
+            "item".to_string(),
+            "edit".to_string(),
+            id.to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+        ];
         
-        args.push(&format!("notesPlain={}", value));
+        args.push(format!("notesPlain={}", value));
         
         if let Some(ref vault) = self.config.vault {
-            args.extend(&["--vault", vault]);
+            args.extend(["--vault".to_string(), vault.clone()]);
         }
         if let Some(ref account) = self.config.account {
-            args.extend(&["--account", account]);
+            args.extend(["--account".to_string(), account.clone()]);
         }
 
         let output = tokio::process::Command::new("op")

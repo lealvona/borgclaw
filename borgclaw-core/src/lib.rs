@@ -17,7 +17,10 @@ pub use channel::{Channel, ChannelSender};
 pub use config::{AppConfig, ChannelConfig, SecurityConfig};
 pub use memory::{Memory, MemoryEntry};
 pub use scheduler::{Job, Scheduler, SchedulerTrait};
-pub use security::{PairingManager, SecretStore, SecurityLayer};
+pub use security::{
+    BitwardenClient, BitwardenConfig, OnePasswordClient, OnePasswordConfig, PairingManager,
+    SecretStore, SecurityLayer, VaultClient, VaultError,
+};
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
