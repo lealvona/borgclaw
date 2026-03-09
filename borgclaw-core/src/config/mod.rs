@@ -154,7 +154,10 @@ pub struct SecurityConfig {
     /// Prompt injection action
     pub injection_action: InjectionAction,
     /// Enable secret leak detection
+    #[serde(alias = "leak_detection")]
     pub secret_leak_detection: bool,
+    /// Secret leak action
+    pub leak_action: LeakAction,
     /// Enable encrypted secret persistence
     pub secrets_encryption: bool,
     /// Encrypted secrets file path
@@ -190,6 +193,15 @@ pub enum InjectionAction {
     Warn,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LeakAction {
+    #[default]
+    Redact,
+    Block,
+    Warn,
+}
+
 /// Execution approval mode
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -216,6 +228,7 @@ impl Default for SecurityConfig {
             prompt_injection_defense: true,
             injection_action: InjectionAction::Block,
             secret_leak_detection: true,
+            leak_action: LeakAction::Redact,
             secrets_encryption: true,
             secrets_path: PathBuf::from(".borgclaw/secrets.enc"),
             vault: VaultConfig::default(),
@@ -420,6 +433,8 @@ mod tests {
             extra_blocked = ["^custom_dangerous_command"]
             prompt_injection_defense = true
             injection_action = "sanitize"
+            leak_detection = true
+            leak_action = "warn"
             secrets_encryption = true
             secrets_path = ".local/data/secrets.enc"
 
@@ -440,6 +455,8 @@ mod tests {
             config.security.injection_action,
             InjectionAction::Sanitize
         ));
+        assert!(config.security.secret_leak_detection);
+        assert_eq!(config.security.leak_action, LeakAction::Warn);
         assert_eq!(
             config.security.secrets_path,
             PathBuf::from(".local/data/secrets.enc")

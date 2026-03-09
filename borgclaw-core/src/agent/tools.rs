@@ -282,15 +282,37 @@ fn sanitize_tool_result(mut result: ToolResult, runtime: &ToolRuntime) -> ToolRe
         return result;
     }
 
-    let (redacted, count) = runtime.security.redact_leaks(&result.output);
-    if count > 0 {
-        result.output = redacted;
-        result
-            .metadata
-            .insert("secret_redactions".to_string(), count.to_string());
-        result
-            .metadata
-            .insert("security_redacted".to_string(), "true".to_string());
+    let leaks = runtime.security.check_leak(&result.output);
+    if leaks.is_empty() {
+        return result;
+    }
+
+    result
+        .metadata
+        .insert("secret_redactions".to_string(), leaks.len().to_string());
+
+    match runtime.security.leak_action() {
+        crate::config::LeakAction::Redact => {
+            let (redacted, _) = runtime.security.redact_leaks(&result.output);
+            result.output = redacted;
+            result
+                .metadata
+                .insert("security_redacted".to_string(), "true".to_string());
+        }
+        crate::config::LeakAction::Warn => {
+            result.metadata.insert(
+                "security_warning".to_string(),
+                "secret_detected".to_string(),
+            );
+        }
+        crate::config::LeakAction::Block => {
+            let mut blocked = ToolResult::err("tool output blocked by secret leak detection");
+            blocked.metadata = result.metadata;
+            blocked
+                .metadata
+                .insert("security_blocked".to_string(), "true".to_string());
+            return blocked;
+        }
     }
 
     result
@@ -1190,6 +1212,107 @@ mod tests {
         assert_eq!(result.output, "[REDACTED_SECRET]");
         assert_eq!(
             result.metadata.get("security_redacted").map(String::as_str),
+            Some("true")
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_tool_warns_on_detected_secret_leaks_when_configured() {
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_warn_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let mut security = SecurityConfig::default();
+        security.leak_action = crate::config::LeakAction::Warn;
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &security,
+        )
+        .await
+        .unwrap();
+
+        let result = execute_tool(
+            &ToolCall::new(
+                "message",
+                HashMap::from([(
+                    "text".to_string(),
+                    serde_json::json!("sk-abcdefghijklmnopqrstuvwxyz1234"),
+                )]),
+            ),
+            &runtime,
+        )
+        .await;
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(result.success);
+        assert_eq!(result.output, "sk-abcdefghijklmnopqrstuvwxyz1234");
+        assert_eq!(
+            result.metadata.get("security_warning").map(String::as_str),
+            Some("secret_detected")
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_tool_blocks_detected_secret_leaks_when_configured() {
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_block_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let mut security = SecurityConfig::default();
+        security.leak_action = crate::config::LeakAction::Block;
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &security,
+        )
+        .await
+        .unwrap();
+
+        let result = execute_tool(
+            &ToolCall::new(
+                "message",
+                HashMap::from([(
+                    "text".to_string(),
+                    serde_json::json!("sk-abcdefghijklmnopqrstuvwxyz1234"),
+                )]),
+            ),
+            &runtime,
+        )
+        .await;
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(!result.success);
+        assert_eq!(
+            result.output,
+            "tool output blocked by secret leak detection"
+        );
+        assert_eq!(
+            result.metadata.get("security_blocked").map(String::as_str),
             Some("true")
         );
     }
