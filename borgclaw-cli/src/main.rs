@@ -7,6 +7,7 @@ use borgclaw_core::{
     channel::{ChannelType, InboundMessage, MessagePayload, MessageRouter, Sender},
     config::{load_config, save_config, AppConfig},
     security::SecurityLayer,
+    skills::SkillsRegistry,
 };
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -117,7 +118,7 @@ async fn main() {
             }
         }
         Commands::Config { action } => config_action(&config_path, config, action).await,
-        Commands::Skills { action } => skills_action(action).await,
+        Commands::Skills { action } => skills_action(&config, action).await,
         Commands::Status => status(config).await,
         Commands::Doctor => doctor(config).await,
     }
@@ -251,7 +252,7 @@ fn set_config_key(config: &mut AppConfig, key: &str, value: &str) -> bool {
     true
 }
 
-async fn skills_action(action: SkillsAction) {
+async fn skills_action(config: &AppConfig, action: SkillsAction) {
     match action {
         SkillsAction::List => {
             println!("Built-in skills:");
@@ -264,9 +265,22 @@ async fn skills_action(action: SkillsAction) {
             println!("  - fetch_url");
             println!("  - message");
             println!("  - schedule_task");
+            let registry = SkillsRegistry::new(config.skills.skills_path.clone());
+            if registry.load_all().await.is_ok() {
+                let installed = registry.list().await;
+                if !installed.is_empty() {
+                    println!("\nInstalled skills:");
+                    for (id, name) in installed {
+                        println!("  - {} ({})", name, id);
+                    }
+                }
+            }
         }
         SkillsAction::Install { name } => {
-            println!("Installing skill '{}' (not implemented)", name);
+            match install_local_skill(&config.skills.skills_path, &name) {
+                Ok(path) => println!("Installed skill to {:?}", path),
+                Err(err) => println!("{}", err),
+            }
         }
     }
 }
@@ -338,6 +352,66 @@ fn provider_env_var(provider: &str) -> Option<&'static str> {
         "google" => Some("GOOGLE_API_KEY"),
         "ollama" => None,
         _ => None,
+    }
+}
+
+fn install_local_skill(skills_path: &std::path::Path, source: &str) -> Result<std::path::PathBuf, String> {
+    let source_path = std::path::PathBuf::from(source);
+    if !source_path.exists() {
+        return Err(format!(
+            "Skill install currently supports local skill directories only. '{}' was not found.",
+            source
+        ));
+    }
+    if !source_path.is_dir() || !source_path.join("SKILL.md").exists() {
+        return Err("Expected a local skill directory containing SKILL.md".to_string());
+    }
+
+    std::fs::create_dir_all(skills_path).map_err(|e| e.to_string())?;
+    let skill_id = source_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "Could not determine skill directory name".to_string())?;
+    let destination = skills_path.join(skill_id);
+    if destination.exists() {
+        return Err(format!("Skill '{}' is already installed", skill_id));
+    }
+
+    copy_dir_recursive(&source_path, &destination)?;
+    Ok(destination)
+}
+
+fn copy_dir_recursive(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(destination).map_err(|e| e.to_string())?;
+    for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let entry_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if entry_path.is_dir() {
+            copy_dir_recursive(&entry_path, &destination_path)?;
+        } else {
+            std::fs::copy(&entry_path, &destination_path).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn installs_local_skill_directory() {
+        let root = std::env::temp_dir().join(format!("borgclaw_cli_skill_test_{}", uuid::Uuid::new_v4()));
+        let source = root.join("source-skill");
+        let skills_path = root.join("installed");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("SKILL.md"), "# Sample Skill").unwrap();
+
+        let destination = install_local_skill(&skills_path, source.to_str().unwrap()).unwrap();
+
+        assert!(destination.join("SKILL.md").exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
 
