@@ -277,7 +277,7 @@ async fn skills_action(config: &AppConfig, action: SkillsAction) {
             }
         }
         SkillsAction::Install { name } => {
-            match install_local_skill(&config.skills.skills_path, &name) {
+            match install_skill(&config.skills.skills_path, &name, config.skills.registry_url.as_deref()).await {
                 Ok(path) => println!("Installed skill to {:?}", path),
                 Err(err) => println!("{}", err),
             }
@@ -381,14 +381,31 @@ fn cli_in_path(binary: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn install_local_skill(skills_path: &std::path::Path, source: &str) -> Result<std::path::PathBuf, String> {
+async fn install_skill(
+    skills_path: &std::path::Path,
+    source: &str,
+    registry_url: Option<&str>,
+) -> Result<std::path::PathBuf, String> {
     let source_path = std::path::PathBuf::from(source);
-    if !source_path.exists() {
-        return Err(format!(
-            "Skill install currently supports local skill directories only. '{}' was not found.",
-            source
-        ));
+    if source_path.exists() {
+        return install_local_skill(skills_path, &source_path);
     }
+
+    if let Some(url) = skill_source_url(source, registry_url) {
+        let content = fetch_skill_manifest(&url).await?;
+        return install_skill_manifest(skills_path, source, &content);
+    }
+
+    Err(format!(
+        "Unsupported skill source '{}'. Use a local directory, owner/repo, or direct SKILL.md URL.",
+        source
+    ))
+}
+
+fn install_local_skill(
+    skills_path: &std::path::Path,
+    source_path: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
     if !source_path.is_dir() || !source_path.join("SKILL.md").exists() {
         return Err("Expected a local skill directory containing SKILL.md".to_string());
     }
@@ -405,6 +422,88 @@ fn install_local_skill(skills_path: &std::path::Path, source: &str) -> Result<st
 
     copy_dir_recursive(&source_path, &destination)?;
     Ok(destination)
+}
+
+fn install_skill_manifest(
+    skills_path: &std::path::Path,
+    source: &str,
+    content: &str,
+) -> Result<std::path::PathBuf, String> {
+    borgclaw_core::skills::SkillManifest::parse(content).map_err(|e| e.to_string())?;
+
+    std::fs::create_dir_all(skills_path).map_err(|e| e.to_string())?;
+    let skill_id = skill_install_id(source)?;
+    let destination = skills_path.join(&skill_id);
+    if destination.exists() {
+        return Err(format!("Skill '{}' is already installed", skill_id));
+    }
+
+    std::fs::create_dir_all(&destination).map_err(|e| e.to_string())?;
+    std::fs::write(destination.join("SKILL.md"), content).map_err(|e| e.to_string())?;
+    Ok(destination)
+}
+
+async fn fetch_skill_manifest(url: &str) -> Result<String, String> {
+    let response = reqwest::get(url).await.map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("failed to download skill manifest: http {}", response.status()));
+    }
+
+    let content = response.text().await.map_err(|e| e.to_string())?;
+    if content.trim().is_empty() {
+        return Err("downloaded skill manifest is empty".to_string());
+    }
+
+    Ok(content)
+}
+
+fn skill_source_url(source: &str, registry_url: Option<&str>) -> Option<String> {
+    if source.starts_with("http://") || source.starts_with("https://") {
+        return Some(source.to_string());
+    }
+
+    let normalized = source.trim_matches('/');
+    let parts = normalized.split('/').collect::<Vec<_>>();
+    if parts.len() != 2 || parts.iter().any(|part| part.is_empty()) {
+        return None;
+    }
+
+    if let Some(base) = registry_url.and_then(github_registry_base) {
+        return Some(format!("{}/{}/SKILL.md", base, normalized));
+    }
+
+    Some(format!(
+        "https://raw.githubusercontent.com/{}/{}/main/SKILL.md",
+        parts[0], parts[1]
+    ))
+}
+
+fn github_registry_base(registry_url: &str) -> Option<String> {
+    let trimmed = registry_url.strip_suffix('/').unwrap_or(registry_url);
+    let repo = trimmed.strip_prefix("https://github.com/")?;
+    let mut parts = repo.split('/');
+    let owner = parts.next()?;
+    let name = parts.next()?;
+    Some(format!("https://raw.githubusercontent.com/{}/{}/main", owner, name))
+}
+
+fn skill_install_id(source: &str) -> Result<String, String> {
+    let trimmed = source.trim_end_matches('/');
+    let tail = trimmed
+        .rsplit('/')
+        .next()
+        .filter(|segment| !segment.is_empty())
+        .ok_or_else(|| format!("Could not determine skill directory name from '{}'", source))?;
+    let tail = tail.strip_suffix(".git").unwrap_or(tail);
+    if tail.eq_ignore_ascii_case("skill.md") {
+        let parent = trimmed
+            .rsplit('/')
+            .nth(1)
+            .filter(|segment| !segment.is_empty())
+            .ok_or_else(|| format!("Could not determine skill directory name from '{}'", source))?;
+        return Ok(parent.to_string());
+    }
+    Ok(tail.to_string())
 }
 
 fn copy_dir_recursive(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
@@ -434,7 +533,40 @@ mod tests {
         std::fs::create_dir_all(&source).unwrap();
         std::fs::write(source.join("SKILL.md"), "# Sample Skill").unwrap();
 
-        let destination = install_local_skill(&skills_path, source.to_str().unwrap()).unwrap();
+        let destination = install_local_skill(&skills_path, &source).unwrap();
+
+        assert!(destination.join("SKILL.md").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn builds_github_repo_skill_url() {
+        let url = skill_source_url("openclaw/weather", None).unwrap();
+        assert_eq!(url, "https://raw.githubusercontent.com/openclaw/weather/main/SKILL.md");
+    }
+
+    #[test]
+    fn builds_registry_backed_skill_url() {
+        let url = skill_source_url("openclaw/weather", Some("https://github.com/openclaw/clawhub")).unwrap();
+        assert_eq!(url, "https://raw.githubusercontent.com/openclaw/clawhub/main/openclaw/weather/SKILL.md");
+    }
+
+    #[test]
+    fn derives_skill_id_from_sources() {
+        assert_eq!(skill_install_id("openclaw/weather").unwrap(), "weather");
+        assert_eq!(skill_install_id("https://example.com/skills/weather/SKILL.md").unwrap(), "weather");
+    }
+
+    #[test]
+    fn installs_downloaded_skill_manifest() {
+        let root = std::env::temp_dir().join(format!("borgclaw_cli_remote_skill_test_{}", uuid::Uuid::new_v4()));
+        let skills_path = root.join("installed");
+        let destination = install_skill_manifest(
+            &skills_path,
+            "openclaw/weather",
+            "name: Weather\ndescription: Weather skill\n## Instructions\nUse weather APIs.\n",
+        )
+        .unwrap();
 
         assert!(destination.join("SKILL.md").exists());
         std::fs::remove_dir_all(root).unwrap();
