@@ -165,7 +165,6 @@ impl SimpleAgent {
         mcp_config: Option<super::config::McpConfig>,
         security_config: Option<super::config::SecurityConfig>,
     ) -> Self {
-        let provider = ProviderFactory::create(&config).ok();
         Self {
             config,
             memory_config: memory_config.unwrap_or_default(),
@@ -175,7 +174,7 @@ impl SimpleAgent {
             tools: Vec::new(),
             state: AgentState::Idle,
             sessions: HashMap::new(),
-            provider,
+            provider: None,
             tool_runtime: None,
         }
     }
@@ -215,6 +214,17 @@ impl SimpleAgent {
             .tool_runtime
             .as_ref()
             .expect("tool runtime initialized"))
+    }
+
+    async fn ensure_provider(&mut self) -> Result<&dyn ChatProvider, AgentError> {
+        if self.provider.is_none() {
+            let provider = ProviderFactory::create(&self.config, &self.security_config)
+                .await
+                .map_err(|err| AgentError::ProviderError(err.to_string()))?;
+            self.provider = Some(provider);
+        }
+
+        Ok(self.provider.as_deref().expect("provider initialized"))
     }
 
     fn compact_session_if_needed(threshold: usize, session: &mut Session) {
@@ -288,7 +298,7 @@ impl Agent for SimpleAgent {
             InjectionCheck::Allowed => {}
         }
 
-        if self.provider.is_none() {
+        if self.ensure_provider().await.is_err() {
             self.state = AgentState::Error("provider initialization failed".to_string());
             return AgentResponse::text(format!(
                 "Provider '{}' is not configured or is unsupported in the current runtime.",
@@ -353,16 +363,20 @@ impl Agent for SimpleAgent {
             max_tokens,
             messages: request_messages,
         };
-        let provider = self.provider.as_ref().expect("provider checked above");
-
-        let response = match provider.complete(&request).await {
-            Ok(text) => {
-                let session =
-                    self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
-                session.add_message(Message::assistant(text.clone()));
-                self.state = AgentState::Idle;
-                AgentResponse::text(text)
-            }
+        let response = match self.ensure_provider().await {
+            Ok(provider) => match provider.complete(&request).await {
+                Ok(text) => {
+                    let session =
+                        self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
+                    session.add_message(Message::assistant(text.clone()));
+                    self.state = AgentState::Idle;
+                    AgentResponse::text(text)
+                }
+                Err(err) => {
+                    self.state = AgentState::Error(err.to_string());
+                    AgentResponse::text(format!("Provider error: {}", err))
+                }
+            },
             Err(err) => {
                 self.state = AgentState::Error(err.to_string());
                 AgentResponse::text(format!("Provider error: {}", err))
@@ -381,7 +395,7 @@ impl Agent for SimpleAgent {
 
     async fn configure(&mut self, config: &super::config::AgentConfig) -> Result<(), AgentError> {
         self.config = config.clone();
-        self.provider = ProviderFactory::create(config).ok();
+        self.provider = None;
         Ok(())
     }
 
