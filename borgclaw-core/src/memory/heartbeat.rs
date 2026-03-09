@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use cron::Schedule;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 
@@ -15,7 +16,7 @@ pub struct HeartbeatEngine {
     sender: mpsc::Sender<HeartbeatEvent>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct HeartbeatTask {
     pub id: String,
     pub name: String,
@@ -26,6 +27,28 @@ pub struct HeartbeatTask {
     pub run_count: u32,
     pub last_result: Option<HeartbeatResult>,
     pub metadata: HashMap<String, String>,
+    #[serde(skip, default = "default_task_handler")]
+    pub handler: Box<dyn HeartbeatHandler>,
+}
+
+impl std::fmt::Debug for HeartbeatTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeartbeatTask")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("schedule", &self.schedule)
+            .field("enabled", &self.enabled)
+            .field("last_run", &self.last_run)
+            .field("next_run", &self.next_run)
+            .field("run_count", &self.run_count)
+            .field("last_result", &self.last_result)
+            .field("metadata", &self.metadata)
+            .finish()
+    }
+}
+
+fn default_task_handler() -> Box<dyn HeartbeatHandler> {
+    Box::new(DefaultHeartbeatHandler)
 }
 
 impl HeartbeatTask {
@@ -40,6 +63,7 @@ impl HeartbeatTask {
             run_count: 0,
             last_result: None,
             metadata: HashMap::new(),
+            handler: default_task_handler(),
         }
     }
 
@@ -67,6 +91,14 @@ impl HeartbeatTask {
 
     pub fn disabled(mut self) -> Self {
         self.enabled = false;
+        self
+    }
+
+    pub fn with_handler<H>(mut self, handler: H) -> Self
+    where
+        H: HeartbeatHandler + 'static,
+    {
+        self.handler = Box::new(handler);
         self
     }
 
@@ -302,6 +334,14 @@ impl HeartbeatEngine {
     async fn execute_task(&self, task: &HeartbeatTask) -> HeartbeatResult {
         let start = std::time::Instant::now();
 
+        if !task.handler.is_default() {
+            return task
+                .handler
+                .handle(task)
+                .await
+                .with_duration(start.elapsed().as_millis() as u64);
+        }
+
         if let Some(handler) = self.handlers.read().await.get(&task.name).cloned() {
             return handler
                 .handle(task)
@@ -361,6 +401,59 @@ impl Default for HeartbeatEngine {
 #[async_trait]
 pub trait HeartbeatHandler: Send + Sync {
     async fn handle(&self, task: &HeartbeatTask) -> HeartbeatResult;
+
+    fn clone_box(&self) -> Box<dyn HeartbeatHandler>;
+
+    fn is_default(&self) -> bool {
+        false
+    }
+}
+
+impl Clone for Box<dyn HeartbeatHandler> {
+    fn clone(&self) -> Self {
+        self.clone_box()
+    }
+}
+
+pub trait IntoHeartbeatResult: Send + 'static {
+    fn into_heartbeat_result(self, task: &HeartbeatTask) -> HeartbeatResult;
+}
+
+impl IntoHeartbeatResult for HeartbeatResult {
+    fn into_heartbeat_result(self, _task: &HeartbeatTask) -> HeartbeatResult {
+        self
+    }
+}
+
+impl IntoHeartbeatResult for Result<(), String> {
+    fn into_heartbeat_result(self, task: &HeartbeatTask) -> HeartbeatResult {
+        match self {
+            Ok(()) => HeartbeatResult::success(&task.id, format!("Task '{}' executed", task.name)),
+            Err(error) => HeartbeatResult::failure(&task.id, error),
+        }
+    }
+}
+
+impl IntoHeartbeatResult for Result<(), &'static str> {
+    fn into_heartbeat_result(self, task: &HeartbeatTask) -> HeartbeatResult {
+        self.map_err(str::to_string).into_heartbeat_result(task)
+    }
+}
+
+#[async_trait]
+impl<F, Fut, Output> HeartbeatHandler for F
+where
+    F: Send + Sync + Clone + 'static + Fn(&HeartbeatTask) -> Fut,
+    Fut: Future<Output = Output> + Send + 'static,
+    Output: IntoHeartbeatResult,
+{
+    async fn handle(&self, task: &HeartbeatTask) -> HeartbeatResult {
+        (self)(task).await.into_heartbeat_result(task)
+    }
+
+    fn clone_box(&self) -> Box<dyn HeartbeatHandler> {
+        Box::new(self.clone())
+    }
 }
 
 pub struct DefaultHeartbeatHandler;
@@ -369,6 +462,14 @@ pub struct DefaultHeartbeatHandler;
 impl HeartbeatHandler for DefaultHeartbeatHandler {
     async fn handle(&self, task: &HeartbeatTask) -> HeartbeatResult {
         HeartbeatResult::success(&task.id, format!("Task '{}' executed", task.name))
+    }
+
+    fn clone_box(&self) -> Box<dyn HeartbeatHandler> {
+        Box::new(Self)
+    }
+
+    fn is_default(&self) -> bool {
+        true
     }
 }
 
@@ -382,6 +483,10 @@ mod tests {
     impl HeartbeatHandler for CustomHandler {
         async fn handle(&self, task: &HeartbeatTask) -> HeartbeatResult {
             HeartbeatResult::success(&task.id, format!("custom {}", task.name))
+        }
+
+        fn clone_box(&self) -> Box<dyn HeartbeatHandler> {
+            Box::new(Self)
         }
     }
 
@@ -414,5 +519,18 @@ mod tests {
             Some(HeartbeatEvent::EngineStarted)
         ));
         assert!(engine.get(&task_id).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn heartbeat_task_specific_handler_supports_documented_flow() {
+        let engine = HeartbeatEngine::new();
+        let task = HeartbeatTask::new("doc_task", "0 0 0 * * *")
+            .with_handler(|_task: &HeartbeatTask| async move { Ok::<(), String>(()) });
+        let id = engine.add_task(task).await;
+
+        let result = engine.run_task_now(&id).await.unwrap();
+
+        assert!(result.success);
+        assert_eq!(result.message, "Task 'doc_task' executed");
     }
 }
