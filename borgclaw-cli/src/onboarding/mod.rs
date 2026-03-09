@@ -444,7 +444,7 @@ fn configure_channels(
             if !phone.is_empty() {
                 entry
                     .extra
-                    .insert("phone".to_string(), toml::Value::String(phone));
+                    .insert("phone_number".to_string(), toml::Value::String(phone));
             }
         }
         entry.dm_policy = DmPolicy::Pairing;

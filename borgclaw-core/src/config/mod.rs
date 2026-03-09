@@ -93,6 +93,7 @@ pub struct ChannelConfig {
     /// Enable this channel
     pub enabled: bool,
     /// Bot token / credentials
+    #[serde(alias = "token")]
     #[serde(skip_serializing)]
     pub credentials: Option<String>,
     /// Allowed senders (empty = allow all)
@@ -114,7 +115,8 @@ pub enum DmPolicy {
     #[default]
     Pairing,
     /// No DMs allowed
-    Closed,
+    #[serde(alias = "closed")]
+    Blocked,
 }
 
 impl Default for ChannelConfig {
@@ -493,5 +495,56 @@ mod tests {
             PathBuf::from(".borgclaw/memory")
         );
         assert_eq!(config.memory.session_max_entries, 50);
+    }
+
+    #[test]
+    fn channel_config_parses_documented_aliases() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [channels.telegram]
+            enabled = true
+            token = "telegram-token"
+            dm_policy = "blocked"
+
+            [channels.signal]
+            enabled = true
+            phone_number = "+1234567890"
+
+            [channels.websocket]
+            enabled = true
+            port = 18789
+            require_pairing = true
+            "#,
+        )
+        .unwrap();
+
+        let telegram = config.channels.get("telegram").unwrap();
+        assert_eq!(telegram.credentials.as_deref(), Some("telegram-token"));
+        assert!(matches!(telegram.dm_policy, DmPolicy::Blocked));
+
+        let signal = config.channels.get("signal").unwrap();
+        assert_eq!(
+            signal
+                .extra
+                .get("phone_number")
+                .and_then(|value| value.as_str()),
+            Some("+1234567890")
+        );
+
+        let websocket = config.channels.get("websocket").unwrap();
+        assert_eq!(
+            websocket
+                .extra
+                .get("port")
+                .and_then(|value| value.as_integer()),
+            Some(18789)
+        );
+        assert_eq!(
+            websocket
+                .extra
+                .get("require_pairing")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
     }
 }

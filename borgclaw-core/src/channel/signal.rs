@@ -243,13 +243,15 @@ impl Channel for SignalChannel {
 
         self.phone_number = config
             .extra
-            .get("phone")
+            .get("phone_number")
+            .or_else(|| config.extra.get("phone"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
         if self.phone_number.is_none() {
             return Err(ChannelError::AuthFailed(
-                "Signal phone number not configured. Set channel.phone in config.".to_string(),
+                "Signal phone number not configured. Set channels.signal.phone_number in config."
+                    .to_string(),
             ));
         }
 
