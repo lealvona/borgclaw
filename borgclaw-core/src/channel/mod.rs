@@ -219,6 +219,9 @@ pub struct MessageRouter {
     agent: Arc<Mutex<crate::agent::SimpleAgent>>,
     security: Arc<crate::security::SecurityLayer>,
     channel_configs: HashMap<String, crate::config::ChannelConfig>,
+    agent_config: crate::config::AgentConfig,
+    memory_config: crate::config::MemoryConfig,
+    security_config: crate::config::SecurityConfig,
     sessions: Arc<RwLock<HashMap<String, crate::agent::SessionId>>>,
 }
 
@@ -241,6 +244,9 @@ impl MessageRouter {
                 config.security.clone(),
             )),
             channel_configs: config.channels.clone(),
+            agent_config: config.agent.clone(),
+            memory_config: config.memory.clone(),
+            security_config: config.security.clone(),
             sessions: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -263,18 +269,27 @@ impl MessageRouter {
         self.enforce_sender_policy(&msg).await?;
 
         let session_id = self.session_for(&msg).await;
+        let content = message_text(&msg.content);
+        if let Some(response) = self.builtin_command_response(&msg, &content) {
+            let outbound = OutboundMessage {
+                target: msg.sender.id.clone(),
+                channel: msg.channel.clone(),
+                content: MessagePayload::text(response.text.clone()),
+                reply_to: None,
+                group_id: msg.group_id.clone(),
+            };
+
+            return Ok(RouteOutcome {
+                session_id,
+                response,
+                outbound,
+            });
+        }
+
         let mut metadata = HashMap::new();
         if let Some(group_id) = &msg.group_id {
             metadata.insert("group_id".to_string(), group_id.clone());
         }
-
-        let content = match &msg.content {
-            MessagePayload::Text(text)
-            | MessagePayload::Markdown(text)
-            | MessagePayload::Html(text) => text.clone(),
-            MessagePayload::Media { url, .. } => url.clone(),
-            MessagePayload::File { path, .. } => path.clone(),
-        };
 
         let ctx = crate::agent::AgentContext {
             session_id: session_id.clone(),
@@ -367,6 +382,43 @@ impl MessageRouter {
             .or_insert_with(crate::agent::SessionId::new)
             .clone()
     }
+
+    fn builtin_command_response(
+        &self,
+        msg: &InboundMessage,
+        content: &str,
+    ) -> Option<crate::agent::AgentResponse> {
+        let command = content.trim();
+        if command.is_empty() {
+            return None;
+        }
+
+        match command {
+            "/help" => Some(crate::agent::AgentResponse::text(
+                "Available commands:\n/help - Show channel command help\n/status - Show agent status",
+            )),
+            "/status" => Some(crate::agent::AgentResponse::text(format!(
+                "BorgClaw status\nchannel={}\nprovider={}\nmodel={}\nworkspace={}\nmemory={}\npairing={}",
+                msg.channel.0,
+                self.agent_config.provider,
+                self.agent_config.model,
+                self.agent_config.workspace.display(),
+                self.memory_config.database_path.display(),
+                if self.security_config.pairing.enabled { "enabled" } else { "disabled" }
+            ))),
+            _ => None,
+        }
+    }
+}
+
+fn message_text(content: &MessagePayload) -> String {
+    match content {
+        MessagePayload::Text(text)
+        | MessagePayload::Markdown(text)
+        | MessagePayload::Html(text) => text.clone(),
+        MessagePayload::Media { url, .. } => url.clone(),
+        MessagePayload::File { path, .. } => path.clone(),
+    }
 }
 
 pub struct RouteOutcome {
@@ -419,5 +471,33 @@ mod tests {
         let one = router.route(inbound.clone()).await.unwrap();
         let two = router.route(inbound).await.unwrap();
         assert_eq!(one.session_id.0, two.session_id.0);
+    }
+
+    #[tokio::test]
+    async fn router_handles_documented_help_and_status_commands() {
+        let router = MessageRouter::from_config(&websocket_config());
+        let help = InboundMessage {
+            channel: ChannelType::telegram(),
+            sender: Sender::new("user-1").with_name("User"),
+            content: MessagePayload::text("/help"),
+            group_id: Some("group-1".to_string()),
+            timestamp: chrono::Utc::now(),
+            raw: serde_json::Value::Null,
+        };
+        let status = InboundMessage {
+            content: MessagePayload::text("/status"),
+            ..help.clone()
+        };
+
+        let help_outcome = router.route(help).await.unwrap();
+        assert!(help_outcome.response.text.contains("/help"));
+        assert!(help_outcome.response.text.contains("/status"));
+
+        let status_outcome = router.route(status).await.unwrap();
+        assert!(status_outcome.response.text.contains("BorgClaw status"));
+        assert!(status_outcome
+            .response
+            .text
+            .contains("provider=unsupported"));
     }
 }
