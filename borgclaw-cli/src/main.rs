@@ -64,7 +64,10 @@ enum ConfigAction {
 #[derive(Subcommand)]
 enum SkillsAction {
     /// List skills
-    List,
+    List {
+        /// Optional substring filter for installed and registry skills
+        filter: Option<String>,
+    },
     /// Install a skill
     Install { name: String },
 }
@@ -255,7 +258,8 @@ fn set_config_key(config: &mut AppConfig, key: &str, value: &str) -> bool {
 
 async fn skills_action(config: &AppConfig, action: SkillsAction) {
     match action {
-        SkillsAction::List => {
+        SkillsAction::List { filter } => {
+            let filter = filter.map(|value| value.to_lowercase());
             println!("Built-in skills:");
             println!("  - memory_store");
             println!("  - memory_recall");
@@ -267,11 +271,18 @@ async fn skills_action(config: &AppConfig, action: SkillsAction) {
             println!("  - message");
             println!("  - schedule_task");
             let registry = SkillsRegistry::new(config.skills.skills_path.clone());
+            let mut installed_ids = std::collections::HashSet::new();
             if registry.load_all().await.is_ok() {
-                let installed = registry.list().await;
+                let mut installed = registry.list().await;
+                if let Some(filter) = &filter {
+                    installed.retain(|(id, name)| {
+                        id.to_lowercase().contains(filter) || name.to_lowercase().contains(filter)
+                    });
+                }
                 if !installed.is_empty() {
                     println!("\nInstalled skills:");
                     for (id, name) in installed {
+                        installed_ids.insert(id.clone());
                         println!("  - {} ({})", name, id);
                     }
                 }
@@ -279,9 +290,15 @@ async fn skills_action(config: &AppConfig, action: SkillsAction) {
             if let Some(registry_url) = config.skills.registry_url.as_deref() {
                 match fetch_registry_skills(registry_url).await {
                     Ok(skills) if !skills.is_empty() => {
+                        let skills = filter_registry_skills(skills, filter.as_deref());
                         println!("\nRegistry skills:");
                         for skill in skills {
-                            println!("  - {}", skill);
+                            let status = if installed_ids.contains(&registry_skill_install_id(&skill)) {
+                                "installed"
+                            } else {
+                                "available"
+                            };
+                            println!("  - {} [{}]", skill, status);
                         }
                     }
                     Ok(_) => println!("\nRegistry skills: none found"),
@@ -538,6 +555,20 @@ fn extract_registry_skills(tree: &GitHubTreeResponse) -> Vec<String> {
     skills
 }
 
+fn filter_registry_skills(skills: Vec<String>, filter: Option<&str>) -> Vec<String> {
+    match filter {
+        Some(filter) => skills
+            .into_iter()
+            .filter(|skill| skill.to_lowercase().contains(filter))
+            .collect(),
+        None => skills,
+    }
+}
+
+fn registry_skill_install_id(skill: &str) -> String {
+    skill.rsplit('/').next().unwrap_or(skill).to_string()
+}
+
 #[derive(Debug, Deserialize)]
 struct GitHubTreeResponse {
     tree: Vec<GitHubTreeEntry>,
@@ -664,6 +695,24 @@ mod tests {
             extract_registry_skills(&tree),
             vec!["openclaw/calendar".to_string(), "openclaw/weather".to_string()]
         );
+    }
+
+    #[test]
+    fn filters_registry_skills_by_substring() {
+        let skills = vec![
+            "openclaw/weather".to_string(),
+            "openclaw/calendar".to_string(),
+        ];
+
+        assert_eq!(
+            filter_registry_skills(skills, Some("weath")),
+            vec!["openclaw/weather".to_string()]
+        );
+    }
+
+    #[test]
+    fn derives_install_id_from_registry_skill() {
+        assert_eq!(registry_skill_install_id("openclaw/weather"), "weather");
     }
 }
 
