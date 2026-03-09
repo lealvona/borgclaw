@@ -164,6 +164,10 @@ impl HeartbeatEngine {
         id
     }
 
+    pub async fn add_task(&self, task: HeartbeatTask) -> String {
+        self.register(task).await
+    }
+
     pub async fn register_handler(
         &self,
         task_name: impl Into<String>,
@@ -222,20 +226,26 @@ impl HeartbeatEngine {
             .collect()
     }
 
-    pub async fn start(&self) {
+    pub async fn start(&self) -> Result<(), String> {
         let mut running = self.running.write().await;
         *running = true;
         drop(running);
 
-        let _ = self.sender.send(HeartbeatEvent::EngineStarted).await;
+        self.sender
+            .send(HeartbeatEvent::EngineStarted)
+            .await
+            .map_err(|err| err.to_string())
     }
 
-    pub async fn stop(&self) {
+    pub async fn stop(&self) -> Result<(), String> {
         let mut running = self.running.write().await;
         *running = false;
         drop(running);
 
-        let _ = self.sender.send(HeartbeatEvent::EngineStopped).await;
+        self.sender
+            .send(HeartbeatEvent::EngineStopped)
+            .await
+            .map_err(|err| err.to_string())
     }
 
     pub async fn is_running(&self) -> bool {
@@ -388,5 +398,21 @@ mod tests {
         let result = engine.run_task_now(&id).await.unwrap();
 
         assert_eq!(result.message, "custom custom_task");
+    }
+
+    #[tokio::test]
+    async fn heartbeat_add_task_and_start_follow_documented_contract() {
+        let (sender, mut receiver) = mpsc::channel(2);
+        let engine = HeartbeatEngine::new().with_event_channel(sender);
+        let task_id = engine
+            .add_task(HeartbeatTask::new("doc_task", "0 0 0 * * *"))
+            .await;
+
+        assert!(engine.start().await.is_ok());
+        assert!(matches!(
+            receiver.recv().await,
+            Some(HeartbeatEvent::EngineStarted)
+        ));
+        assert!(engine.get(&task_id).await.is_some());
     }
 }
