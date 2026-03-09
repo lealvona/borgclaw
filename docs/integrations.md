@@ -115,25 +115,34 @@ permissions:
 
 ### Installing Skills
 
+Current runtime support:
+- Local skill directory installs with `SKILL.md`
+
+Planned but not yet implemented:
+- ClawHub registry installs
+- Remote archive installs by URL
+
 ```bash
-# From ClawHub
-borgclaw skill install openclaw/weather
-
-# From URL
-borgclaw skill install https://example.com/skill.tar.gz
-
 # From local path
 borgclaw skill install ./my-skill
+
+# Planned: from ClawHub
+# borgclaw skill install openclaw/weather
+
+# Planned: from URL
+# borgclaw skill install https://example.com/skill.tar.gz
 ```
 
 ### Publishing Skills
 
+Planned workflow only; packaging and publishing are not implemented in the current CLI.
+
 ```bash
 # Package
-borgclaw skill package ./my-skill
+# borgclaw skill package ./my-skill
 
 # Publish to ClawHub
-borgclaw skill publish ./my-skill.tar.gz
+# borgclaw skill publish ./my-skill.tar.gz
 ```
 
 ## Custom Integrations
