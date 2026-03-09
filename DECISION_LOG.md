@@ -35,3 +35,22 @@
 - Phase 1 focuses on provider-backed execution and policy-aware tool plumbing.
 - Transports and integrations should be wired through shared approval-aware runtime paths.
 - Security policy remains a first-order constraint for subsequent features.
+
+---
+
+## D003: Security Config Must Match Documented Contract
+**Decision**: Implement the documented security config surface directly in runtime parsing and enforcement rather than narrowing `docs/security.md`.
+
+**Rationale**:
+- The current docs explicitly define the supported security TOML shape.
+- Config drift in security creates deployment risk, not just documentation debt.
+- Prompt injection handling, encrypted secret persistence, and command blocklist behavior are core runtime contracts.
+
+**Alternatives Considered**:
+- Rewrite `docs/security.md` to match the smaller runtime surface.
+- Leave the documented fields as aspirational and accept parse/runtime mismatch.
+
+**Impact**:
+- `SecurityConfig` must accept the documented fields and nesting.
+- The runtime must honor `injection_action`, `secrets_encryption`, `secrets_path`, and `[security.pairing]`.
+- Any temporary narrowing elsewhere should be documented explicitly until implemented.

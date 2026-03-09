@@ -117,9 +117,14 @@ permissions:
 
 Current runtime support:
 - Local skill directory installs with `SKILL.md`
-- GitHub `owner/repo` installs that fetch `SKILL.md`
+- GitHub `owner/repo` installs that fetch the repository-root `SKILL.md` from `main`
 - Direct remote `SKILL.md` URL installs
 - Registry-backed skill listing for GitHub-hosted registries such as ClawHub
+
+Current limitations within that support:
+- Remote installs currently persist the downloaded `SKILL.md` manifest only; companion assets and packaged archives are not fetched yet
+- Registry listing currently supports GitHub-hosted registries only
+- Remote URL installs must point directly to `SKILL.md`
 
 Planned but not yet implemented:
 - Remote archive installs by URL
