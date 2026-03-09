@@ -117,20 +117,23 @@ permissions:
 
 Current runtime support:
 - Local skill directory installs with `SKILL.md`
+- GitHub `owner/repo` installs that fetch `SKILL.md`
+- Direct remote `SKILL.md` URL installs
+- Registry-backed skill listing for GitHub-hosted registries such as ClawHub
 
 Planned but not yet implemented:
-- ClawHub registry installs
 - Remote archive installs by URL
+- Publishing/package workflow
 
 ```bash
 # From local path
 borgclaw skill install ./my-skill
 
-# Planned: from ClawHub
-# borgclaw skill install openclaw/weather
+# From ClawHub-style GitHub repo path
+borgclaw skill install openclaw/weather
 
-# Planned: from URL
-# borgclaw skill install https://example.com/skill.tar.gz
+# From direct SKILL.md URL
+borgclaw skill install https://example.com/skills/weather/SKILL.md
 ```
 
 ### Publishing Skills
