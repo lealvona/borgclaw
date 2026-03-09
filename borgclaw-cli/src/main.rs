@@ -146,14 +146,24 @@ async fn repl(config: AppConfig, _config_path: PathBuf) {
             continue;
         }
 
-        if input == "exit" || input == "quit" {
-            println!("Goodbye!");
-            break;
-        }
-
-        if input == "help" {
-            print_help();
-            continue;
+        match parse_repl_command(input) {
+            ReplCommand::Exit => {
+                println!("Goodbye!");
+                break;
+            }
+            ReplCommand::Help => {
+                print_help();
+                continue;
+            }
+            ReplCommand::Status => {
+                status(config.clone()).await;
+                continue;
+            }
+            ReplCommand::Clear => {
+                clear_screen();
+                continue;
+            }
+            ReplCommand::Message => {}
         }
 
         let message = InboundMessage {
@@ -808,6 +818,21 @@ mod tests {
     fn derives_install_id_from_registry_skill() {
         assert_eq!(registry_skill_install_id("openclaw/weather"), "weather");
     }
+
+    #[test]
+    fn clear_screen_sequence_matches_documented_terminal_reset() {
+        assert_eq!(CLEAR_SCREEN_SEQUENCE, "\x1B[2J\x1B[H");
+    }
+
+    #[test]
+    fn repl_parser_recognizes_documented_local_commands() {
+        assert_eq!(parse_repl_command("exit"), ReplCommand::Exit);
+        assert_eq!(parse_repl_command("quit"), ReplCommand::Exit);
+        assert_eq!(parse_repl_command("help"), ReplCommand::Help);
+        assert_eq!(parse_repl_command("status"), ReplCommand::Status);
+        assert_eq!(parse_repl_command("clear"), ReplCommand::Clear);
+        assert_eq!(parse_repl_command("hello"), ReplCommand::Message);
+    }
 }
 
 fn print_help() {
@@ -816,4 +841,30 @@ fn print_help() {
     println!("  help         - Show this help message");
     println!("  status       - Show agent status");
     println!("  clear        - Clear screen");
+}
+
+const CLEAR_SCREEN_SEQUENCE: &str = "\x1B[2J\x1B[H";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplCommand {
+    Exit,
+    Help,
+    Status,
+    Clear,
+    Message,
+}
+
+fn parse_repl_command(input: &str) -> ReplCommand {
+    match input {
+        "exit" | "quit" => ReplCommand::Exit,
+        "help" => ReplCommand::Help,
+        "status" => ReplCommand::Status,
+        "clear" => ReplCommand::Clear,
+        _ => ReplCommand::Message,
+    }
+}
+
+fn clear_screen() {
+    print!("{}", CLEAR_SCREEN_SEQUENCE);
+    let _ = std::io::Write::flush(&mut std::io::stdout());
 }
