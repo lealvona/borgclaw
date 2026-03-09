@@ -70,6 +70,15 @@ impl Message {
             tool_calls: Vec::new(),
         }
     }
+
+    pub fn with_tool_call(mut self, tool_call: super::ToolCall) -> Self {
+        self.tool_calls.push(tool_call);
+        self
+    }
+
+    pub fn is_important(&self) -> bool {
+        !self.tool_calls.is_empty()
+    }
 }
 
 /// Message role
@@ -176,19 +185,35 @@ impl Session {
     }
 
     pub fn compact_with_recent(&mut self, summary: &str, keep_recent: usize) {
+        self.compact_with_recent_and_important(summary, keep_recent, false);
+    }
+
+    pub fn compact_with_recent_and_important(
+        &mut self,
+        summary: &str,
+        keep_recent: usize,
+        keep_important: bool,
+    ) {
         let system = self
             .messages
             .iter()
             .filter(|m| m.role == MessageRole::System)
             .cloned()
             .collect::<Vec<_>>();
-        let recent = self
+        let non_system = self
             .messages
             .iter()
             .filter(|m| m.role != MessageRole::System)
-            .rev()
-            .take(keep_recent)
             .cloned()
+            .collect::<Vec<_>>();
+        let recent_start = non_system.len().saturating_sub(keep_recent);
+        let preserved = non_system
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, message)| {
+                let preserve = index >= recent_start || (keep_important && message.is_important());
+                preserve.then_some(message)
+            })
             .collect::<Vec<_>>();
 
         self.messages.clear();
@@ -202,7 +227,7 @@ impl Session {
             summary
         )));
 
-        for msg in recent.into_iter().rev() {
+        for msg in preserved {
             self.messages.push_back(msg);
         }
     }

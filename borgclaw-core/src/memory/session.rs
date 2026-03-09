@@ -1,6 +1,6 @@
 //! Session memory with auto-compaction support
 
-use super::{MemoryEntry, MemoryError};
+use super::MemoryError;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -68,6 +68,19 @@ impl SessionMessage {
     pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.metadata.insert(key.into(), value.into());
         self
+    }
+
+    pub fn mark_important(mut self) -> Self {
+        self.metadata
+            .insert("important".to_string(), "true".to_string());
+        self
+    }
+
+    pub fn is_important(&self) -> bool {
+        self.metadata
+            .get("important")
+            .map(|value| value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
     }
 }
 
@@ -171,6 +184,19 @@ impl SessionCompactor {
         self
     }
 
+    pub fn keep_recent(self, n: usize) -> Self {
+        self.with_keep_recent(n)
+    }
+
+    pub fn with_keep_important(mut self, keep_important: bool) -> Self {
+        self.keep_important = keep_important;
+        self
+    }
+
+    pub fn keep_important(self, keep_important: bool) -> Self {
+        self.with_keep_important(keep_important)
+    }
+
     pub fn should_compact(&self, session: &SessionMemory) -> bool {
         session.len() > session.compaction_threshold
     }
@@ -184,14 +210,22 @@ impl SessionCompactor {
             });
         }
 
-        let messages_to_remove = session.len() - self.keep_recent;
         let mut tokens_saved = 0;
+        let recent_start = session.len().saturating_sub(self.keep_recent);
+        let mut removed_messages = Vec::new();
+        let mut preserved_messages = Vec::new();
 
-        let removed_messages: Vec<SessionMessage> = session
-            .messages
-            .drain(0..messages_to_remove)
-            .inspect(|m| tokens_saved += m.token_count)
-            .collect();
+        for (index, message) in session.messages.drain(..).enumerate() {
+            let preserve = index >= recent_start || (self.keep_important && message.is_important());
+            if preserve {
+                preserved_messages.push(message);
+            } else {
+                tokens_saved += message.token_count;
+                removed_messages.push(message);
+            }
+        }
+        let messages_removed = removed_messages.len();
+        session.messages = preserved_messages.into();
 
         let summary = if !removed_messages.is_empty() {
             Some(self.generate_summary(&removed_messages))
@@ -206,7 +240,7 @@ impl SessionCompactor {
         }
 
         Ok(CompactionResult {
-            messages_removed: messages_to_remove,
+            messages_removed,
             tokens_saved,
             summary,
         })
@@ -253,4 +287,52 @@ pub struct CompactionResult {
     pub messages_removed: usize,
     pub tokens_saved: usize,
     pub summary: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compactor_supports_documented_builder_aliases() {
+        let mut session = SessionMemory::new("session").with_compaction_threshold(3);
+        session.push_user("old 1");
+        session.push_user("old 2");
+        session.push_user("recent 1");
+        session.push_user("recent 2");
+
+        let result = SessionCompactor::new()
+            .keep_recent(2)
+            .keep_important(false)
+            .compact(&mut session)
+            .unwrap();
+
+        assert_eq!(result.messages_removed, 2);
+        assert_eq!(session.len(), 2);
+    }
+
+    #[test]
+    fn compactor_preserves_important_messages_when_enabled() {
+        let mut session = SessionMemory::new("session").with_compaction_threshold(3);
+        session.push(SessionMessage::user("old important").mark_important());
+        session.push(SessionMessage::assistant("old normal"));
+        session.push(SessionMessage::user("recent 1"));
+        session.push(SessionMessage::assistant("recent 2"));
+
+        let result = SessionCompactor::new()
+            .keep_recent(2)
+            .keep_important(true)
+            .compact(&mut session)
+            .unwrap();
+
+        let contents = session
+            .messages()
+            .map(|message| message.content.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(result.messages_removed, 1);
+        assert!(contents.iter().any(|content| content == "old important"));
+        assert!(contents.iter().any(|content| content == "recent 1"));
+        assert!(contents.iter().any(|content| content == "recent 2"));
+    }
 }

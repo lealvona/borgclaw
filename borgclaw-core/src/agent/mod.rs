@@ -227,8 +227,11 @@ impl SimpleAgent {
         Ok(self.provider.as_deref().expect("provider initialized"))
     }
 
-    fn compact_session_if_needed(threshold: usize, session: &mut Session) {
-        let threshold = threshold.max(4);
+    fn compact_session_if_needed(
+        memory_config: &super::config::MemoryConfig,
+        session: &mut Session,
+    ) {
+        let threshold = memory_config.session_max_entries.max(4);
         if session.len() <= threshold {
             return;
         }
@@ -243,7 +246,7 @@ impl SimpleAgent {
             return;
         }
 
-        let keep_recent = (threshold / 2).max(4);
+        let keep_recent = memory_config.session_keep_recent.max(2);
         let removed = non_system.len().saturating_sub(keep_recent);
         if removed == 0 {
             return;
@@ -266,7 +269,11 @@ impl SimpleAgent {
                 .join("; ")
         );
 
-        session.compact_with_recent(&summary, keep_recent);
+        session.compact_with_recent_and_important(
+            &summary,
+            keep_recent,
+            memory_config.session_keep_important,
+        );
     }
 }
 
@@ -335,7 +342,10 @@ impl Agent for SimpleAgent {
             let response_text = result.output.clone();
             let session =
                 self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
-            session.add_message(Message::assistant(response_text.clone()));
+            session.add_message(
+                Message::assistant(response_text.clone())
+                    .with_tool_call(call.clone().with_result(result.clone())),
+            );
             self.state = AgentState::Idle;
             return AgentResponse {
                 text: response_text,
@@ -346,10 +356,10 @@ impl Agent for SimpleAgent {
         }
 
         {
-            let threshold = self.memory_config.session_max_entries;
+            let memory_config = self.memory_config.clone();
             let session =
                 self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
-            Self::compact_session_if_needed(threshold, session);
+            Self::compact_session_if_needed(&memory_config, session);
         }
         let request_messages = self
             .ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned())
@@ -423,7 +433,14 @@ mod tests {
             session.add_message(Message::assistant(format!("assistant {}", index)));
         }
 
-        SimpleAgent::compact_session_if_needed(6, &mut session);
+        let memory_config = MemoryConfig {
+            session_max_entries: 6,
+            session_keep_recent: 4,
+            session_keep_important: false,
+            ..MemoryConfig::default()
+        };
+
+        SimpleAgent::compact_session_if_needed(&memory_config, &mut session);
 
         let messages = session.messages().iter().collect::<Vec<_>>();
         assert!(messages
@@ -432,6 +449,39 @@ mod tests {
         assert!(messages.iter().any(|msg| msg.content == "assistant 7"));
         assert!(messages.iter().any(|msg| msg.content == "user 7"));
         assert!(!messages.iter().any(|msg| msg.content == "user 0"));
+    }
+
+    #[test]
+    fn compaction_preserves_important_tool_messages_when_enabled() {
+        let mut session = Session::new(None, 64);
+        session.add_message(Message::system("system"));
+        session.add_message(Message::assistant("tool result").with_tool_call(ToolCall {
+            id: "call-1".to_string(),
+            name: "web_search".to_string(),
+            arguments: HashMap::new(),
+            result: None,
+            error: None,
+        }));
+        for index in 0..6 {
+            session.add_message(Message::user(format!("user {}", index)));
+            session.add_message(Message::assistant(format!("assistant {}", index)));
+        }
+
+        let memory_config = MemoryConfig {
+            session_max_entries: 6,
+            session_keep_recent: 2,
+            session_keep_important: true,
+            ..MemoryConfig::default()
+        };
+
+        SimpleAgent::compact_session_if_needed(&memory_config, &mut session);
+
+        let messages = session.messages().iter().collect::<Vec<_>>();
+        assert!(messages.iter().any(|msg| msg.content == "tool result"));
+        assert!(messages.iter().any(|msg| msg.content == "assistant 5"));
+        assert!(messages
+            .iter()
+            .any(|msg| msg.content.contains("summarized")));
     }
 
     #[tokio::test]
