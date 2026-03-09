@@ -129,6 +129,10 @@ impl Session {
     pub fn messages(&self) -> &VecDeque<Message> {
         &self.messages
     }
+
+    pub fn len(&self) -> usize {
+        self.messages.len()
+    }
     
     pub fn system_prompt(&self) -> String {
         self.messages
@@ -168,6 +172,36 @@ impl Session {
             "[Previous conversation summarized]: {}",
             summary
         )));
+    }
+
+    pub fn compact_with_recent(&mut self, summary: &str, keep_recent: usize) {
+        let system = self.messages
+            .iter()
+            .filter(|m| m.role == MessageRole::System)
+            .cloned()
+            .collect::<Vec<_>>();
+        let recent = self.messages
+            .iter()
+            .filter(|m| m.role != MessageRole::System)
+            .rev()
+            .take(keep_recent)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        self.messages.clear();
+
+        for msg in system {
+            self.messages.push_back(msg);
+        }
+
+        self.messages.push_back(Message::system(format!(
+            "[Previous conversation summarized]: {}",
+            summary
+        )));
+
+        for msg in recent.into_iter().rev() {
+            self.messages.push_back(msg);
+        }
     }
 }
 

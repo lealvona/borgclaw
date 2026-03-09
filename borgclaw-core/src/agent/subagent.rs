@@ -1,9 +1,8 @@
 //! Background sub-agents for parallel task execution
 
-use crate::agent::{Agent, AgentContext, AgentResponse, SenderInfo, SessionId, Tool};
-use crate::config::AgentConfig;
-use crate::memory::{Memory, MemoryEntry, MemoryQuery};
-use async_trait::async_trait;
+use crate::agent::{builtin_tools, Agent, AgentContext, SenderInfo, SessionId, SimpleAgent};
+use crate::config::{AgentConfig, MemoryConfig, SecurityConfig};
+use crate::memory::{new_entry_for_group, Memory, SqliteMemory};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -110,6 +109,8 @@ pub struct SubAgentResult {
 
 pub struct SubAgentCoordinator {
     config: AgentConfig,
+    memory_config: MemoryConfig,
+    security_config: SecurityConfig,
     tasks: Arc<RwLock<HashMap<String, SubAgentTask>>>,
     result_sender: mpsc::Sender<SubAgentResult>,
     max_concurrent: usize,
@@ -117,8 +118,24 @@ pub struct SubAgentCoordinator {
 
 impl SubAgentCoordinator {
     pub fn new(config: AgentConfig, result_sender: mpsc::Sender<SubAgentResult>) -> Self {
+        Self::with_configs(
+            config,
+            MemoryConfig::default(),
+            SecurityConfig::default(),
+            result_sender,
+        )
+    }
+
+    pub fn with_configs(
+        config: AgentConfig,
+        memory_config: MemoryConfig,
+        security_config: SecurityConfig,
+        result_sender: mpsc::Sender<SubAgentResult>,
+    ) -> Self {
         Self {
             config,
+            memory_config,
+            security_config,
             tasks: Arc::new(RwLock::new(HashMap::new())),
             result_sender,
             max_concurrent: 5,
@@ -192,17 +209,22 @@ impl SubAgentCoordinator {
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
-        let sub_result = match result {
-            Ok(output) => SubAgentResult {
+        let (sub_result, status) = match result {
+            Ok(output) => (SubAgentResult {
                 task_id: task_id.to_string(),
                 success: true,
-                output,
-                tools_used: vec![],
+                output: output.output,
+                tools_used: output.tools_used,
                 duration_ms,
-                memory_entries_created: 0,
+                memory_entries_created: output.memory_entries_created,
                 error: None,
-            },
-            Err(e) => SubAgentResult {
+            }, TaskStatus::Completed),
+            Err(e) => {
+                let status = match e {
+                    SubAgentError::Timeout(_) => TaskStatus::Timeout,
+                    _ => TaskStatus::Failed,
+                };
+                (SubAgentResult {
                 task_id: task_id.to_string(),
                 success: false,
                 output: String::new(),
@@ -210,17 +232,14 @@ impl SubAgentCoordinator {
                 duration_ms,
                 memory_entries_created: 0,
                 error: Some(e.to_string()),
-            },
+            }, status)
+            }
         };
 
         {
             let mut tasks = self.tasks.write().await;
             if let Some(t) = tasks.get_mut(task_id) {
-                t.status = if sub_result.success {
-                    TaskStatus::Completed
-                } else {
-                    TaskStatus::Failed
-                };
+                t.status = status;
                 t.result = Some(sub_result.clone());
             }
         }
@@ -236,20 +255,64 @@ impl SubAgentCoordinator {
         }
     }
 
-    async fn execute_task_inner(&self, task: &SubAgentTask) -> Result<String, SubAgentError> {
+    async fn execute_task_inner(&self, task: &SubAgentTask) -> Result<InnerTaskResult, SubAgentError> {
         let session_id = SessionId::new();
         let ctx = AgentContext {
-            session_id,
+            session_id: session_id.clone(),
             message: task.input.clone(),
             sender: SenderInfo {
                 id: format!("subagent:{}", task.id),
                 name: Some(task.name.clone()),
                 channel: "subagent".to_string(),
             },
-            metadata: HashMap::new(),
+            metadata: HashMap::from([("group_id".to_string(), format!("subagent:{}", task.id))]),
         };
 
-        Ok(format!("Sub-agent task '{}' processed: {}", task.name, task.input))
+        let mut agent = SimpleAgent::new(
+            self.config.clone(),
+            Some(self.memory_config.clone()),
+            Some(self.security_config.clone()),
+        );
+        let tools = builtin_tools()
+            .into_iter()
+            .filter(|tool| task.tools_allowed.is_empty() || task.tools_allowed.iter().any(|allowed| allowed == &tool.name))
+            .collect::<Vec<_>>();
+        for tool in tools {
+            agent.register_tool(tool);
+        }
+
+        let response = agent.process(&ctx).await;
+        let tools_used = response
+            .tool_calls
+            .iter()
+            .map(|call| call.name.clone())
+            .collect::<Vec<_>>();
+
+        let memory_entries_created = match task.memory_access {
+            MemoryAccessType::ReadWrite => {
+                let memory = SqliteMemory::new(self.memory_config.memory_path.clone());
+                memory
+                    .init()
+                    .await
+                    .map_err(|e| SubAgentError::ExecutionFailed(e.to_string()))?;
+                memory
+                    .store(new_entry_for_group(
+                        format!("subagent:{}", task.name),
+                        response.text.clone(),
+                        format!("subagent:{}", task.id),
+                    ))
+                    .await
+                    .map_err(|e| SubAgentError::ExecutionFailed(e.to_string()))?;
+                1
+            }
+            MemoryAccessType::ReadOnly | MemoryAccessType::None => 0,
+        };
+
+        Ok(InnerTaskResult {
+            output: response.text,
+            tools_used,
+            memory_entries_created,
+        })
     }
 
     pub async fn run_pending(&self) -> Vec<Result<SubAgentResult, SubAgentError>> {
@@ -268,6 +331,12 @@ impl SubAgentCoordinator {
         }
         results
     }
+}
+
+struct InnerTaskResult {
+    output: String,
+    tools_used: Vec<String>,
+    memory_entries_created: usize,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -351,5 +420,45 @@ impl SubAgentBuilder {
             status: TaskStatus::Pending,
             result: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn subagent_executes_agent_and_records_memory_when_allowed() {
+        let root = std::env::temp_dir().join(format!("borgclaw_subagent_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let (sender, mut receiver) = mpsc::channel(4);
+        let coordinator = SubAgentCoordinator::with_configs(
+            AgentConfig {
+                provider: "unsupported".to_string(),
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            MemoryConfig {
+                memory_path: root.join("memory"),
+                ..Default::default()
+            },
+            SecurityConfig::default(),
+            sender,
+        );
+        let task_id = coordinator
+            .submit(
+                SubAgentBuilder::new("analysis")
+                    .memory_access(MemoryAccessType::ReadWrite)
+                    .build("hello"),
+            )
+            .await;
+
+        let result = coordinator.execute(&task_id).await.unwrap();
+        let emitted = receiver.recv().await.unwrap();
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(result.success);
+        assert_eq!(result.memory_entries_created, 1);
+        assert_eq!(emitted.task_id, task_id);
     }
 }

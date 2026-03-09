@@ -1,20 +1,21 @@
 //! Agent core module - handles agent loop, tools, and session management
 
+mod provider;
 mod session;
 mod subagent;
 mod tools;
 
-pub use session::{Session, SessionId};
+pub use provider::{ChatMessage, ChatProvider, ProviderFactory, ProviderRequest};
+pub use session::{Message, MessageRole, Session, SessionId};
 pub use subagent::{
     SubAgentBuilder, SubAgentCoordinator, SubAgentError, SubAgentResult, SubAgentTask,
     MemoryAccessType, TaskPriority, TaskStatus,
 };
-pub use tools::{builtin_tools, Tool, ToolCall, ToolResult, ToolSchema};
+pub use tools::{builtin_tools, execute_tool, parse_tool_command, Tool, ToolCall, ToolResult, ToolRuntime, ToolSchema};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use uuid::Uuid;
 
 /// Agent trait - implemented by agent backends
 #[async_trait]
@@ -141,23 +142,99 @@ pub struct ToolRequest {
 /// Simple in-memory agent implementation
 pub struct SimpleAgent {
     config: super::config::AgentConfig,
+    memory_config: super::config::MemoryConfig,
+    security_config: super::config::SecurityConfig,
     tools: Vec<Tool>,
     state: AgentState,
-    session: Option<Session>,
+    sessions: HashMap<String, Session>,
+    provider: Option<Box<dyn ChatProvider>>,
+    tool_runtime: Option<ToolRuntime>,
 }
 
 impl SimpleAgent {
-    pub fn new(config: super::config::AgentConfig) -> Self {
+    pub fn new(
+        config: super::config::AgentConfig,
+        memory_config: Option<super::config::MemoryConfig>,
+        security_config: Option<super::config::SecurityConfig>,
+    ) -> Self {
+        let provider = ProviderFactory::create(&config).ok();
         Self {
             config,
+            memory_config: memory_config.unwrap_or_default(),
+            security_config: security_config.unwrap_or_default(),
             tools: Vec::new(),
             state: AgentState::Idle,
-            session: None,
+            sessions: HashMap::new(),
+            provider,
+            tool_runtime: None,
         }
     }
     
     pub fn register_tool(&mut self, tool: Tool) {
         self.tools.push(tool);
+    }
+
+    fn system_prompt(&self) -> Option<String> {
+        let path = self.config.soul_path.as_ref()?;
+        std::fs::read_to_string(path).ok()
+    }
+
+    fn ensure_session(&mut self, session_id: &SessionId, group_id: Option<String>) -> &mut Session {
+        self.sessions
+            .entry(session_id.0.clone())
+            .or_insert_with(|| Session::new(group_id, self.config.max_tokens.clamp(32, 512) as usize))
+    }
+
+    async fn ensure_tool_runtime(&mut self) -> Result<&ToolRuntime, AgentError> {
+        if self.tool_runtime.is_none() {
+            let runtime = ToolRuntime::from_config(
+                &self.config,
+                &self.memory_config,
+                &self.security_config,
+            )
+            .await
+            .map_err(AgentError::ConfigError)?;
+            self.tool_runtime = Some(runtime);
+        }
+
+        Ok(self.tool_runtime.as_ref().expect("tool runtime initialized"))
+    }
+
+    fn compact_session_if_needed(threshold: usize, session: &mut Session) {
+        let threshold = threshold.max(4);
+        if session.len() <= threshold {
+            return;
+        }
+
+        let non_system: Vec<_> = session
+            .messages()
+            .iter()
+            .filter(|msg| msg.role != MessageRole::System)
+            .cloned()
+            .collect();
+        if non_system.len() <= 4 {
+            return;
+        }
+
+        let keep_recent = (threshold / 2).max(4);
+        let removed = non_system.len().saturating_sub(keep_recent);
+        if removed == 0 {
+            return;
+        }
+
+        let summary = format!(
+            "{} prior messages summarized. Recent topics: {}",
+            removed,
+            non_system
+                .iter()
+                .take(3)
+                .map(|msg| msg.content.split_whitespace().take(6).collect::<Vec<_>>().join(" "))
+                .filter(|topic| !topic.is_empty())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+
+        session.compact_with_recent(&summary, keep_recent);
     }
 }
 
@@ -165,11 +242,87 @@ impl SimpleAgent {
 impl Agent for SimpleAgent {
     async fn process(&mut self, ctx: &AgentContext) -> AgentResponse {
         self.state = AgentState::Processing;
-        
-        // Simple echo response for now - will integrate with LLM later
-        let response = AgentResponse::text(format!("Received: {}", ctx.message));
-        
-        self.state = AgentState::Idle;
+        if self.provider.is_none() {
+            self.state = AgentState::Error("provider initialization failed".to_string());
+            return AgentResponse::text(format!(
+                "Provider '{}' is not configured or is unsupported in the current runtime.",
+                self.config.provider
+            ));
+        }
+
+        let parsed_tool_call = parse_tool_command(&ctx.message, &self.tools);
+        let system_prompt = self.system_prompt();
+        let model = self.config.model.clone();
+        let temperature = self.config.temperature;
+        let max_tokens = self.config.max_tokens;
+        let session = self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
+        if let Some(prompt) = system_prompt {
+            let has_system = session
+                .messages()
+                .iter()
+                .any(|msg| msg.role == MessageRole::System && msg.content == prompt);
+            if !has_system {
+                session.add_message(Message::system(prompt));
+            }
+        }
+        session.add_message(Message::user(ctx.message.clone()));
+
+        if let Some(call) = parsed_tool_call {
+            let runtime = match self.ensure_tool_runtime().await {
+                Ok(runtime) => runtime,
+                Err(err) => {
+                    self.state = AgentState::Error(err.to_string());
+                    return AgentResponse::text(format!("Tool runtime error: {}", err));
+                }
+            };
+            let result = execute_tool(&call, runtime).await;
+            let response_text = result.output.clone();
+            let session = self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
+            session.add_message(Message::assistant(response_text.clone()));
+            self.state = AgentState::Idle;
+            return AgentResponse {
+                text: response_text,
+                tool_calls: vec![call.with_result(result)],
+                session_updates: HashMap::new(),
+                metadata: HashMap::new(),
+            };
+        }
+
+        {
+            let threshold = self.memory_config.session_compaction_threshold;
+            let session = self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
+            Self::compact_session_if_needed(threshold, session);
+        }
+        let request_messages = self
+            .ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned())
+            .messages()
+            .iter()
+            .map(ChatMessage::from)
+            .collect();
+        let request = ProviderRequest {
+            model,
+            temperature,
+            max_tokens,
+            messages: request_messages,
+        };
+        let provider = self.provider.as_ref().expect("provider checked above");
+
+        let response = match provider.complete(&request).await {
+            Ok(text) => {
+                let session = self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
+                session.add_message(Message::assistant(text.clone()));
+                self.state = AgentState::Idle;
+                AgentResponse::text(text)
+            }
+            Err(err) => {
+                self.state = AgentState::Error(err.to_string());
+                AgentResponse::text(format!("Provider error: {}", err))
+            }
+        };
+
+        if matches!(self.state, AgentState::Processing) {
+            self.state = AgentState::Idle;
+        }
         response
     }
     
@@ -179,6 +332,7 @@ impl Agent for SimpleAgent {
     
     async fn configure(&mut self, config: &super::config::AgentConfig) -> Result<(), AgentError> {
         self.config = config.clone();
+        self.provider = ProviderFactory::create(config).ok();
         Ok(())
     }
     
@@ -189,5 +343,28 @@ impl Agent for SimpleAgent {
     async fn shutdown(&mut self) -> Result<(), AgentError> {
         self.state = AgentState::Idle;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compaction_keeps_recent_messages_and_summary() {
+        let mut session = Session::new(None, 64);
+        session.add_message(Message::system("system"));
+        for index in 0..8 {
+            session.add_message(Message::user(format!("user {}", index)));
+            session.add_message(Message::assistant(format!("assistant {}", index)));
+        }
+
+        SimpleAgent::compact_session_if_needed(6, &mut session);
+
+        let messages = session.messages().iter().collect::<Vec<_>>();
+        assert!(messages.iter().any(|msg| msg.content.contains("summarized")));
+        assert!(messages.iter().any(|msg| msg.content == "assistant 7"));
+        assert!(messages.iter().any(|msg| msg.content == "user 7"));
+        assert!(!messages.iter().any(|msg| msg.content == "user 0"));
     }
 }

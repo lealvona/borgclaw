@@ -231,6 +231,7 @@ borgclaw/
 - [Skills](docs/skills.md) - Tool integrations
 - [Security](docs/security.md) - Defense in depth
 - [Integrations](docs/integrations.md) - External services
+- [Inspirations And Implementation Notes](docs/inspirations.md) - Upstream examples mapped to BorgClaw gaps
 
 ## Origin
 
@@ -241,6 +242,8 @@ BorgClaw synthesizes features from the OpenClaw family:
 - **IronClaw** - WASM sandbox, security
 - **PicoClaw** - Ultra-lightweight
 - **TinyClaw** - Multi-agent teams
+
+See [Inspirations And Implementation Notes](docs/inspirations.md) for upstream implementation examples and how they map to BorgClaw's current roadmap and rough edges.
 
 ## License
 

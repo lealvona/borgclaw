@@ -4,10 +4,9 @@ mod onboarding;
 
 use crate::onboarding::{run_init, InitArgs, StartTarget};
 use borgclaw_core::{
-    agent::{Agent, AgentContext, SimpleAgent},
+    channel::{ChannelType, InboundMessage, MessagePayload, MessageRouter, Sender},
     config::{load_config, save_config, AppConfig},
     security::SecurityLayer,
-    AppState,
 };
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -126,14 +125,7 @@ async fn main() {
 
 async fn repl(config: AppConfig, _config_path: PathBuf) {
     info!("Starting BorgClaw REPL...");
-
-    let mut agent = SimpleAgent::new(config.agent.clone());
-    for tool in borgclaw_core::agent::builtin_tools() {
-        agent.register_tool(tool);
-    }
-
-    let state = AppState::new(config.clone());
-    *state.agent.write().await = Some(Box::new(agent));
+    let router = MessageRouter::from_config(&config);
 
     println!("🦞 BorgClaw REPL (type 'exit' to quit, 'help' for commands)\n");
 
@@ -161,38 +153,37 @@ async fn repl(config: AppConfig, _config_path: PathBuf) {
             continue;
         }
 
-        let ctx = AgentContext {
-            session_id: borgclaw_core::agent::SessionId::new(),
-            message: input.to_string(),
-            sender: borgclaw_core::agent::SenderInfo {
-                id: "cli".to_string(),
-                name: Some("User".to_string()),
-                channel: "cli".to_string(),
-            },
-            metadata: std::collections::HashMap::new(),
+        let message = InboundMessage {
+            channel: ChannelType::cli(),
+            sender: Sender::new("cli").with_name("User"),
+            content: MessagePayload::text(input),
+            group_id: Some("cli".to_string()),
+            timestamp: chrono::Utc::now(),
+            raw: serde_json::Value::Null,
         };
 
-        if let Some(ref mut agent) = *state.agent.write().await {
-            let response = agent.process(&ctx).await;
-            println!("{}", response.text);
+        match router.route(message).await {
+            Ok(outcome) => println!("{}", outcome.response.text),
+            Err(err) => println!("Error: {}", err),
         }
     }
 }
 
 async fn send_message(config: AppConfig, message: String) {
-    let mut agent = SimpleAgent::new(config.agent.clone());
-    let ctx = AgentContext {
-        session_id: borgclaw_core::agent::SessionId::new(),
-        message,
-        sender: borgclaw_core::agent::SenderInfo {
-            id: "cli".to_string(),
-            name: Some("User".to_string()),
-            channel: "cli".to_string(),
-        },
-        metadata: std::collections::HashMap::new(),
+    let router = MessageRouter::from_config(&config);
+    let inbound = InboundMessage {
+        channel: ChannelType::cli(),
+        sender: Sender::new("cli").with_name("User"),
+        content: MessagePayload::text(message),
+        group_id: Some("cli".to_string()),
+        timestamp: chrono::Utc::now(),
+        raw: serde_json::Value::Null,
     };
-    let response = agent.process(&ctx).await;
-    println!("{}", response.text);
+
+    match router.route(inbound).await {
+        Ok(outcome) => println!("{}", outcome.response.text),
+        Err(err) => println!("Error: {}", err),
+    }
 }
 
 async fn config_action(path: &PathBuf, mut config: AppConfig, action: ConfigAction) {
@@ -287,6 +278,20 @@ async fn status(config: AppConfig) {
     println!("Provider: {}", config.agent.provider);
     println!("Workspace: {:?}", config.agent.workspace);
     println!("Heartbeat: {} minutes", config.agent.heartbeat_interval);
+    println!(
+        "Provider auth: {}",
+        provider_env_var(&config.agent.provider)
+            .map(|key| if std::env::var(key).is_ok() { "configured" } else { "missing env" })
+            .unwrap_or("unknown")
+    );
+    println!(
+        "Security: wasm={}, docker={}, approval={:?}",
+        config.security.wasm_sandbox,
+        config.security.docker_sandbox,
+        config.security.approval_mode
+    );
+    println!("Memory path: {:?}", config.memory.memory_path);
+    println!("Skills path: {:?}", config.skills.skills_path);
     println!("\nChannels:");
     for (name, channel) in &config.channels {
         println!("  - {}: {}", name, if channel.enabled { "enabled" } else { "disabled" });
@@ -308,7 +313,32 @@ async fn doctor(config: AppConfig) {
         borgclaw_core::security::CommandCheck::Blocked(_) => println!("✓ Command blocklist working"),
         _ => println!("✗ Command blocklist not working"),
     }
+    match provider_env_var(&config.agent.provider) {
+        Some(env_key) if std::env::var(env_key).is_ok() => println!("✓ Provider credential env present ({})", env_key),
+        Some(env_key) => println!("✗ Provider credential env missing ({})", env_key),
+        None => println!("✗ Unknown provider '{}'", config.agent.provider),
+    }
+    if std::fs::create_dir_all(&config.memory.memory_path).is_ok() && config.memory.memory_path.exists() {
+        println!("✓ Memory path available");
+    } else {
+        println!("✗ Memory path unavailable: {:?}", config.memory.memory_path);
+    }
+    if std::fs::create_dir_all(&config.skills.skills_path).is_ok() && config.skills.skills_path.exists() {
+        println!("✓ Skills path available");
+    } else {
+        println!("✗ Skills path unavailable: {:?}", config.skills.skills_path);
+    }
     println!("\nDiagnostics complete.");
+}
+
+fn provider_env_var(provider: &str) -> Option<&'static str> {
+    match provider {
+        "openai" => Some("OPENAI_API_KEY"),
+        "anthropic" => Some("ANTHROPIC_API_KEY"),
+        "google" => Some("GOOGLE_API_KEY"),
+        "ollama" => None,
+        _ => None,
+    }
 }
 
 fn print_help() {
