@@ -1,24 +1,31 @@
 //! BorgClaw Gateway - WebSocket gateway for remote connections
 
 use axum::{
+    body::Bytes,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        State,
+        Path, State,
     },
+    http::HeaderMap,
     http::StatusCode,
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use borgclaw_core::{
-    channel::{ChannelType, InboundMessage, MessagePayload, MessageRouter, Sender},
+    channel::{
+        ChannelType, InboundMessage, MessagePayload, MessageRouter, Sender, WebhookChannel,
+        WebhookError, WebhookTrigger,
+    },
     config::load_config,
     AppConfig,
 };
 use futures_util::StreamExt;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{net::SocketAddr, path::PathBuf};
+use tokio::sync::mpsc;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{error, info, warn};
 
@@ -26,6 +33,7 @@ use tracing::{error, info, warn};
 struct GatewayState {
     config: Arc<AppConfig>,
     router: Arc<MessageRouter>,
+    webhook: Option<Arc<WebhookChannel>>,
 }
 
 #[tokio::main]
@@ -44,8 +52,14 @@ async fn main() {
         parse_config_path_from_args(std::env::args_os()).unwrap_or_else(default_config_path);
     let config = Arc::new(load_app_config(&config_path));
     let router = Arc::new(MessageRouter::from_config(&config));
-    let port = websocket_port(&config);
-    let state = GatewayState { config, router };
+    let websocket_port = websocket_port(&config);
+    let webhook_port = webhook_port(&config);
+    let webhook = configured_webhook_channel(&config).await.map(Arc::new);
+    let state = GatewayState {
+        config,
+        router,
+        webhook,
+    };
 
     // CORS layer
     let cors = CorsLayer::new()
@@ -53,20 +67,50 @@ async fn main() {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    // Build router
-    let app = Router::new()
+    let websocket_app = Router::new()
         .route("/", get(index))
         .route("/ws", get(websocket_handler))
         .route("/api/status", get(api_status))
         .route("/api/chat", get(api_chat_get))
+        .layer(cors.clone())
+        .with_state(state.clone());
+    let webhook_app = Router::new()
+        .route("/webhook", post(webhook_handler))
+        .route("/webhook/health", get(webhook_health))
+        .route("/webhook/trigger/{id}", post(webhook_trigger_handler))
         .layer(cors)
-        .with_state(state);
+        .with_state(state.clone());
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    info!("Gateway listening on http://{}", addr);
+    match webhook_port {
+        Some(port) if port == websocket_port => {
+            let app = websocket_app.merge(webhook_app);
+            let addr = SocketAddr::from(([0, 0, 0, 0], port));
+            info!("Gateway + webhook listening on http://{}", addr);
+            let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+            axum::serve(listener, app).await.unwrap();
+        }
+        Some(port) => {
+            let ws_addr = SocketAddr::from(([0, 0, 0, 0], websocket_port));
+            let webhook_addr = SocketAddr::from(([0, 0, 0, 0], port));
+            info!("Gateway listening on http://{}", ws_addr);
+            info!("Webhook listening on http://{}", webhook_addr);
 
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+            let ws_listener = tokio::net::TcpListener::bind(ws_addr).await.unwrap();
+            let webhook_listener = tokio::net::TcpListener::bind(webhook_addr).await.unwrap();
+
+            let ws_server = axum::serve(ws_listener, websocket_app);
+            let webhook_server = axum::serve(webhook_listener, webhook_app);
+            let (ws_result, webhook_result) = tokio::join!(ws_server, webhook_server);
+            ws_result.unwrap();
+            webhook_result.unwrap();
+        }
+        None => {
+            let addr = SocketAddr::from(([0, 0, 0, 0], websocket_port));
+            info!("Gateway listening on http://{}", addr);
+            let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+            axum::serve(listener, websocket_app).await.unwrap();
+        }
+    }
 }
 
 async fn index() -> &'static str {
@@ -325,6 +369,150 @@ fn websocket_port(config: &AppConfig) -> u16 {
         .unwrap_or(18789)
 }
 
+fn webhook_port(config: &AppConfig) -> Option<u16> {
+    config
+        .channels
+        .get("webhook")
+        .filter(|channel| channel.enabled)
+        .and_then(|channel| channel.extra.get("port"))
+        .and_then(|value| value.as_integer())
+        .and_then(|value| u16::try_from(value).ok())
+        .or_else(|| {
+            config
+                .channels
+                .get("webhook")
+                .filter(|channel| channel.enabled)
+                .map(|_| 8080)
+        })
+}
+
+async fn configured_webhook_channel(config: &AppConfig) -> Option<WebhookChannel> {
+    let channel = config.channels.get("webhook")?;
+    if !channel.enabled {
+        return None;
+    }
+
+    let mut trigger = WebhookTrigger::new("incoming", "/webhook");
+    if let Some(secret) = channel.extra.get("secret").and_then(|value| value.as_str()) {
+        trigger = trigger.with_secret(secret);
+    }
+    if let Some(rpm) = channel
+        .extra
+        .get("rate_limit_per_minute")
+        .and_then(|value| value.as_integer())
+        .and_then(|value| u32::try_from(value).ok())
+    {
+        trigger = trigger.with_rate_limit(rpm);
+    }
+
+    let webhook = WebhookChannel::new();
+    let mut named_trigger = WebhookTrigger::new("named_trigger", "/webhook/trigger/{id}");
+    if let Some(secret) = channel.extra.get("secret").and_then(|value| value.as_str()) {
+        named_trigger = named_trigger.with_secret(secret);
+    }
+    if let Some(rpm) = channel
+        .extra
+        .get("rate_limit_per_minute")
+        .and_then(|value| value.as_integer())
+        .and_then(|value| u32::try_from(value).ok())
+    {
+        named_trigger = named_trigger.with_rate_limit(rpm);
+    }
+
+    webhook.register_trigger(trigger).await;
+    webhook.register_trigger(named_trigger).await;
+    Some(webhook)
+}
+
+async fn webhook_handler(
+    State(state): State<GatewayState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    route_webhook_request(&state, "/webhook", headers, body)
+        .await
+        .into_response()
+}
+
+async fn webhook_trigger_handler(
+    Path(id): Path<String>,
+    State(state): State<GatewayState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let path = format!("/webhook/trigger/{id}");
+    route_webhook_request(&state, &path, headers, body)
+        .await
+        .into_response()
+}
+
+async fn webhook_health(State(state): State<GatewayState>) -> impl IntoResponse {
+    let enabled = state.webhook.is_some();
+    let body = serde_json::json!({
+        "status": if enabled { "ok" } else { "disabled" },
+        "webhook_enabled": enabled,
+    });
+    (StatusCode::OK, body.to_string())
+}
+
+async fn route_webhook_request(
+    state: &GatewayState,
+    path: &str,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let webhook = match &state.webhook {
+        Some(webhook) => webhook,
+        None => return (StatusCode::NOT_FOUND, "Webhook channel disabled").into_response(),
+    };
+
+    let (tx, mut rx) = mpsc::channel(1);
+    let headers = header_map_to_hash_map(&headers);
+    match webhook
+        .handle_request(path, "POST", headers, body.to_vec(), tx)
+        .await
+    {
+        Ok(response) => {
+            if let Some(inbound) = rx.recv().await {
+                if let Err(err) = state.router.route(inbound).await {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        serde_json::json!({ "error": err.to_string() }).to_string(),
+                    )
+                        .into_response();
+                }
+            }
+            (
+                StatusCode::from_u16(response.status).unwrap_or(StatusCode::OK),
+                response.body.to_string(),
+            )
+                .into_response()
+        }
+        Err(WebhookError::NotFound) => (StatusCode::NOT_FOUND, "Webhook not found").into_response(),
+        Err(WebhookError::Unauthorized) => {
+            (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
+        }
+        Err(WebhookError::RateLimited) => {
+            (StatusCode::TOO_MANY_REQUESTS, "Rate limited").into_response()
+        }
+        Err(WebhookError::ChannelClosed) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "Webhook channel closed").into_response()
+        }
+    }
+}
+
+fn header_map_to_hash_map(headers: &HeaderMap) -> HashMap<String, String> {
+    headers
+        .iter()
+        .filter_map(|(key, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (key.as_str().to_string(), value.to_string()))
+        })
+        .collect()
+}
+
 fn error_event(message: &str) -> serde_json::Value {
     serde_json::json!({
         "type": "error",
@@ -408,5 +596,17 @@ mod tests {
         );
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn webhook_port_defaults_to_documented_port_when_enabled() {
+        let mut config = AppConfig::default();
+        config
+            .channels
+            .entry("webhook".to_string())
+            .or_default()
+            .enabled = true;
+
+        assert_eq!(webhook_port(&config), Some(8080));
     }
 }

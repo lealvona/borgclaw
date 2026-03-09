@@ -59,7 +59,9 @@ impl WebhookTrigger {
     }
 
     pub fn matches(&self, path: &str, method: &str) -> bool {
-        self.enabled && self.path == path && self.method.to_uppercase() == method.to_uppercase()
+        self.enabled
+            && trigger_path_matches(&self.path, path)
+            && self.method.to_uppercase() == method.to_uppercase()
     }
 
     pub fn verify_secret(&self, provided: Option<&str>) -> bool {
@@ -326,6 +328,18 @@ fn webhook_sender(payload: Option<&serde_json::Value>, trigger: &WebhookTrigger)
     Sender::new(sender_id).with_name(sender_name)
 }
 
+fn trigger_path_matches(pattern: &str, actual: &str) -> bool {
+    if pattern == actual {
+        return true;
+    }
+
+    if let Some(prefix) = pattern.strip_suffix("{id}") {
+        return actual.starts_with(prefix) && actual.len() > prefix.len();
+    }
+
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,5 +402,17 @@ mod tests {
 
         assert!(matches!(limited, Err(WebhookError::RateLimited)));
         assert!(other_requester.is_ok());
+    }
+
+    #[test]
+    fn webhook_trigger_path_matches_named_pattern() {
+        assert!(trigger_path_matches(
+            "/webhook/trigger/{id}",
+            "/webhook/trigger/backup"
+        ));
+        assert!(!trigger_path_matches(
+            "/webhook/trigger/{id}",
+            "/webhook/trigger"
+        ));
     }
 }
