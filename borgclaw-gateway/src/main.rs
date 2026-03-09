@@ -14,9 +14,10 @@ use borgclaw_core::{
     channel::{ChannelType, InboundMessage, MessagePayload, MessageRouter, Sender},
     AppConfig,
 };
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{error, info};
 
@@ -77,7 +78,7 @@ async fn websocket_handler(
 }
 
 async fn handle_socket(socket: WebSocket, state: GatewayState) {
-    let (mut sender, mut receiver) = socket.split();
+    let mut socket = socket;
     let client_id = uuid::Uuid::new_v4().to_string();
     let requires_pairing = state
         .config
@@ -88,32 +89,47 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
 
     info!("New WebSocket connection: {}", client_id);
     
-    let _ = sender.send(Message::Text(
-        serde_json::json!({
+    let _ = send_event(&mut socket, serde_json::json!({
             "type": "welcome",
             "client_id": client_id,
             "auth_required": requires_pairing,
             "message": "Connected to BorgClaw"
-        })
-        .to_string(),
-    )).await;
+        }))
+    .await;
 
-    while let Some(msg) = receiver.next().await {
-        match msg {
-            Ok(Message::Text(text)) => {
-                if let Err(e) = handle_ws_message(&mut sender, &state, &client_id, &text).await {
-                    error!("Error handling message: {}", e);
+    let mut heartbeat = tokio::time::interval(Duration::from_secs(30));
+
+    loop {
+        tokio::select! {
+            _ = heartbeat.tick() => {
+                if send_event(&mut socket, serde_json::json!({
+                    "type": "heartbeat",
+                    "client_id": client_id,
+                    "ts": chrono::Utc::now(),
+                })).await.is_err() {
+                    break;
                 }
             }
-            Ok(Message::Close(_)) => {
-                info!("WebSocket closed");
-                break;
+            msg = socket.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        if let Err(e) = handle_ws_message(&mut socket, &state, &client_id, &text).await {
+                            error!("Error handling message: {}", e);
+                            let _ = send_event(&mut socket, error_event("internal gateway error")).await;
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => {
+                        info!("WebSocket closed");
+                        break;
+                    }
+                    Some(Err(e)) => {
+                        error!("WebSocket error: {}", e);
+                        let _ = send_event(&mut socket, error_event(&e.to_string())).await;
+                        break;
+                    }
+                    _ => {}
+                }
             }
-            Err(e) => {
-                error!("WebSocket error: {}", e);
-                break;
-            }
-            _ => {}
         }
     }
     
@@ -121,7 +137,7 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
 }
 
 async fn handle_ws_message(
-    sender: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    socket: &mut WebSocket,
     state: &GatewayState,
     client_id: &str,
     text: &str,
@@ -136,14 +152,12 @@ async fn handle_ws_message(
     match msg_type {
         "request_pairing" => {
             let code = state.router.request_pairing_code(client_id).await?;
-            sender.send(Message::Text(
-                serde_json::json!({
+            send_event(socket, serde_json::json!({
                     "type": "pairing_code",
                     "client_id": client_id,
                     "pairing_code": code
-                })
-                .to_string(),
-            )).await?;
+                }))
+            .await?;
         }
         "auth" => {
             let pairing_code = request.get("pairing_code")
@@ -151,15 +165,13 @@ async fn handle_ws_message(
                 .ok_or("Missing pairing_code")?;
             let approved_sender = state.router.approve_pairing_code(pairing_code).await?;
             let authenticated = approved_sender == client_id;
-            sender.send(Message::Text(
-                serde_json::json!({
+            send_event(socket, serde_json::json!({
                     "type": if authenticated { "authenticated" } else { "error" },
                     "client_id": client_id,
                     "approved_sender": approved_sender,
                     "message": if authenticated { "Pairing approved" } else { "Pairing code belongs to another sender" }
-                })
-                .to_string(),
-            )).await?;
+                }))
+            .await?;
         }
         "message" => {
             let content = request.get("content")
@@ -176,35 +188,63 @@ async fn handle_ws_message(
                 timestamp: chrono::Utc::now(),
                 raw: request.clone(),
             };
-            let outcome = state.router.route(inbound).await?;
-            sender.send(Message::Text(
-                serde_json::json!({
-                    "type": "response",
-                    "session_id": outcome.session_id.0,
-                    "text": outcome.response.text,
-                    "tool_calls": outcome.response.tool_calls,
-                    "metadata": outcome.response.metadata,
-                })
-                .to_string(),
-            )).await?;
+            match state.router.route(inbound).await {
+                Ok(outcome) => {
+                    send_event(socket, serde_json::json!({
+                        "type": "response",
+                        "session_id": outcome.session_id.0,
+                        "text": outcome.response.text,
+                        "tool_calls": outcome.response.tool_calls,
+                        "metadata": outcome.response.metadata,
+                    }))
+                    .await?;
+                }
+                Err(borgclaw_core::channel::ChannelError::AuthFailed(message)) => {
+                    let event = if message.contains("pairing required") {
+                        serde_json::json!({
+                            "type": "auth_required",
+                            "client_id": client_id,
+                            "message": message,
+                        })
+                    } else if message.contains("pairing pending") {
+                        serde_json::json!({
+                            "type": "pairing_pending",
+                            "client_id": client_id,
+                            "message": message,
+                        })
+                    } else {
+                        error_event(&message)
+                    };
+                    send_event(socket, event).await?;
+                }
+                Err(err) => {
+                    send_event(socket, error_event(&err.to_string())).await?;
+                }
+            }
         }
         "ping" => {
-            sender.send(Message::Text(
-                serde_json::json!({ "type": "pong" }).to_string()
-            )).await?;
+            send_event(socket, serde_json::json!({ "type": "pong" })).await?;
         }
         _ => {
-            sender.send(Message::Text(
-                serde_json::json!({
-                    "type": "error",
-                    "message": "Unknown message type"
-                })
-                .to_string()
-            )).await?;
+            send_event(socket, error_event("Unknown message type")).await?;
         }
     }
     
     Ok(())
+}
+
+async fn send_event(
+    socket: &mut WebSocket,
+    event: serde_json::Value,
+) -> Result<(), axum::Error> {
+    socket.send(Message::Text(event.to_string())).await
+}
+
+fn error_event(message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "error",
+        "message": message,
+    })
 }
 
 async fn api_status(State(state): State<GatewayState>) -> impl IntoResponse {
@@ -219,4 +259,16 @@ async fn api_status(State(state): State<GatewayState>) -> impl IntoResponse {
 
 async fn api_chat_get() -> impl IntoResponse {
     (StatusCode::METHOD_NOT_ALLOWED, "Use POST for chat")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_event_is_structured() {
+        let event = error_event("bad request");
+        assert_eq!(event["type"], "error");
+        assert_eq!(event["message"], "bad request");
+    }
 }
