@@ -147,7 +147,7 @@ impl WebhookChannel {
             .find(|t| t.matches(path, method))
             .ok_or(WebhookError::NotFound)?;
 
-        let secret = headers.get("X-Webhook-Secret").map(|s| s.as_str());
+        let secret = header_value(&headers, "x-webhook-secret");
         if !trigger.verify_secret(secret) {
             return Err(WebhookError::Unauthorized);
         }
@@ -165,7 +165,9 @@ impl WebhookChannel {
             .as_ref()
             .and_then(|json| json.get("group_id"))
             .and_then(|value| value.as_str())
-            .map(ToString::to_string);
+            .map(ToString::to_string)
+            .or_else(|| header_value(&headers, "x-group-id").map(ToString::to_string))
+            .or_else(|| trigger_path_value(&trigger.path, path));
 
         let inbound = InboundMessage {
             channel: self.channel_type.clone(),
@@ -301,10 +303,9 @@ impl Default for WebhookChannelBuilder {
 }
 
 fn webhook_requester(headers: &HashMap<String, String>) -> String {
-    headers
-        .get("X-Forwarded-For")
-        .or_else(|| headers.get("X-Real-IP"))
-        .cloned()
+    header_value(headers, "x-forwarded-for")
+        .or_else(|| header_value(headers, "x-real-ip"))
+        .map(ToString::to_string)
         .unwrap_or_else(|| "anonymous".to_string())
 }
 
@@ -340,6 +341,21 @@ fn trigger_path_matches(pattern: &str, actual: &str) -> bool {
     false
 }
 
+fn trigger_path_value(pattern: &str, actual: &str) -> Option<String> {
+    let prefix = pattern.strip_suffix("{id}")?;
+    actual
+        .strip_prefix(prefix)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn header_value<'a>(headers: &'a HashMap<String, String>, name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -356,7 +372,7 @@ mod tests {
             .handle_request(
                 "/webhook",
                 "POST",
-                HashMap::from([("X-Forwarded-For".to_string(), "127.0.0.1".to_string())]),
+                HashMap::from([("x-forwarded-for".to_string(), "127.0.0.1".to_string())]),
                 br#"{"content":"hello","sender":"user123","sender_name":"User","group_id":"grp"}"#
                     .to_vec(),
                 tx,
@@ -402,6 +418,49 @@ mod tests {
 
         assert!(matches!(limited, Err(WebhookError::RateLimited)));
         assert!(other_requester.is_ok());
+    }
+
+    #[tokio::test]
+    async fn webhook_uses_group_id_from_header_or_named_path() {
+        let channel = WebhookChannel::new();
+        channel
+            .register_trigger(WebhookTrigger::new("incoming", "/webhook"))
+            .await;
+        channel
+            .register_trigger(WebhookTrigger::new("named", "/webhook/trigger/{id}"))
+            .await;
+
+        let (tx_header, mut rx_header) = mpsc::channel(1);
+        channel
+            .handle_request(
+                "/webhook",
+                "POST",
+                HashMap::from([("x-group-id".to_string(), "header-group".to_string())]),
+                br#"{"content":"hello"}"#.to_vec(),
+                tx_header,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            rx_header.recv().await.unwrap().group_id.as_deref(),
+            Some("header-group")
+        );
+
+        let (tx_path, mut rx_path) = mpsc::channel(1);
+        channel
+            .handle_request(
+                "/webhook/trigger/team-ops",
+                "POST",
+                HashMap::new(),
+                br#"{"content":"hello"}"#.to_vec(),
+                tx_path,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            rx_path.recv().await.unwrap().group_id.as_deref(),
+            Some("team-ops")
+        );
     }
 
     #[test]
