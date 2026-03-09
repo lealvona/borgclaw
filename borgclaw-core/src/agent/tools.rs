@@ -254,7 +254,7 @@ pub fn parse_tool_command(input: &str, tools: &[Tool]) -> Option<ToolCall> {
 }
 
 pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult {
-    match call.name.as_str() {
+    let result = match call.name.as_str() {
         "memory_store" => memory_store(&call.arguments, runtime).await,
         "memory_recall" => memory_recall(&call.arguments, runtime).await,
         "execute_command" => execute_command(&call.arguments, runtime).await,
@@ -270,7 +270,24 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "mcp_list_tools" => mcp_list_tools(&call.arguments, runtime).await,
         "mcp_call_tool" => mcp_call_tool(&call.arguments, runtime).await,
         other => ToolResult::err(format!("unknown tool: {}", other)),
+    };
+
+    sanitize_tool_result(result, runtime)
+}
+
+fn sanitize_tool_result(mut result: ToolResult, runtime: &ToolRuntime) -> ToolResult {
+    if !runtime.security.configured_for_leak_detection() {
+        return result;
     }
+
+    let (redacted, count) = runtime.security.redact_leaks(&result.output);
+    if count > 0 {
+        result.output = redacted;
+        result.metadata.insert("secret_redactions".to_string(), count.to_string());
+        result.metadata.insert("security_redacted".to_string(), "true".to_string());
+    }
+
+    result
 }
 
 async fn memory_store(arguments: &HashMap<String, serde_json::Value>, runtime: &ToolRuntime) -> ToolResult {
@@ -1037,6 +1054,48 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
         assert!(result.success);
         assert_eq!(result.output, "from-security");
+    }
+
+    #[tokio::test]
+    async fn execute_tool_redacts_detected_secret_leaks() {
+        let root = std::env::temp_dir().join(format!("borgclaw_redact_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                memory_path: root.join("memory"),
+                ..Default::default()
+            },
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let result = execute_tool(
+            &ToolCall::new(
+                "message",
+                HashMap::from([(
+                    "text".to_string(),
+                    serde_json::json!("sk-abcdefghijklmnopqrstuvwxyz1234"),
+                )]),
+            ),
+            &runtime,
+        )
+        .await;
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(result.success);
+        assert_eq!(result.output, "[REDACTED_SECRET]");
+        assert_eq!(result.metadata.get("security_redacted").map(String::as_str), Some("true"));
     }
 
     #[test]

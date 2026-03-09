@@ -137,6 +137,10 @@ impl SecurityLayer {
         self.config.vault.provider.as_deref()
     }
 
+    pub fn configured_for_leak_detection(&self) -> bool {
+        self.config.secret_leak_detection
+    }
+
     pub fn approval_mode(&self) -> &ApprovalMode {
         &self.config.approval_mode
     }
@@ -208,6 +212,15 @@ impl SecurityLayer {
             }
         }
         leaks
+    }
+
+    pub fn redact_leaks(&self, content: &str) -> (String, usize) {
+        let mut redacted = content.to_string();
+        let leaks = self.check_leak(content);
+        for leak in &leaks {
+            redacted = redacted.replace(leak, "[REDACTED_SECRET]");
+        }
+        (redacted, leaks.len())
     }
     
     /// Check prompt for injection attempts
@@ -336,5 +349,14 @@ mod tests {
         });
 
         assert_eq!(security.vault_provider(), Some("bitwarden"));
+    }
+
+    #[test]
+    fn redact_leaks_masks_detected_values() {
+        let security = SecurityLayer::new();
+        let (redacted, count) = security.redact_leaks("token sk-abcdefghijklmnopqrstuvwxyz1234");
+
+        assert_eq!(count, 1);
+        assert!(redacted.contains("[REDACTED_SECRET]"));
     }
 }
