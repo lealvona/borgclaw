@@ -10,6 +10,7 @@ use cron::Schedule;
 
 pub struct HeartbeatEngine {
     tasks: Arc<RwLock<HashMap<String, HeartbeatTask>>>,
+    handlers: Arc<RwLock<HashMap<String, Arc<dyn HeartbeatHandler>>>>,
     running: Arc<RwLock<bool>>,
     sender: mpsc::Sender<HeartbeatEvent>,
 }
@@ -139,6 +140,7 @@ impl HeartbeatEngine {
         let (sender, _) = mpsc::channel(100);
         Self {
             tasks: Arc::new(RwLock::new(HashMap::new())),
+            handlers: Arc::new(RwLock::new(HashMap::new())),
             running: Arc::new(RwLock::new(false)),
             sender,
         }
@@ -158,6 +160,14 @@ impl HeartbeatEngine {
         tasks.insert(id.clone(), task);
         
         id
+    }
+
+    pub async fn register_handler(
+        &self,
+        task_name: impl Into<String>,
+        handler: Arc<dyn HeartbeatHandler>,
+    ) {
+        self.handlers.write().await.insert(task_name.into(), handler);
     }
 
     pub async fn unregister(&self, id: &str) -> bool {
@@ -263,19 +273,25 @@ impl HeartbeatEngine {
 
     async fn execute_task(&self, task: &HeartbeatTask) -> HeartbeatResult {
         let start = std::time::Instant::now();
-        
+
+        if let Some(handler) = self.handlers.read().await.get(&task.name).cloned() {
+            return handler.handle(task).await.with_duration(start.elapsed().as_millis() as u64);
+        }
+
         let result = match task.name.as_str() {
-            "memory_cleanup" => {
-                HeartbeatResult::success(&task.id, "Memory cleanup completed")
-            }
-            "health_check" => {
-                HeartbeatResult::success(&task.id, "Health check passed")
-            }
-            "session_compaction" => {
-                HeartbeatResult::success(&task.id, "Session compaction completed")
-            }
+            "memory_cleanup" => HeartbeatResult::success(&task.id, "Memory cleanup completed")
+                .with_data(serde_json::json!({"operation": "memory_cleanup"})),
+            "health_check" => HeartbeatResult::success(&task.id, "Health check passed")
+                .with_data(serde_json::json!({"operation": "health_check"})),
+            "session_compaction" => HeartbeatResult::success(&task.id, "Session compaction completed")
+                .with_data(serde_json::json!({"operation": "session_compaction"})),
             _ => {
-                HeartbeatResult::success(&task.id, format!("Task '{}' executed", task.name))
+                if let Some(action) = task.metadata.get("action") {
+                    HeartbeatResult::success(&task.id, format!("Action '{}' executed", action))
+                        .with_data(serde_json::json!({"action": action}))
+                } else {
+                    HeartbeatResult::success(&task.id, format!("Task '{}' executed", task.name))
+                }
             }
         };
 
@@ -320,5 +336,32 @@ pub struct DefaultHeartbeatHandler;
 impl HeartbeatHandler for DefaultHeartbeatHandler {
     async fn handle(&self, task: &HeartbeatTask) -> HeartbeatResult {
         HeartbeatResult::success(&task.id, format!("Task '{}' executed", task.name))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct CustomHandler;
+
+    #[async_trait]
+    impl HeartbeatHandler for CustomHandler {
+        async fn handle(&self, task: &HeartbeatTask) -> HeartbeatResult {
+            HeartbeatResult::success(&task.id, format!("custom {}", task.name))
+        }
+    }
+
+    #[tokio::test]
+    async fn heartbeat_uses_registered_handler() {
+        let engine = HeartbeatEngine::new();
+        let task = HeartbeatTask::new("custom_task", "0 0 0 * * *");
+        let id = task.id.clone();
+        engine.register_handler("custom_task", Arc::new(CustomHandler)).await;
+        engine.register(task).await;
+
+        let result = engine.run_task_now(&id).await.unwrap();
+
+        assert_eq!(result.message, "custom custom_task");
     }
 }

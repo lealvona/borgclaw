@@ -146,7 +146,7 @@ pub struct SimpleAgent {
     security_config: super::config::SecurityConfig,
     tools: Vec<Tool>,
     state: AgentState,
-    session: Option<Session>,
+    sessions: HashMap<String, Session>,
     provider: Option<Box<dyn ChatProvider>>,
     tool_runtime: Option<ToolRuntime>,
 }
@@ -164,7 +164,7 @@ impl SimpleAgent {
             security_config: security_config.unwrap_or_default(),
             tools: Vec::new(),
             state: AgentState::Idle,
-            session: None,
+            sessions: HashMap::new(),
             provider,
             tool_runtime: None,
         }
@@ -179,9 +179,10 @@ impl SimpleAgent {
         std::fs::read_to_string(path).ok()
     }
 
-    fn ensure_session(&mut self) -> &mut Session {
-        self.session
-            .get_or_insert_with(|| Session::new(None, self.config.max_tokens.clamp(32, 512) as usize))
+    fn ensure_session(&mut self, session_id: &SessionId, group_id: Option<String>) -> &mut Session {
+        self.sessions
+            .entry(session_id.0.clone())
+            .or_insert_with(|| Session::new(group_id, self.config.max_tokens.clamp(32, 512) as usize))
     }
 
     async fn ensure_tool_runtime(&mut self) -> Result<&ToolRuntime, AgentError> {
@@ -197,6 +198,43 @@ impl SimpleAgent {
         }
 
         Ok(self.tool_runtime.as_ref().expect("tool runtime initialized"))
+    }
+
+    fn compact_session_if_needed(threshold: usize, session: &mut Session) {
+        let threshold = threshold.max(4);
+        if session.len() <= threshold {
+            return;
+        }
+
+        let non_system: Vec<_> = session
+            .messages()
+            .iter()
+            .filter(|msg| msg.role != MessageRole::System)
+            .cloned()
+            .collect();
+        if non_system.len() <= 4 {
+            return;
+        }
+
+        let keep_recent = (threshold / 2).max(4);
+        let removed = non_system.len().saturating_sub(keep_recent);
+        if removed == 0 {
+            return;
+        }
+
+        let summary = format!(
+            "{} prior messages summarized. Recent topics: {}",
+            removed,
+            non_system
+                .iter()
+                .take(3)
+                .map(|msg| msg.content.split_whitespace().take(6).collect::<Vec<_>>().join(" "))
+                .filter(|topic| !topic.is_empty())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+
+        session.compact_with_recent(&summary, keep_recent);
     }
 }
 
@@ -217,7 +255,7 @@ impl Agent for SimpleAgent {
         let model = self.config.model.clone();
         let temperature = self.config.temperature;
         let max_tokens = self.config.max_tokens;
-        let session = self.ensure_session();
+        let session = self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
         if let Some(prompt) = system_prompt {
             let has_system = session
                 .messages()
@@ -239,9 +277,8 @@ impl Agent for SimpleAgent {
             };
             let result = execute_tool(&call, runtime).await;
             let response_text = result.output.clone();
-            if let Some(session) = self.session.as_mut() {
-                session.add_message(Message::assistant(response_text.clone()));
-            }
+            let session = self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
+            session.add_message(Message::assistant(response_text.clone()));
             self.state = AgentState::Idle;
             return AgentResponse {
                 text: response_text,
@@ -251,23 +288,29 @@ impl Agent for SimpleAgent {
             };
         }
 
+        {
+            let threshold = self.memory_config.session_compaction_threshold;
+            let session = self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
+            Self::compact_session_if_needed(threshold, session);
+        }
+        let request_messages = self
+            .ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned())
+            .messages()
+            .iter()
+            .map(ChatMessage::from)
+            .collect();
         let request = ProviderRequest {
             model,
             temperature,
             max_tokens,
-            messages: session
-                .messages()
-                .iter()
-                .map(ChatMessage::from)
-                .collect(),
+            messages: request_messages,
         };
         let provider = self.provider.as_ref().expect("provider checked above");
 
         let response = match provider.complete(&request).await {
             Ok(text) => {
-                if let Some(session) = self.session.as_mut() {
-                    session.add_message(Message::assistant(text.clone()));
-                }
+                let session = self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
+                session.add_message(Message::assistant(text.clone()));
                 self.state = AgentState::Idle;
                 AgentResponse::text(text)
             }
@@ -300,5 +343,28 @@ impl Agent for SimpleAgent {
     async fn shutdown(&mut self) -> Result<(), AgentError> {
         self.state = AgentState::Idle;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compaction_keeps_recent_messages_and_summary() {
+        let mut session = Session::new(None, 64);
+        session.add_message(Message::system("system"));
+        for index in 0..8 {
+            session.add_message(Message::user(format!("user {}", index)));
+            session.add_message(Message::assistant(format!("assistant {}", index)));
+        }
+
+        SimpleAgent::compact_session_if_needed(6, &mut session);
+
+        let messages = session.messages().iter().collect::<Vec<_>>();
+        assert!(messages.iter().any(|msg| msg.content.contains("summarized")));
+        assert!(messages.iter().any(|msg| msg.content == "assistant 7"));
+        assert!(messages.iter().any(|msg| msg.content == "user 7"));
+        assert!(!messages.iter().any(|msg| msg.content == "user 0"));
     }
 }
