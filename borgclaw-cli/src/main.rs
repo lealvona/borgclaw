@@ -10,6 +10,7 @@ use borgclaw_core::{
     skills::SkillsRegistry,
 };
 use clap::{Parser, Subcommand};
+use serde::Deserialize;
 use std::path::PathBuf;
 use tracing::{error, info};
 
@@ -275,6 +276,18 @@ async fn skills_action(config: &AppConfig, action: SkillsAction) {
                     }
                 }
             }
+            if let Some(registry_url) = config.skills.registry_url.as_deref() {
+                match fetch_registry_skills(registry_url).await {
+                    Ok(skills) if !skills.is_empty() => {
+                        println!("\nRegistry skills:");
+                        for skill in skills {
+                            println!("  - {}", skill);
+                        }
+                    }
+                    Ok(_) => println!("\nRegistry skills: none found"),
+                    Err(err) => println!("\nRegistry lookup failed: {}", err),
+                }
+            }
         }
         SkillsAction::Install { name } => {
             match install_skill(&config.skills.skills_path, &name, config.skills.registry_url.as_deref()).await {
@@ -487,6 +500,56 @@ fn github_registry_base(registry_url: &str) -> Option<String> {
     Some(format!("https://raw.githubusercontent.com/{}/{}/main", owner, name))
 }
 
+async fn fetch_registry_skills(registry_url: &str) -> Result<Vec<String>, String> {
+    let (owner, repo) = github_registry_repo(registry_url)
+        .ok_or_else(|| "registry listing currently supports GitHub repositories only".to_string())?;
+
+    let client = reqwest::Client::builder()
+        .user_agent("BorgClaw/0.1")
+        .build()
+        .map_err(|e| e.to_string())?;
+    let url = format!("https://api.github.com/repos/{owner}/{repo}/git/trees/main?recursive=1");
+    let response = client.get(url).send().await.map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("http {}", response.status()));
+    }
+
+    let tree: GitHubTreeResponse = response.json().await.map_err(|e| e.to_string())?;
+    Ok(extract_registry_skills(&tree))
+}
+
+fn github_registry_repo(registry_url: &str) -> Option<(String, String)> {
+    let trimmed = registry_url.strip_suffix('/').unwrap_or(registry_url);
+    let repo = trimmed.strip_prefix("https://github.com/")?;
+    let mut parts = repo.split('/');
+    Some((parts.next()?.to_string(), parts.next()?.to_string()))
+}
+
+fn extract_registry_skills(tree: &GitHubTreeResponse) -> Vec<String> {
+    let mut skills = tree
+        .tree
+        .iter()
+        .filter(|entry| entry.kind == "blob" && entry.path.ends_with("/SKILL.md"))
+        .filter_map(|entry| entry.path.strip_suffix("/SKILL.md"))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    skills.sort();
+    skills.dedup();
+    skills
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubTreeResponse {
+    tree: Vec<GitHubTreeEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubTreeEntry {
+    path: String,
+    #[serde(rename = "type")]
+    kind: String,
+}
+
 fn skill_install_id(source: &str) -> Result<String, String> {
     let trimmed = source.trim_end_matches('/');
     let tail = trimmed
@@ -552,6 +615,12 @@ mod tests {
     }
 
     #[test]
+    fn extracts_github_registry_repo() {
+        let repo = github_registry_repo("https://github.com/openclaw/clawhub").unwrap();
+        assert_eq!(repo, ("openclaw".to_string(), "clawhub".to_string()));
+    }
+
+    #[test]
     fn derives_skill_id_from_sources() {
         assert_eq!(skill_install_id("openclaw/weather").unwrap(), "weather");
         assert_eq!(skill_install_id("https://example.com/skills/weather/SKILL.md").unwrap(), "weather");
@@ -570,6 +639,31 @@ mod tests {
 
         assert!(destination.join("SKILL.md").exists());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extracts_registry_skills_from_github_tree() {
+        let tree = GitHubTreeResponse {
+            tree: vec![
+                GitHubTreeEntry {
+                    path: "openclaw/weather/SKILL.md".to_string(),
+                    kind: "blob".to_string(),
+                },
+                GitHubTreeEntry {
+                    path: "openclaw/weather/README.md".to_string(),
+                    kind: "blob".to_string(),
+                },
+                GitHubTreeEntry {
+                    path: "openclaw/calendar/SKILL.md".to_string(),
+                    kind: "blob".to_string(),
+                },
+            ],
+        };
+
+        assert_eq!(
+            extract_registry_skills(&tree),
+            vec!["openclaw/calendar".to_string(), "openclaw/weather".to_string()]
+        );
     }
 }
 
