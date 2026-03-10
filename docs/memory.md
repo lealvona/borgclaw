@@ -179,13 +179,24 @@ engine.start().await?;
 ```rust
 pub struct HeartbeatTask {
     pub id: String,
+    pub name: String,
     pub schedule: String,       // Cron expression
     pub enabled: bool,
     pub last_run: Option<DateTime<Utc>>,
     pub next_run: Option<DateTime<Utc>>,
+    pub run_count: u32,
+    pub max_retries: u32,
+    pub retry_count: u32,
+    pub retry_delay_seconds: u64,
+    pub dead_lettered_at: Option<DateTime<Utc>>,
+    pub last_result: Option<HeartbeatResult>,
     pub handler: Box<dyn HeartbeatHandler>,
 }
 ```
+
+Retry behavior:
+- Failed heartbeat tasks can be configured with retry attempts and retry backoff.
+- Exhausted heartbeat tasks are dead-lettered by disabling the task and recording `dead_lettered_at`.
 
 ### Cron Examples
 
@@ -239,8 +250,13 @@ pub enum SubAgentStatus {
     Completed(AgentResponse),
     Failed(String),
     Cancelled,
+    Timeout(String),
 }
 ```
+
+Retry behavior:
+- Failed or timed-out sub-agent tasks can re-enter `Pending` with retry backoff.
+- Exhausted retries leave the task in terminal `Failed` or `Timeout` state with dead-letter metadata preserved on the task record.
 
 ## Configuration
 
