@@ -711,6 +711,15 @@ async fn execute_scheduled_job(
                     tool_name
                 )));
             }
+            if runtime
+                .security
+                .needs_approval(&tool_name, runtime.security.approval_mode())
+            {
+                return Err(SchedulerError::Error(format!(
+                    "scheduled background execution cannot satisfy approval for {}",
+                    tool_name
+                )));
+            }
             let arguments = job
                 .metadata
                 .get("tool_arguments")
@@ -3074,6 +3083,76 @@ mod tests {
         assert_eq!(jobs[0].status, JobStatus::Completed);
         assert!(recalled.iter().any(|entry| entry.entry.key == "scheduledkey"
             && entry.entry.content == "scheduled content"));
+    }
+
+    #[tokio::test]
+    async fn run_scheduled_tasks_rejects_background_tools_that_need_approval() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_run_scheduled_approval_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &SchedulerConfig::default(),
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig {
+                approval_mode: ApprovalMode::Supervised,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let schedule = execute_tool(
+            &ToolCall::new(
+                "schedule_task",
+                HashMap::from([
+                    ("tool".to_string(), serde_json::json!("execute_command")),
+                    (
+                        "arguments".to_string(),
+                        serde_json::json!({
+                            "command": "echo should-not-run"
+                        }),
+                    ),
+                ]),
+            ),
+            &runtime,
+        )
+        .await;
+        assert!(schedule.success);
+
+        {
+            let scheduler = runtime.scheduler.lock().await;
+            let jobs = scheduler.list().await;
+            let id = jobs[0].id.clone();
+            drop(jobs);
+            let mut stored = scheduler.get(&id).await.unwrap();
+            stored.next_run = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+            scheduler.unschedule(&id).await.unwrap();
+            scheduler.schedule(stored).await.unwrap();
+        }
+
+        let result =
+            execute_tool(&ToolCall::new("run_scheduled_tasks", HashMap::new()), &runtime).await;
+        let jobs = runtime.scheduler.lock().await.list().await;
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(result.success);
+        assert_eq!(result.metadata.get("failed").map(String::as_str), Some("1"));
+        assert_eq!(jobs[0].status, JobStatus::Failed);
     }
 }
 

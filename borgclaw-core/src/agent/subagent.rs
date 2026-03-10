@@ -409,7 +409,7 @@ impl SubAgentCoordinator {
             Some(self.mcp_config.clone()),
             Some(self.security_config.clone()),
         );
-        let tools = allowed_builtin_tools(task);
+        let tools = allowed_builtin_tools(task, &self.security_config);
         for tool in tools {
             agent.register_tool(tool);
         }
@@ -569,10 +569,17 @@ enum RetryAction {
     },
 }
 
-fn allowed_builtin_tools(task: &SubAgentTask) -> Vec<crate::agent::Tool> {
+fn allowed_builtin_tools(
+    task: &SubAgentTask,
+    security_config: &SecurityConfig,
+) -> Vec<crate::agent::Tool> {
+    let security = crate::security::SecurityLayer::with_config(security_config.clone());
     builtin_tools()
         .into_iter()
-        .filter(|tool| task_allows_tool(task, &tool.name))
+        .filter(|tool| {
+            task_allows_tool(task, &tool.name)
+                && !security.needs_approval(&tool.name, security.approval_mode())
+        })
         .collect()
 }
 
@@ -772,15 +779,15 @@ mod tests {
             .memory_access(MemoryAccessType::ReadWrite)
             .build("hello");
 
-        let none_tools = allowed_builtin_tools(&none)
+        let none_tools = allowed_builtin_tools(&none, &SecurityConfig::default())
             .into_iter()
             .map(|tool| tool.name)
             .collect::<Vec<_>>();
-        let read_only_tools = allowed_builtin_tools(&read_only)
+        let read_only_tools = allowed_builtin_tools(&read_only, &SecurityConfig::default())
             .into_iter()
             .map(|tool| tool.name)
             .collect::<Vec<_>>();
-        let read_write_tools = allowed_builtin_tools(&read_write)
+        let read_write_tools = allowed_builtin_tools(&read_write, &SecurityConfig::default())
             .into_iter()
             .map(|tool| tool.name)
             .collect::<Vec<_>>();
@@ -800,7 +807,7 @@ mod tests {
             .allow_tools(vec!["memory_store".to_string(), "memory_recall".to_string()])
             .build("hello");
 
-        let allowed = allowed_builtin_tools(&read_only)
+        let allowed = allowed_builtin_tools(&read_only, &SecurityConfig::default())
             .into_iter()
             .map(|tool| tool.name)
             .collect::<Vec<_>>();
@@ -1086,6 +1093,23 @@ mod tests {
             coordinator.status(&task_id).await,
             SubAgentStatus::Cancelled
         ));
+    }
+
+    #[test]
+    fn subagent_background_tools_respect_approval_mode() {
+        let task = SubAgentBuilder::new("supervised").build("hello");
+        let allowed = allowed_builtin_tools(
+            &task,
+            &SecurityConfig {
+                approval_mode: crate::config::ApprovalMode::Supervised,
+                ..Default::default()
+            },
+        )
+        .into_iter()
+        .map(|tool| tool.name)
+        .collect::<Vec<_>>();
+
+        assert!(!allowed.iter().any(|name| name == "execute_command"));
     }
 
     #[tokio::test]
