@@ -231,6 +231,7 @@ impl HeartbeatEngine {
         let mut tasks = self.tasks.write().await;
         if let Some(task) = tasks.get_mut(id) {
             task.enabled = false;
+            task.next_run = None;
             true
         } else {
             false
@@ -560,5 +561,26 @@ mod tests {
         assert!(after.next_run.is_some());
         assert!(after.last_result.is_some());
         assert_eq!(before, after.next_run);
+    }
+
+    #[tokio::test]
+    async fn heartbeat_disable_clears_next_run_until_reenabled() {
+        let engine = HeartbeatEngine::new();
+        let id = engine
+            .add_task(HeartbeatTask::new("toggle_task", "0 0 0 * * *"))
+            .await;
+
+        let before = engine.get(&id).await.unwrap();
+        assert!(before.next_run.is_some());
+
+        assert!(engine.disable(&id).await);
+        let disabled = engine.get(&id).await.unwrap();
+        assert!(!disabled.enabled);
+        assert!(disabled.next_run.is_none());
+
+        assert!(engine.enable(&id).await);
+        let reenabled = engine.get(&id).await.unwrap();
+        assert!(reenabled.enabled);
+        assert!(reenabled.next_run.is_some());
     }
 }
