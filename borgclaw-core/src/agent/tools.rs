@@ -188,6 +188,7 @@ pub struct ToolRuntime {
     pub workspace_root: PathBuf,
     pub memory: Arc<SqliteMemory>,
     pub scheduler: Arc<Mutex<Scheduler>>,
+    pub scheduler_config: crate::config::SchedulerConfig,
     pub plugins: Arc<PluginRegistry>,
     pub skills: crate::config::SkillsConfig,
     pub mcp_servers: HashMap<String, crate::config::McpServerConfig>,
@@ -216,6 +217,7 @@ impl ToolRuntime {
             workspace_root,
             memory,
             scheduler: Arc::new(Mutex::new(Scheduler::new())),
+            scheduler_config: scheduler_config.clone(),
             plugins,
             skills: skills_config.clone(),
             mcp_servers: mcp_config.servers.clone(),
@@ -232,8 +234,9 @@ impl ToolRuntime {
     async fn start_scheduler_loop(&self) -> Result<(), String> {
         let scheduler = self.scheduler.lock().await;
         scheduler
-            .start(
+            .start_with_limit(
                 std::time::Duration::from_secs(1),
+                self.scheduler_config.max_concurrent_jobs,
                 Arc::new(|job| Box::pin(async move { execute_scheduled_job(&job) })),
             )
             .await
@@ -2585,6 +2588,7 @@ mod tests {
                 std::env::temp_dir().join("borgclaw_mcp_unknown_memory"),
             )),
             scheduler: Arc::new(Mutex::new(Scheduler::new())),
+            scheduler_config: SchedulerConfig::default(),
             plugins: Arc::new(PluginRegistry::new()),
             skills: crate::config::SkillsConfig::default(),
             mcp_servers: HashMap::new(),
@@ -2606,6 +2610,7 @@ mod tests {
                 std::env::temp_dir().join("borgclaw_mcp_transport_memory"),
             )),
             scheduler: Arc::new(Mutex::new(Scheduler::new())),
+            scheduler_config: SchedulerConfig::default(),
             plugins: Arc::new(PluginRegistry::new()),
             skills: crate::config::SkillsConfig::default(),
             mcp_servers: HashMap::from([(

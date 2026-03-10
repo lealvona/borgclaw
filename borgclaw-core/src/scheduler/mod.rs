@@ -7,6 +7,7 @@ pub use jobs::{Job, JobStatus, JobTrigger};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use cron::Schedule;
+use futures_util::future::join_all;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -57,11 +58,21 @@ impl Scheduler {
         poll_interval: Duration,
         handler: ScheduledJobHandler,
     ) -> Result<(), SchedulerError> {
+        self.start_with_limit(poll_interval, 1, handler).await
+    }
+
+    pub async fn start_with_limit(
+        &self,
+        poll_interval: Duration,
+        max_concurrent_jobs: usize,
+        handler: ScheduledJobHandler,
+    ) -> Result<(), SchedulerError> {
         if poll_interval.is_zero() {
             return Err(SchedulerError::Error(
                 "scheduler poll interval must be greater than zero".to_string(),
             ));
         }
+        let max_concurrent_jobs = max_concurrent_jobs.max(1);
 
         let mut running = self.running.write().await;
         if let Some(handle) = running.get(SCHEDULER_LOOP_ID) {
@@ -78,7 +89,7 @@ impl Scheduler {
             loop {
                 ticker.tick().await;
                 let _ = scheduler
-                    .run_due(|job| {
+                    .run_due_with_limit(max_concurrent_jobs, |job| {
                         let loop_handler = loop_handler.clone();
                         async move { loop_handler(job).await }
                     })
@@ -212,6 +223,19 @@ impl Scheduler {
         F: Fn(Job) -> Fut + Send + Sync,
         Fut: Future<Output = Result<(), SchedulerError>>,
     {
+        self.run_due_with_limit(1, handler).await
+    }
+
+    pub async fn run_due_with_limit<F, Fut>(
+        &self,
+        max_concurrent_jobs: usize,
+        handler: F,
+    ) -> Vec<Result<String, SchedulerError>>
+    where
+        F: Fn(Job) -> Fut + Send + Sync,
+        Fut: Future<Output = Result<(), SchedulerError>>,
+    {
+        let max_concurrent_jobs = max_concurrent_jobs.max(1);
         let due_jobs: Vec<Job> = {
             let now = Utc::now();
             let jobs = self.jobs.read().await;
@@ -224,38 +248,50 @@ impl Scheduler {
                 .collect()
         };
 
-        let mut results = Vec::with_capacity(due_jobs.len());
-        for job in due_jobs {
-            {
-                let mut jobs = self.jobs.write().await;
+        if due_jobs.is_empty() {
+            return Vec::new();
+        }
+
+        {
+            let mut jobs = self.jobs.write().await;
+            for job in &due_jobs {
                 if let Some(stored) = jobs.get_mut(&job.id) {
                     stored.status = JobStatus::Running;
                 }
             }
+        }
 
-            let result = handler(job.clone()).await;
+        let mut results = Vec::with_capacity(due_jobs.len());
+        for batch in due_jobs.chunks(max_concurrent_jobs) {
+            let batch_results = join_all(batch.iter().cloned().map(|job| async {
+                let result = handler(job.clone()).await;
+                (job, result)
+            }))
+            .await;
 
-            {
-                let mut jobs = self.jobs.write().await;
-                if let Some(stored) = jobs.get_mut(&job.id) {
-                    stored.last_run = Some(Utc::now());
-                    stored.run_count += 1;
-                    match result.as_ref() {
-                        Ok(()) => {
-                            stored.status = JobStatus::Completed;
-                            stored.next_run = match stored.trigger {
-                                JobTrigger::OneShot(_) => None,
-                                _ => stored.trigger.next_run(),
-                            };
-                        }
-                        Err(_) => {
-                            stored.status = JobStatus::Failed;
+            for (job, result) in batch_results {
+                {
+                    let mut jobs = self.jobs.write().await;
+                    if let Some(stored) = jobs.get_mut(&job.id) {
+                        stored.last_run = Some(Utc::now());
+                        stored.run_count += 1;
+                        match result.as_ref() {
+                            Ok(()) => {
+                                stored.status = JobStatus::Completed;
+                                stored.next_run = match stored.trigger {
+                                    JobTrigger::OneShot(_) => None,
+                                    _ => stored.trigger.next_run(),
+                                };
+                            }
+                            Err(_) => {
+                                stored.status = JobStatus::Failed;
+                            }
                         }
                     }
                 }
-            }
 
-            results.push(result.map(|_| job.id));
+                results.push(result.map(|_| job.id));
+            }
         }
 
         results
@@ -462,5 +498,77 @@ mod tests {
         assert!(err.to_string().contains("already running"));
 
         assert!(scheduler.stop().await);
+    }
+
+    #[tokio::test]
+    async fn scheduler_run_due_with_limit_honors_concurrency_cap() {
+        let scheduler = Scheduler::new();
+        for idx in 0..2 {
+            let mut job = new_job(
+                format!("job-{idx}"),
+                JobTrigger::OneShot(Utc::now() + Duration::seconds(5)),
+                "echo hi",
+            );
+            job.next_run = Some(Utc::now() - Duration::seconds(1));
+            scheduler.schedule(job).await.unwrap();
+        }
+
+        let current = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let current_for_handler = current.clone();
+        let peak_for_handler = peak.clone();
+
+        let results = scheduler
+            .run_due_with_limit(2, move |_| {
+                let current = current_for_handler.clone();
+                let peak = peak_for_handler.clone();
+                async move {
+                    let active = current.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(active, Ordering::SeqCst);
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    current.fetch_sub(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            })
+            .await;
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(peak.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn scheduler_run_due_with_limit_can_force_serial_execution() {
+        let scheduler = Scheduler::new();
+        for idx in 0..2 {
+            let mut job = new_job(
+                format!("job-{idx}"),
+                JobTrigger::OneShot(Utc::now() + Duration::seconds(5)),
+                "echo hi",
+            );
+            job.next_run = Some(Utc::now() - Duration::seconds(1));
+            scheduler.schedule(job).await.unwrap();
+        }
+
+        let current = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let current_for_handler = current.clone();
+        let peak_for_handler = peak.clone();
+
+        let results = scheduler
+            .run_due_with_limit(1, move |_| {
+                let current = current_for_handler.clone();
+                let peak = peak_for_handler.clone();
+                async move {
+                    let active = current.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(active, Ordering::SeqCst);
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    current.fetch_sub(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            })
+            .await;
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(peak.load(Ordering::SeqCst), 1);
     }
 }
