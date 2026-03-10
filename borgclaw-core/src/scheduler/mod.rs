@@ -9,10 +9,17 @@ use chrono::{DateTime, Utc};
 use cron::Schedule;
 use std::collections::HashMap;
 use std::future::Future;
+use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 use uuid::Uuid;
+
+const SCHEDULER_LOOP_ID: &str = "__scheduler_loop__";
+
+type BoxedJobFuture = Pin<Box<dyn Future<Output = Result<(), SchedulerError>> + Send>>;
+pub type ScheduledJobHandler = Arc<dyn Fn(Job) -> BoxedJobFuture + Send + Sync>;
 
 /// Scheduler trait - implemented by scheduler backends
 #[async_trait]
@@ -31,6 +38,7 @@ pub trait SchedulerTrait: Send + Sync {
 }
 
 /// Scheduler - manages scheduled and background jobs
+#[derive(Clone)]
 pub struct Scheduler {
     jobs: Arc<RwLock<HashMap<String, Job>>>,
     running: Arc<RwLock<HashMap<String, tokio::task::JoinHandle<()>>>>,
@@ -42,6 +50,67 @@ impl Scheduler {
             jobs: Arc::new(RwLock::new(HashMap::new())),
             running: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    pub async fn start(
+        &self,
+        poll_interval: Duration,
+        handler: ScheduledJobHandler,
+    ) -> Result<(), SchedulerError> {
+        if poll_interval.is_zero() {
+            return Err(SchedulerError::Error(
+                "scheduler poll interval must be greater than zero".to_string(),
+            ));
+        }
+
+        let mut running = self.running.write().await;
+        if let Some(handle) = running.get(SCHEDULER_LOOP_ID) {
+            if !handle.is_finished() {
+                return Err(SchedulerError::Error("scheduler already running".to_string()));
+            }
+        }
+        running.remove(SCHEDULER_LOOP_ID);
+
+        let scheduler = self.clone();
+        let loop_handler = handler.clone();
+        let handle = tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(poll_interval);
+            loop {
+                ticker.tick().await;
+                let _ = scheduler
+                    .run_due(|job| {
+                        let loop_handler = loop_handler.clone();
+                        async move { loop_handler(job).await }
+                    })
+                    .await;
+            }
+        });
+        running.insert(SCHEDULER_LOOP_ID.to_string(), handle);
+
+        Ok(())
+    }
+
+    pub async fn stop(&self) -> bool {
+        let mut running = self.running.write().await;
+        if let Some(handle) = running.remove(SCHEDULER_LOOP_ID) {
+            handle.abort();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub async fn is_running(&self) -> bool {
+        let mut running = self.running.write().await;
+        if let Some(handle) = running.get(SCHEDULER_LOOP_ID) {
+            if handle.is_finished() {
+                running.remove(SCHEDULER_LOOP_ID);
+                return false;
+            }
+            return true;
+        }
+
+        false
     }
 }
 
@@ -140,7 +209,7 @@ impl Scheduler {
     /// Execute all due jobs using the supplied handler.
     pub async fn run_due<F, Fut>(&self, handler: F) -> Vec<Result<String, SchedulerError>>
     where
-        F: Fn(Job) -> Fut + Copy + Send + Sync,
+        F: Fn(Job) -> Fut + Send + Sync,
         Fut: Future<Output = Result<(), SchedulerError>>,
     {
         let due_jobs: Vec<Job> = {
@@ -236,6 +305,7 @@ pub fn new_job(name: impl Into<String>, trigger: JobTrigger, action: impl Into<S
 mod tests {
     use super::*;
     use chrono::Duration;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn new_job_initializes_next_run_from_trigger() {
@@ -330,5 +400,67 @@ mod tests {
         assert_eq!(stored.status, JobStatus::Failed);
         assert_eq!(stored.run_count, 1);
         assert!(stored.last_run.is_some());
+    }
+
+    #[tokio::test]
+    async fn scheduler_start_executes_due_jobs() {
+        let scheduler = Scheduler::new();
+        let mut job = new_job("oneshot", JobTrigger::OneShot(Utc::now() + Duration::seconds(5)), "echo hi");
+        job.next_run = Some(Utc::now() - Duration::seconds(1));
+        let id = scheduler.schedule(job).await.unwrap();
+        let runs = Arc::new(AtomicUsize::new(0));
+        let handler_runs = runs.clone();
+
+        scheduler
+            .start(
+                std::time::Duration::from_millis(10),
+                Arc::new(move |_| {
+                    let handler_runs = handler_runs.clone();
+                    Box::pin(async move {
+                        handler_runs.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    })
+                }),
+            )
+            .await
+            .unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if runs.load(Ordering::SeqCst) > 0 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        assert!(scheduler.is_running().await);
+        let stored = scheduler.get(&id).await.unwrap();
+        assert_eq!(stored.status, JobStatus::Completed);
+        assert_eq!(stored.run_count, 1);
+
+        assert!(scheduler.stop().await);
+        assert!(!scheduler.is_running().await);
+    }
+
+    #[tokio::test]
+    async fn scheduler_start_rejects_duplicate_loop() {
+        let scheduler = Scheduler::new();
+        let handler: ScheduledJobHandler = Arc::new(|_| Box::pin(async { Ok(()) }));
+
+        scheduler
+            .start(std::time::Duration::from_millis(50), handler.clone())
+            .await
+            .unwrap();
+
+        let err = scheduler
+            .start(std::time::Duration::from_millis(50), handler)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("already running"));
+
+        assert!(scheduler.stop().await);
     }
 }
