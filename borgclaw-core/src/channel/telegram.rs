@@ -49,7 +49,11 @@ impl Channel for TelegramChannel {
     }
 
     async fn init(&mut self, config: &ChannelConfig) -> Result<(), ChannelError> {
-        let token = config.credentials.as_ref().ok_or_else(|| {
+        let token = config
+            .credentials
+            .as_deref()
+            .and_then(resolve_telegram_token)
+            .ok_or_else(|| {
             ChannelError::AuthFailed("Telegram bot token not provided".to_string())
         })?;
 
@@ -215,5 +219,40 @@ impl Channel for TelegramChannel {
         *self.status.write().await = ChannelStatus::disconnected();
         *self.bot.write().await = None;
         Ok(())
+    }
+}
+
+fn resolve_telegram_token(configured: &str) -> Option<String> {
+    if let Some(env_key) = configured
+        .strip_prefix("${")
+        .and_then(|value| value.strip_suffix('}'))
+    {
+        return std::env::var(env_key)
+            .ok()
+            .filter(|value| !value.trim().is_empty());
+    }
+
+    Some(configured.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_telegram_token;
+
+    #[test]
+    fn telegram_token_resolves_documented_env_placeholder() {
+        let key = "BORGCLAW_TEST_TELEGRAM_TOKEN";
+        unsafe {
+            std::env::set_var(key, "123456:ABC");
+        }
+
+        assert_eq!(
+            resolve_telegram_token("${BORGCLAW_TEST_TELEGRAM_TOKEN}").as_deref(),
+            Some("123456:ABC")
+        );
+
+        unsafe {
+            std::env::remove_var(key);
+        }
     }
 }
