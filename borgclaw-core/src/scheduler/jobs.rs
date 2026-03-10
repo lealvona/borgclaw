@@ -28,8 +28,23 @@ pub struct Job {
     pub next_run: Option<DateTime<Utc>>,
     /// Number of times run
     pub run_count: u32,
+    /// Recent execution history
+    pub run_history: Vec<JobRun>,
     /// Additional metadata
     pub metadata: HashMap<String, String>,
+}
+
+/// Recorded execution of a scheduled job
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobRun {
+    /// Run start timestamp
+    pub started_at: DateTime<Utc>,
+    /// Run completion timestamp
+    pub finished_at: DateTime<Utc>,
+    /// Final run status
+    pub status: JobStatus,
+    /// Failure detail when present
+    pub error: Option<String>,
 }
 
 /// Job trigger types
