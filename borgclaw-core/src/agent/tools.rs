@@ -307,6 +307,7 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "browser_eval_js" => browser_eval_js(&call.arguments, runtime).await,
         "browser_screenshot" => browser_screenshot(&call.arguments, runtime).await,
         "stt_transcribe" => stt_transcribe(&call.arguments, runtime).await,
+        "tts_list_voices" => tts_list_voices(runtime).await,
         "tts_speak" => tts_speak(&call.arguments, runtime).await,
         "image_generate" => image_generate(&call.arguments, runtime).await,
         "qr_encode" => qr_encode(&call.arguments).await,
@@ -1627,6 +1628,22 @@ async fn tts_speak(
     }
 }
 
+async fn tts_list_voices(runtime: &ToolRuntime) -> ToolResult {
+    let client = TtsClient::new(resolve_tts_config(&runtime.skills.tts));
+
+    match client.list_voices().await {
+        Ok(voices) if voices.is_empty() => ToolResult::ok("no voices"),
+        Ok(voices) => ToolResult::ok(
+            voices
+                .into_iter()
+                .map(|voice| format!("{} | {}", voice.voice_id, voice.name))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
 async fn image_generate(
     arguments: &HashMap<String, serde_json::Value>,
     runtime: &ToolRuntime,
@@ -2557,6 +2574,7 @@ mod tests {
         assert!(names.iter().any(|name| name == "google_download_file"));
         assert!(names.iter().any(|name| name == "browser_get_url"));
         assert!(names.iter().any(|name| name == "browser_eval_js"));
+        assert!(names.iter().any(|name| name == "tts_list_voices"));
     }
 
     #[tokio::test]
@@ -3191,6 +3209,9 @@ pub fn builtin_tools() -> Vec<Tool> {
                 vec!["path".to_string()],
             ))
             .with_tags(vec!["stt".to_string(), "integration".to_string()]),
+        Tool::new("tts_list_voices", "List available TTS voices")
+            .with_schema(ToolSchema::object(HashMap::new(), Vec::new()))
+            .with_tags(vec!["tts".to_string(), "integration".to_string()]),
         Tool::new("tts_speak", "Synthesize speech from text")
             .with_schema(ToolSchema::object(
                 [("text".to_string(), string_property("Text to synthesize"))].into(),
