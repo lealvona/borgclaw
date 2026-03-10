@@ -5,6 +5,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ElevenLabsConfig {
     pub api_key: String,
     pub voice_id: String,
@@ -37,6 +38,8 @@ pub struct TtsClient {
     config: ElevenLabsConfig,
     http: reqwest::Client,
 }
+
+pub type ElevenLabsClient = TtsClient;
 
 impl TtsClient {
     pub fn new(config: ElevenLabsConfig) -> Self {

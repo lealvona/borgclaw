@@ -10,6 +10,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, RwLock};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
 pub enum BrowserType {
     Chromium,
     Firefox,
@@ -23,6 +24,7 @@ impl Default for BrowserType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct BrowserConfig {
     pub browser: BrowserType,
     pub headless: bool,

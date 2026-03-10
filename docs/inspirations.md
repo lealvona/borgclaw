@@ -2,6 +2,13 @@
 
 This guide expands the short origin list in the README into an engineering reference.
 
+Last reviewed against upstream repositories: March 10, 2026
+
+Status note:
+- Several gaps originally called out here are now partially or fully closed in BorgClaw.
+- Use [Implementation Status](implementation-status.md) as the current source of truth for what remains open.
+- Keep this document focused on upstream implementation ideas, not on narrowing BorgClaw's contract.
+
 Use it for two things:
 
 1. Understand which upstream project is the best model for a given BorgClaw subsystem.

@@ -26,12 +26,29 @@ impl AudioFormat {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SttBackend {
-    OpenAI,
+    OpenAI(OpenAiConfig),
     OpenWebUi(OpenWebUiConfig),
     WhisperCpp(WhisperCppConfig),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OpenAiConfig {
+    pub api_key: String,
+    pub model: String,
+}
+
+impl Default for OpenAiConfig {
+    fn default() -> Self {
+        Self {
+            api_key: String::new(),
+            model: "whisper-1".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct OpenWebUiConfig {
     pub base_url: String,
     pub api_key: String,
@@ -49,11 +66,23 @@ impl Default for OpenWebUiConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct WhisperCppConfig {
     pub binary_path: PathBuf,
     pub model_path: PathBuf,
     pub language: Option<String>,
     pub extra_args: Vec<String>,
+}
+
+impl Default for WhisperCppConfig {
+    fn default() -> Self {
+        Self {
+            binary_path: PathBuf::from(".local/tools/whisper.cpp/build/bin/whisper-cli"),
+            model_path: PathBuf::from(".local/tools/whisper.cpp/models/ggml-base.en.bin"),
+            language: None,
+            extra_args: Vec::new(),
+        }
+    }
 }
 
 pub struct SttClient {
@@ -71,7 +100,7 @@ impl SttClient {
 
     pub async fn transcribe(&self, audio: &[u8], format: AudioFormat) -> Result<String, SttError> {
         match &self.backend {
-            SttBackend::OpenAI => self.transcribe_openai(audio, format).await,
+            SttBackend::OpenAI(cfg) => self.transcribe_openai(audio, format, cfg).await,
             SttBackend::OpenWebUi(cfg) => self.transcribe_openwebui(audio, format, cfg).await,
             SttBackend::WhisperCpp(cfg) => self.transcribe_whisper_cpp(audio, &format, cfg).await,
         }
@@ -81,9 +110,14 @@ impl SttClient {
         &self,
         audio: &[u8],
         format: AudioFormat,
+        config: &OpenAiConfig,
     ) -> Result<String, SttError> {
-        let api_key = std::env::var("OPENAI_API_KEY")
-            .map_err(|_| SttError::ConfigError("OPENAI_API_KEY not set".to_string()))?;
+        let api_key = if config.api_key.is_empty() {
+            std::env::var("OPENAI_API_KEY")
+                .map_err(|_| SttError::ConfigError("OPENAI_API_KEY not set".to_string()))?
+        } else {
+            config.api_key.clone()
+        };
 
         let form = reqwest::multipart::Form::new()
             .part(
@@ -93,7 +127,7 @@ impl SttClient {
                     .map_err(|e| SttError::RequestFailed(e.to_string()))?
                     .file_name("audio".to_string()),
             )
-            .text("model", "whisper-1".to_string());
+            .text("model", config.model.clone());
 
         let response = self
             .http

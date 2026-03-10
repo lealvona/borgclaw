@@ -7,7 +7,10 @@ use crate::mcp::transport::{
 use crate::memory::{new_entry, Memory, MemoryQuery, SqliteMemory};
 use crate::scheduler::{new_job, JobTrigger, Scheduler, SchedulerTrait};
 use crate::security::{CommandCheck, SecurityLayer};
-use crate::skills::PluginRegistry;
+use crate::skills::{
+    BrowserSkill, CdpClient, GitHubClient, GoogleClient, ImageClient, ImageParams, PluginRegistry,
+    PlaywrightClient, QrFormat, QrSkill, SttClient, TtsClient, UrlShortener,
+};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -186,6 +189,7 @@ pub struct ToolRuntime {
     pub memory: Arc<SqliteMemory>,
     pub scheduler: Arc<Mutex<Scheduler>>,
     pub plugins: Arc<PluginRegistry>,
+    pub skills: crate::config::SkillsConfig,
     pub mcp_servers: HashMap<String, crate::config::McpServerConfig>,
     pub security: Arc<SecurityLayer>,
 }
@@ -212,6 +216,7 @@ impl ToolRuntime {
             memory,
             scheduler: Arc::new(Mutex::new(Scheduler::new())),
             plugins,
+            skills: skills_config.clone(),
             mcp_servers: mcp_config.servers.clone(),
             security: Arc::new(SecurityLayer::with_config(security_config.clone())),
         })
@@ -269,6 +274,23 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "web_search" => web_search(&call.arguments).await,
         "plugin_list" => plugin_list(runtime).await,
         "plugin_invoke" => plugin_invoke(&call.arguments, runtime).await,
+        "github_list_repos" => github_list_repos(&call.arguments, runtime).await,
+        "github_create_pr" => github_create_pr(&call.arguments, runtime).await,
+        "github_prepare_delete_branch" => github_prepare_delete_branch(&call.arguments, runtime).await,
+        "google_list_messages" => google_list_messages(&call.arguments, runtime).await,
+        "google_send_email" => google_send_email(&call.arguments, runtime).await,
+        "google_search_files" => google_search_files(&call.arguments, runtime).await,
+        "google_list_events" => google_list_events(&call.arguments, runtime).await,
+        "browser_navigate" => browser_navigate(&call.arguments, runtime).await,
+        "browser_get_text" => browser_get_text(&call.arguments, runtime).await,
+        "browser_get_html" => browser_get_html(&call.arguments, runtime).await,
+        "browser_screenshot" => browser_screenshot(&call.arguments, runtime).await,
+        "stt_transcribe" => stt_transcribe(&call.arguments, runtime).await,
+        "tts_speak" => tts_speak(&call.arguments, runtime).await,
+        "image_generate" => image_generate(&call.arguments, runtime).await,
+        "qr_encode" => qr_encode(&call.arguments).await,
+        "url_shorten" => url_shorten(&call.arguments, runtime).await,
+        "url_expand" => url_expand(&call.arguments, runtime).await,
         "mcp_list_tools" => mcp_list_tools(&call.arguments, runtime).await,
         "mcp_call_tool" => mcp_call_tool(&call.arguments, runtime).await,
         other => ToolResult::err(format!("unknown tool: {}", other)),
@@ -677,6 +699,479 @@ async fn plugin_invoke(
     }
 }
 
+async fn github_list_repos(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = match github_client(runtime) {
+        Ok(client) => client,
+        Err(err) => return ToolResult::err(err),
+    };
+    let visibility = arguments.get("visibility").and_then(|value| value.as_str());
+
+    match client.list_repos(visibility).await {
+        Ok(repos) if repos.is_empty() => ToolResult::ok("no repositories"),
+        Ok(repos) => ToolResult::ok(
+            repos.into_iter()
+                .map(|repo| format!("{} ({})", repo.full_name, repo.default_branch))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn github_create_pr(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = match github_client(runtime) {
+        Ok(client) => client,
+        Err(err) => return ToolResult::err(err),
+    };
+    let owner = match get_required_string(arguments, "owner") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let repo = match get_required_string(arguments, "repo") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let title = match get_required_string(arguments, "title") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let head = match get_required_string(arguments, "head") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let base = match get_required_string(arguments, "base") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let body = arguments
+        .get("body")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+
+    match client.create_pr(&owner, &repo, &title, body, &head, &base).await {
+        Ok(pr) => ToolResult::ok(format!("{} #{}", pr.html_url, pr.number))
+            .with_metadata("owner", owner)
+            .with_metadata("repo", repo),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn github_prepare_delete_branch(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = match github_client(runtime) {
+        Ok(client) => client,
+        Err(err) => return ToolResult::err(err),
+    };
+    let owner = match get_required_string(arguments, "owner") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let repo = match get_required_string(arguments, "repo") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let branch = match get_required_string(arguments, "branch") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    match client.prepare_delete_branch(&owner, &repo, &branch).await {
+        Ok(confirmation) => ToolResult::ok(confirmation.description)
+            .with_metadata("confirmation_token", confirmation.token)
+            .with_metadata("expires_at", confirmation.expires_at.to_rfc3339()),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn google_list_messages(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = google_client(runtime);
+    let query = arguments.get("query").and_then(|value| value.as_str());
+    let limit = get_u64(arguments, "limit").unwrap_or(10) as u32;
+
+    match client.list_messages(query, limit).await {
+        Ok(messages) if messages.is_empty() => ToolResult::ok("no messages"),
+        Ok(messages) => ToolResult::ok(
+            messages
+                .into_iter()
+                .map(|msg| {
+                    format!(
+                        "{} | {} | {}",
+                        msg.id,
+                        msg.from.unwrap_or_default(),
+                        msg.subject.unwrap_or_default()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn google_send_email(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = google_client(runtime);
+    let to = match get_required_string(arguments, "to") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let subject = match get_required_string(arguments, "subject") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let body = match get_required_string(arguments, "body") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    match client.send_email(&to, &subject, &body).await {
+        Ok(id) => ToolResult::ok(id),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn google_search_files(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = google_client(runtime);
+    let query = match get_required_string(arguments, "query") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    match client.search_files(&query).await {
+        Ok(files) if files.is_empty() => ToolResult::ok("no files"),
+        Ok(files) => ToolResult::ok(
+            files.into_iter()
+                .map(|file| format!("{} | {} | {}", file.id, file.name, file.mime_type))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn google_list_events(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = google_client(runtime);
+    let calendar_id = arguments
+        .get("calendar_id")
+        .and_then(|value| value.as_str())
+        .unwrap_or("primary");
+    let days = get_u64(arguments, "days").unwrap_or(7) as i64;
+    let now = chrono::Utc::now();
+
+    match client
+        .list_events(calendar_id, now, now + chrono::Duration::days(days))
+        .await
+    {
+        Ok(events) if events.is_empty() => ToolResult::ok("no events"),
+        Ok(events) => ToolResult::ok(
+            events.into_iter()
+                .map(|event| format!("{} | {}", event.start.to_rfc3339(), event.summary))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn browser_navigate(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let url = match get_required_string(arguments, "url") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    with_browser(runtime, |browser| async move {
+        browser.navigate(&url).await?;
+        Ok(ToolResult::ok(url))
+    })
+    .await
+}
+
+async fn browser_get_text(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let selector = arguments
+        .get("selector")
+        .and_then(|value| value.as_str())
+        .unwrap_or("body")
+        .to_string();
+
+    with_browser(runtime, |browser| async move {
+        let text = browser.extract_text(&selector).await?;
+        Ok(ToolResult::ok(text))
+    })
+    .await
+}
+
+async fn browser_get_html(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let selector = arguments
+        .get("selector")
+        .and_then(|value| value.as_str())
+        .unwrap_or("body")
+        .to_string();
+
+    with_browser(runtime, |browser| async move {
+        let html = browser.extract_html(&selector).await?;
+        Ok(ToolResult::ok(truncate_output(&html)))
+    })
+    .await
+}
+
+async fn browser_screenshot(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let full_page = arguments
+        .get("full_page")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(true);
+
+    with_browser(runtime, move |browser| async move {
+        let bytes = if full_page {
+            browser.screenshot().await?
+        } else {
+            browser.screenshot().await?
+        };
+        Ok(ToolResult::ok(format!("captured {} bytes", bytes.len()))
+            .with_metadata("bytes", bytes.len().to_string()))
+    })
+    .await
+}
+
+async fn stt_transcribe(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let path = match get_required_string(arguments, "path") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let format = match audio_format(arguments.get("format").and_then(|value| value.as_str())) {
+        Ok(format) => format,
+        Err(err) => return ToolResult::err(err),
+    };
+    let resolved = match resolve_workspace_path(&runtime.workspace_root, &path) {
+        Ok(path) => path,
+        Err(err) => return ToolResult::err(err),
+    };
+    let audio = match std::fs::read(&resolved) {
+        Ok(audio) => audio,
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
+    let client = SttClient::new(runtime.skills.stt.backend_config());
+
+    match client.transcribe(&audio, format).await {
+        Ok(text) => ToolResult::ok(text),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn tts_speak(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let text = match get_required_string(arguments, "text") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let client = TtsClient::new(resolve_tts_config(&runtime.skills.tts));
+
+    match client.speak(&text).await {
+        Ok(audio) => ToolResult::ok(format!("generated {} bytes", audio.len()))
+            .with_metadata("bytes", audio.len().to_string()),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn image_generate(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let prompt = match get_required_string(arguments, "prompt") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let mut params = ImageParams::default();
+    if let Some(width) = get_u64(arguments, "width") {
+        params.width = width as u32;
+    }
+    if let Some(height) = get_u64(arguments, "height") {
+        params.height = height as u32;
+    }
+    let mut client = ImageClient::new(runtime.skills.image.backend());
+    let openai_api_key = resolve_env_reference(&runtime.skills.image.dalle.api_key);
+    if !openai_api_key.is_empty() {
+        client = client.with_openai_api_key(openai_api_key);
+    }
+
+    match client.generate(&prompt, params).await {
+        Ok(image) => ToolResult::ok(format!(
+            "generated {:?} image ({} bytes)",
+            image.format,
+            image.bytes.as_ref().map(|bytes| bytes.len()).unwrap_or(0)
+        )),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn qr_encode(arguments: &HashMap<String, serde_json::Value>) -> ToolResult {
+    let data = match get_required_string(arguments, "data") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let format = match arguments.get("format").and_then(|value| value.as_str()) {
+        Some("svg") => QrFormat::Svg,
+        Some("terminal") => QrFormat::Terminal,
+        _ => QrFormat::default(),
+    };
+
+    match QrSkill::encode(&data, format) {
+        Ok(bytes) => ToolResult::ok(format!("generated {} bytes", bytes.len()))
+            .with_metadata("bytes", bytes.len().to_string()),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn url_shorten(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let url = match get_required_string(arguments, "url") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let shortener = UrlShortener::new(resolve_url_shortener_provider(&runtime.skills));
+    match shortener.shorten(&url).await {
+        Ok(short) => ToolResult::ok(short),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn url_expand(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let url = match get_required_string(arguments, "url") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let shortener = UrlShortener::new(resolve_url_shortener_provider(&runtime.skills));
+    match shortener.expand(&url).await {
+        Ok(expanded) => ToolResult::ok(expanded),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+fn github_client(runtime: &ToolRuntime) -> Result<GitHubClient, String> {
+    let mut config = runtime
+        .skills
+        .github
+        .client_config()
+        .ok_or_else(|| "skills.github.token is not configured".to_string())?;
+    config.token = resolve_env_reference(&config.token);
+    Ok(GitHubClient::with_safety(
+        config,
+        runtime.skills.github.safety_policy(),
+    ))
+}
+
+fn google_client(runtime: &ToolRuntime) -> GoogleClient {
+    let mut config = runtime.skills.google.clone();
+    config.client_id = resolve_env_reference(&config.client_id);
+    config.client_secret = resolve_env_reference(&config.client_secret);
+    GoogleClient::new(config)
+}
+
+async fn with_browser<F, Fut>(runtime: &ToolRuntime, f: F) -> ToolResult
+where
+    F: FnOnce(Box<dyn BrowserSkill>) -> Fut,
+    Fut: std::future::Future<Output = Result<ToolResult, crate::skills::browser::BrowserError>>,
+{
+    let config = runtime.skills.browser.clone();
+    let browser: Box<dyn BrowserSkill> = if let Some(cdp_url) = &config.cdp_url {
+        let client = CdpClient::new(cdp_url.clone());
+        if let Err(err) = client.launch().await {
+            return ToolResult::err(err.to_string());
+        }
+        Box::new(client)
+    } else {
+        let client = PlaywrightClient::new(config);
+        if let Err(err) = client.launch().await {
+            return ToolResult::err(err.to_string());
+        }
+        Box::new(client)
+    };
+
+    let result = f(browser).await;
+    match result {
+        Ok(result) => result,
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+fn audio_format(value: Option<&str>) -> Result<crate::skills::AudioFormat, String> {
+    match value.unwrap_or("wav") {
+        "wav" => Ok(crate::skills::AudioFormat::Wav),
+        "mp3" => Ok(crate::skills::AudioFormat::Mp3),
+        "webm" => Ok(crate::skills::AudioFormat::Webm),
+        "m4a" => Ok(crate::skills::AudioFormat::M4a),
+        "ogg" => Ok(crate::skills::AudioFormat::Ogg),
+        other => Err(format!("unsupported audio format '{}'", other)),
+    }
+}
+
+fn resolve_tts_config(config: &crate::config::TtsSkillConfig) -> crate::skills::ElevenLabsConfig {
+    let mut resolved = config.elevenlabs.clone();
+    resolved.api_key = resolve_env_reference(&resolved.api_key);
+    resolved
+}
+
+fn resolve_url_shortener_provider(
+    skills: &crate::config::SkillsConfig,
+) -> crate::skills::UrlShortenerProvider {
+    let mut provider = skills.url_shortener.provider_config();
+    if let crate::skills::UrlShortenerProvider::Yourls(config) = &mut provider {
+        config.api_url = resolve_env_reference(&config.api_url);
+        config.signature = resolve_env_reference(&config.signature);
+        config.username = config.username.as_ref().map(|value| resolve_env_reference(value));
+        config.password = config.password.as_ref().map(|value| resolve_env_reference(value));
+    }
+    provider
+}
+
+fn resolve_env_reference(value: &str) -> String {
+    if let Some(var) = value.strip_prefix("${").and_then(|v| v.strip_suffix('}')) {
+        std::env::var(var).unwrap_or_default()
+    } else {
+        value.to_string()
+    }
+}
+
 async fn mcp_list_tools(
     arguments: &HashMap<String, serde_json::Value>,
     runtime: &ToolRuntime,
@@ -921,6 +1416,24 @@ fn decode_html_entities(input: &str) -> String {
         .replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&nbsp;", " ")
+}
+
+fn string_property(description: &str) -> PropertySchema {
+    PropertySchema {
+        prop_type: "string".to_string(),
+        description: Some(description.to_string()),
+        default: None,
+        enum_values: None,
+    }
+}
+
+fn number_property(description: &str, default: serde_json::Value) -> PropertySchema {
+    PropertySchema {
+        prop_type: "number".to_string(),
+        description: Some(description.to_string()),
+        default: Some(default),
+        enum_values: None,
+    }
 }
 
 #[cfg(test)]
@@ -1326,6 +1839,7 @@ mod tests {
             )),
             scheduler: Arc::new(Mutex::new(Scheduler::new())),
             plugins: Arc::new(PluginRegistry::new()),
+            skills: crate::config::SkillsConfig::default(),
             mcp_servers: HashMap::new(),
             security: Arc::new(SecurityLayer::with_config(SecurityConfig::default())),
         };
@@ -1346,6 +1860,7 @@ mod tests {
             )),
             scheduler: Arc::new(Mutex::new(Scheduler::new())),
             plugins: Arc::new(PluginRegistry::new()),
+            skills: crate::config::SkillsConfig::default(),
             mcp_servers: HashMap::from([(
                 "bad".to_string(),
                 McpServerConfig {
@@ -1609,6 +2124,189 @@ pub fn builtin_tools() -> Vec<Tool> {
                 vec!["plugin".to_string()],
             ))
             .with_tags(vec!["plugin".to_string()]),
+        Tool::new("github_list_repos", "List accessible GitHub repositories")
+            .with_schema(ToolSchema::object(
+                [(
+                    "visibility".to_string(),
+                    PropertySchema {
+                        prop_type: "string".to_string(),
+                        description: Some("Optional visibility filter".to_string()),
+                        default: None,
+                        enum_values: None,
+                    },
+                )]
+                .into(),
+                Vec::new(),
+            ))
+            .with_tags(vec!["github".to_string(), "integration".to_string()]),
+        Tool::new("github_create_pr", "Create a GitHub pull request")
+            .with_schema(ToolSchema::object(
+                [
+                    ("owner".to_string(), string_property("Repository owner")),
+                    ("repo".to_string(), string_property("Repository name")),
+                    ("title".to_string(), string_property("Pull request title")),
+                    ("head".to_string(), string_property("Head branch")),
+                    ("base".to_string(), string_property("Base branch")),
+                    ("body".to_string(), string_property("Pull request body")),
+                ]
+                .into(),
+                vec![
+                    "owner".to_string(),
+                    "repo".to_string(),
+                    "title".to_string(),
+                    "head".to_string(),
+                    "base".to_string(),
+                ],
+            ))
+            .with_tags(vec!["github".to_string(), "integration".to_string()]),
+        Tool::new(
+            "github_prepare_delete_branch",
+            "Prepare a GitHub branch deletion confirmation",
+        )
+        .with_schema(ToolSchema::object(
+            [
+                ("owner".to_string(), string_property("Repository owner")),
+                ("repo".to_string(), string_property("Repository name")),
+                ("branch".to_string(), string_property("Branch name")),
+            ]
+            .into(),
+            vec!["owner".to_string(), "repo".to_string(), "branch".to_string()],
+        ))
+        .with_tags(vec!["github".to_string(), "security".to_string()]),
+        Tool::new("google_list_messages", "List Gmail messages")
+            .with_schema(ToolSchema::object(
+                [
+                    ("query".to_string(), string_property("Optional Gmail query")),
+                    (
+                        "limit".to_string(),
+                        number_property("Maximum messages", serde_json::json!(10)),
+                    ),
+                ]
+                .into(),
+                Vec::new(),
+            ))
+            .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new("google_send_email", "Send an email via Gmail")
+            .with_schema(ToolSchema::object(
+                [
+                    ("to".to_string(), string_property("Recipient email address")),
+                    ("subject".to_string(), string_property("Email subject")),
+                    ("body".to_string(), string_property("Email body")),
+                ]
+                .into(),
+                vec!["to".to_string(), "subject".to_string(), "body".to_string()],
+            ))
+            .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new("google_search_files", "Search Google Drive files")
+            .with_schema(ToolSchema::object(
+                [("query".to_string(), string_property("Drive search query"))].into(),
+                vec!["query".to_string()],
+            ))
+            .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new("google_list_events", "List Google Calendar events")
+            .with_schema(ToolSchema::object(
+                [
+                    (
+                        "calendar_id".to_string(),
+                        string_property("Calendar identifier"),
+                    ),
+                    (
+                        "days".to_string(),
+                        number_property("Days ahead to query", serde_json::json!(7)),
+                    ),
+                ]
+                .into(),
+                Vec::new(),
+            ))
+            .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new("browser_navigate", "Navigate the browser to a URL")
+            .with_schema(ToolSchema::object(
+                [("url".to_string(), string_property("Target URL"))].into(),
+                vec!["url".to_string()],
+            ))
+            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
+        Tool::new("browser_get_text", "Extract text from the current page")
+            .with_schema(ToolSchema::object(
+                [("selector".to_string(), string_property("CSS selector"))].into(),
+                Vec::new(),
+            ))
+            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
+        Tool::new("browser_get_html", "Extract HTML from the current page")
+            .with_schema(ToolSchema::object(
+                [("selector".to_string(), string_property("CSS selector"))].into(),
+                Vec::new(),
+            ))
+            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
+        Tool::new("browser_screenshot", "Capture a screenshot from the current page")
+            .with_schema(ToolSchema::object(
+                [(
+                    "full_page".to_string(),
+                    PropertySchema {
+                        prop_type: "boolean".to_string(),
+                        description: Some("Capture the full page".to_string()),
+                        default: Some(serde_json::json!(true)),
+                        enum_values: None,
+                    },
+                )]
+                .into(),
+                Vec::new(),
+            ))
+            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
+        Tool::new("stt_transcribe", "Transcribe audio to text")
+            .with_schema(ToolSchema::object(
+                [
+                    ("path".to_string(), string_property("Audio file path")),
+                    ("format".to_string(), string_property("Audio format")),
+                ]
+                .into(),
+                vec!["path".to_string()],
+            ))
+            .with_tags(vec!["stt".to_string(), "integration".to_string()]),
+        Tool::new("tts_speak", "Synthesize speech from text")
+            .with_schema(ToolSchema::object(
+                [("text".to_string(), string_property("Text to synthesize"))].into(),
+                vec!["text".to_string()],
+            ))
+            .with_tags(vec!["tts".to_string(), "integration".to_string()]),
+        Tool::new("image_generate", "Generate an image from a prompt")
+            .with_schema(ToolSchema::object(
+                [
+                    ("prompt".to_string(), string_property("Image prompt")),
+                    (
+                        "width".to_string(),
+                        number_property("Image width", serde_json::json!(1024)),
+                    ),
+                    (
+                        "height".to_string(),
+                        number_property("Image height", serde_json::json!(1024)),
+                    ),
+                ]
+                .into(),
+                vec!["prompt".to_string()],
+            ))
+            .with_tags(vec!["image".to_string(), "integration".to_string()]),
+        Tool::new("qr_encode", "Generate a QR code")
+            .with_schema(ToolSchema::object(
+                [
+                    ("data".to_string(), string_property("Data to encode")),
+                    ("format".to_string(), string_property("png, svg, or terminal")),
+                ]
+                .into(),
+                vec!["data".to_string()],
+            ))
+            .with_tags(vec!["qr".to_string(), "integration".to_string()]),
+        Tool::new("url_shorten", "Shorten a URL")
+            .with_schema(ToolSchema::object(
+                [("url".to_string(), string_property("URL to shorten"))].into(),
+                vec!["url".to_string()],
+            ))
+            .with_tags(vec!["url".to_string(), "integration".to_string()]),
+        Tool::new("url_expand", "Expand a shortened URL")
+            .with_schema(ToolSchema::object(
+                [("url".to_string(), string_property("Shortened URL"))].into(),
+                vec!["url".to_string()],
+            ))
+            .with_tags(vec!["url".to_string(), "integration".to_string()]),
         Tool::new(
             "mcp_list_tools",
             "List tools exposed by a configured MCP server",

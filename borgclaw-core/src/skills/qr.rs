@@ -21,6 +21,8 @@ impl Default for QrFormat {
 
 pub struct QrSkill;
 
+pub type QrCodeSkill = QrSkill;
+
 impl QrSkill {
     pub fn encode(data: &str, format: QrFormat) -> Result<Vec<u8>, QrError> {
         let code =

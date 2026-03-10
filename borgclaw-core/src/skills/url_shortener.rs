@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum UrlShortenerProvider {
     IsGd,
     TinyUrl,
@@ -10,13 +11,18 @@ pub enum UrlShortenerProvider {
     Custom(CustomConfig),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct YourlsConfig {
+    #[serde(alias = "base_url")]
     pub api_url: String,
     pub signature: String,
+    pub username: Option<String>,
+    pub password: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CustomConfig {
     pub shorten_url: String,
     pub body_template: String,
@@ -98,12 +104,24 @@ impl UrlShortener {
     }
 
     async fn shorten_yourls(&self, url: &str, config: &YourlsConfig) -> Result<String, UrlError> {
-        let params = [
-            ("signature", config.signature.as_str()),
-            ("action", "shorturl"),
-            ("url", url),
-            ("format", "json"),
+        let mut params = vec![
+            ("action", "shorturl".to_string()),
+            ("url", url.to_string()),
+            ("format", "json".to_string()),
         ];
+
+        if !config.signature.is_empty() {
+            params.push(("signature", config.signature.clone()));
+        } else if let (Some(username), Some(password)) =
+            (config.username.as_ref(), config.password.as_ref())
+        {
+            params.push(("username", username.clone()));
+            params.push(("password", password.clone()));
+        } else {
+            return Err(UrlError::ConfigError(
+                "YOURLS requires either signature or username/password".to_string(),
+            ));
+        }
 
         let response = self
             .http
@@ -189,12 +207,24 @@ impl UrlShortener {
         short_url: &str,
         config: &YourlsConfig,
     ) -> Result<String, UrlError> {
-        let params = [
-            ("signature", config.signature.as_str()),
-            ("action", "expand"),
-            ("shorturl", short_url),
-            ("format", "json"),
+        let mut params = vec![
+            ("action", "expand".to_string()),
+            ("shorturl", short_url.to_string()),
+            ("format", "json".to_string()),
         ];
+
+        if !config.signature.is_empty() {
+            params.push(("signature", config.signature.clone()));
+        } else if let (Some(username), Some(password)) =
+            (config.username.as_ref(), config.password.as_ref())
+        {
+            params.push(("username", username.clone()));
+            params.push(("password", password.clone()));
+        } else {
+            return Err(UrlError::ConfigError(
+                "YOURLS requires either signature or username/password".to_string(),
+            ));
+        }
 
         let response = self
             .http
@@ -247,4 +277,7 @@ pub enum UrlError {
 
     #[error("Not supported: {0}")]
     NotSupported(String),
+
+    #[error("Config error: {0}")]
+    ConfigError(String),
 }

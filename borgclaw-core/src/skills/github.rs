@@ -215,10 +215,9 @@ impl GitHubClient {
     }
 
     pub async fn verify_ownership(&self, owner: &str, repo: &str) -> Result<bool, GitHubError> {
-        let user = self.get_authenticated_user().await?;
-
         match &self.safety.repo_access {
             RepoAccess::OwnedOnly => {
+                let user = self.get_authenticated_user().await?;
                 let response = self
                     .http
                     .get(format!("{}/repos/{}/{}", self.config.base_url, owner, repo))
@@ -305,6 +304,31 @@ impl GitHubClient {
         pending.insert(token.clone(), confirmation.clone());
 
         Ok(confirmation)
+    }
+
+    pub async fn prepare_delete_branch(
+        &self,
+        owner: &str,
+        repo: &str,
+        name: &str,
+    ) -> Result<PendingConfirmation, GitHubError> {
+        self.check_repo_access(owner, repo).await?;
+        self.begin_destructive_op(
+            OperationType::DeleteBranch,
+            format!("{}/{}#{}", owner, repo, name),
+        )
+        .await
+    }
+
+    pub async fn prepare_merge_pr(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u32,
+    ) -> Result<PendingConfirmation, GitHubError> {
+        self.check_repo_access(owner, repo).await?;
+        self.begin_destructive_op(OperationType::MergePR, format!("{}/{}#{}", owner, repo, number))
+            .await
     }
 
     pub async fn confirm_destructive_op(
@@ -1028,4 +1052,42 @@ pub enum GitHubError {
 
     #[error("Confirmation not required for this operation")]
     ConfirmationNotRequired,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn prepare_delete_branch_matches_documented_confirmation_flow() {
+        let client = GitHubClient::with_safety(
+            GitHubConfig::new("test-token"),
+            GitHubSafety {
+                repo_access: RepoAccess::Any,
+                require_double_confirm_for: vec![OperationType::DeleteBranch],
+            },
+        );
+
+        let confirmation = client
+            .prepare_delete_branch("owner", "repo", "old-branch")
+            .await
+            .unwrap();
+
+        assert_eq!(confirmation.operation, OperationType::DeleteBranch);
+        assert!(confirmation.target.contains("owner/repo#old-branch"));
+        assert!(!confirmation.token.is_empty());
+    }
+
+    #[tokio::test]
+    async fn allowlisted_repo_access_does_not_require_auth_lookup() {
+        let client = GitHubClient::with_safety(
+            GitHubConfig::new("test-token"),
+            GitHubSafety {
+                repo_access: RepoAccess::Allowlisted(vec!["owner/repo".to_string()]),
+                require_double_confirm_for: vec![],
+            },
+        );
+
+        assert!(client.check_repo_access("owner", "repo").await.is_ok());
+    }
 }
