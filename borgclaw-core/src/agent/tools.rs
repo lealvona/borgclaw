@@ -240,7 +240,13 @@ impl ToolRuntime {
                 Some(std::time::Duration::from_secs(
                     self.scheduler_config.job_timeout.max(1),
                 )),
-                Arc::new(|job| Box::pin(async move { execute_scheduled_job(&job) })),
+                Arc::new({
+                    let runtime = self.clone();
+                    move |job| {
+                        let runtime = runtime.clone();
+                        Box::pin(async move { execute_scheduled_job(&job, &runtime).await })
+                    }
+                }),
             )
             .await
             .map_err(|err| err.to_string())
@@ -617,8 +623,8 @@ async fn schedule_task(
     arguments: &HashMap<String, serde_json::Value>,
     runtime: &ToolRuntime,
 ) -> ToolResult {
-    let message = match get_required_string(arguments, "message") {
-        Ok(value) => value,
+    let scheduled = match scheduled_action(arguments) {
+        Ok(action) => action,
         Err(err) => return ToolResult::err(err),
     };
 
@@ -627,10 +633,12 @@ async fn schedule_task(
         None => JobTrigger::OneShot(chrono::Utc::now() + chrono::Duration::seconds(1)),
     };
 
-    let mut job = new_job(message.clone(), trigger, message.clone());
-    job.metadata
-        .insert("action_tool".to_string(), "message".to_string());
-    job.metadata.insert("text".to_string(), message);
+    let mut job = new_job(
+        scheduled.job_name(),
+        trigger,
+        scheduled.job_action(),
+    );
+    scheduled.apply_metadata(&mut job.metadata);
     let id = {
         let scheduler = runtime.scheduler.lock().await;
         match scheduler.schedule(job).await {
@@ -645,8 +653,11 @@ async fn schedule_task(
 async fn run_scheduled_tasks(runtime: &ToolRuntime) -> ToolResult {
     let scheduler = runtime.scheduler.lock().await;
     let results = scheduler
-        .run_due(|job| async move {
-            execute_scheduled_job(&job)
+        .run_due(|job| {
+            let runtime = runtime.clone();
+            async move {
+                execute_scheduled_job(&job, &runtime).await
+            }
         })
         .await;
 
@@ -667,7 +678,10 @@ async fn run_scheduled_tasks(runtime: &ToolRuntime) -> ToolResult {
     .with_metadata("failed", failure_count.to_string())
 }
 
-fn execute_scheduled_job(job: &crate::scheduler::Job) -> Result<(), SchedulerError> {
+async fn execute_scheduled_job(
+    job: &crate::scheduler::Job,
+    runtime: &ToolRuntime,
+) -> Result<(), SchedulerError> {
     match job.metadata.get("action_tool").map(String::as_str) {
         Some("message") => {
             let result = message(&HashMap::from([(
@@ -685,6 +699,32 @@ fn execute_scheduled_job(job: &crate::scheduler::Job) -> Result<(), SchedulerErr
                 Err(SchedulerError::JobFailed(result.output))
             }
         }
+        Some("tool_call") => {
+            let tool_name = job
+                .metadata
+                .get("tool_name")
+                .cloned()
+                .ok_or_else(|| SchedulerError::Error("scheduled job missing tool_name".to_string()))?;
+            if matches!(tool_name.as_str(), "schedule_task" | "run_scheduled_tasks") {
+                return Err(SchedulerError::Error(format!(
+                    "scheduled tool not allowed: {}",
+                    tool_name
+                )));
+            }
+            let arguments = job
+                .metadata
+                .get("tool_arguments")
+                .map(|raw| serde_json::from_str::<HashMap<String, serde_json::Value>>(raw))
+                .transpose()
+                .map_err(|err| SchedulerError::Error(err.to_string()))?
+                .unwrap_or_default();
+            let result = execute_tool(&ToolCall::new(tool_name.clone(), arguments), runtime).await;
+            if result.success {
+                Ok(())
+            } else {
+                Err(SchedulerError::JobFailed(result.output))
+            }
+        }
         Some(other) => Err(SchedulerError::Error(format!(
             "unsupported scheduled action tool: {}",
             other
@@ -692,6 +732,78 @@ fn execute_scheduled_job(job: &crate::scheduler::Job) -> Result<(), SchedulerErr
         None => Err(SchedulerError::Error(
             "scheduled job missing action_tool metadata".to_string(),
         )),
+    }
+}
+
+enum ScheduledAction {
+    Message(String),
+    ToolCall {
+        tool_name: String,
+        arguments: HashMap<String, serde_json::Value>,
+    },
+}
+
+impl ScheduledAction {
+    fn job_name(&self) -> String {
+        match self {
+            Self::Message(message) => message.clone(),
+            Self::ToolCall { tool_name, .. } => format!("tool:{}", tool_name),
+        }
+    }
+
+    fn job_action(&self) -> String {
+        match self {
+            Self::Message(message) => message.clone(),
+            Self::ToolCall { tool_name, .. } => format!("tool:{}", tool_name),
+        }
+    }
+
+    fn apply_metadata(&self, metadata: &mut HashMap<String, String>) {
+        match self {
+            Self::Message(message) => {
+                metadata.insert("action_tool".to_string(), "message".to_string());
+                metadata.insert("text".to_string(), message.clone());
+            }
+            Self::ToolCall {
+                tool_name,
+                arguments,
+            } => {
+                metadata.insert("action_tool".to_string(), "tool_call".to_string());
+                metadata.insert("tool_name".to_string(), tool_name.clone());
+                let raw_arguments =
+                    serde_json::to_string(arguments).unwrap_or_else(|_| "{}".to_string());
+                metadata.insert("tool_arguments".to_string(), raw_arguments);
+            }
+        }
+    }
+}
+
+fn scheduled_action(
+    arguments: &HashMap<String, serde_json::Value>,
+) -> Result<ScheduledAction, String> {
+    match (
+        arguments.get("message").and_then(|value| value.as_str()),
+        arguments.get("tool").and_then(|value| value.as_str()),
+    ) {
+        (Some(message), None) => Ok(ScheduledAction::Message(message.to_string())),
+        (None, Some(tool_name)) => {
+            let tool_arguments = arguments
+                .get("arguments")
+                .and_then(|value| value.as_object())
+                .map(|object| {
+                    object
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone()))
+                        .collect::<HashMap<_, _>>()
+                })
+                .unwrap_or_default();
+            Ok(ScheduledAction::ToolCall {
+                tool_name: tool_name.to_string(),
+                arguments: tool_arguments,
+            })
+        }
+        (Some(_), Some(_)) => Err("provide either message or tool, not both".to_string()),
+        (None, None) => Err("missing required argument: message or tool".to_string()),
     }
 }
 
@@ -2883,6 +2995,86 @@ mod tests {
         assert_eq!(jobs[0].status, JobStatus::Completed);
         assert_eq!(jobs[0].run_count, 1);
     }
+
+    #[tokio::test]
+    async fn run_scheduled_tasks_executes_due_scheduled_tool_calls() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_run_scheduled_tool_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &SchedulerConfig::default(),
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let schedule = execute_tool(
+            &ToolCall::new(
+                "schedule_task",
+                HashMap::from([
+                    ("tool".to_string(), serde_json::json!("memory_store")),
+                    (
+                        "arguments".to_string(),
+                        serde_json::json!({
+                            "key": "scheduledkey",
+                            "value": "scheduled content"
+                        }),
+                    ),
+                ]),
+            ),
+            &runtime,
+        )
+        .await;
+        assert!(schedule.success);
+
+        {
+            let scheduler = runtime.scheduler.lock().await;
+            let jobs = scheduler.list().await;
+            let id = jobs[0].id.clone();
+            drop(jobs);
+            let mut stored = scheduler.get(&id).await.unwrap();
+            stored.next_run = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+            scheduler.unschedule(&id).await.unwrap();
+            scheduler.schedule(stored).await.unwrap();
+        }
+
+        let result =
+            execute_tool(&ToolCall::new("run_scheduled_tasks", HashMap::new()), &runtime).await;
+        let jobs = runtime.scheduler.lock().await.list().await;
+        let recalled = runtime
+            .memory
+            .recall(&MemoryQuery {
+                query: "scheduledkey".to_string(),
+                limit: 5,
+                min_score: 0.0,
+                group_id: None,
+            })
+            .await
+            .unwrap();
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(result.success);
+        assert_eq!(result.metadata.get("executed").map(String::as_str), Some("1"));
+        assert_eq!(jobs[0].status, JobStatus::Completed);
+        assert!(recalled.iter().any(|entry| entry.entry.key == "scheduledkey"
+            && entry.entry.content == "scheduled content"));
+    }
 }
 
 /// Built-in tools
@@ -3630,6 +3822,24 @@ pub fn builtin_tools() -> Vec<Tool> {
                         },
                     ),
                     (
+                        "tool".to_string(),
+                        PropertySchema {
+                            prop_type: "string".to_string(),
+                            description: Some("Built-in tool name to execute later".to_string()),
+                            default: None,
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "arguments".to_string(),
+                        PropertySchema {
+                            prop_type: "object".to_string(),
+                            description: Some("Arguments for the scheduled tool call".to_string()),
+                            default: None,
+                            enum_values: None,
+                        },
+                    ),
+                    (
                         "cron".to_string(),
                         PropertySchema {
                             prop_type: "string".to_string(),
@@ -3640,7 +3850,7 @@ pub fn builtin_tools() -> Vec<Tool> {
                     ),
                 ]
                 .into(),
-                vec!["message".to_string()],
+                Vec::new(),
             ))
             .with_tags(vec!["scheduling".to_string()]),
         Tool::new("run_scheduled_tasks", "Execute due scheduled tasks")
