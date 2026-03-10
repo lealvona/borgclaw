@@ -544,7 +544,7 @@ async fn integration_status_lines(config: &AppConfig) -> Vec<String> {
     let mut lines = Vec::new();
     lines.push(format!(
         "GitHub: {}",
-        if skill_secret_available(&config.skills.github.token).await {
+        if skill_secret_available(config, &config.skills.github.token).await {
             "configured"
         } else {
             "not configured"
@@ -552,8 +552,8 @@ async fn integration_status_lines(config: &AppConfig) -> Vec<String> {
     ));
     lines.push(format!(
         "Google: {}",
-        if skill_secret_available(&config.skills.google.client_id).await
-            && skill_secret_available(&config.skills.google.client_secret).await
+        if skill_secret_available(config, &config.skills.google.client_id).await
+            && skill_secret_available(config, &config.skills.google.client_secret).await
         {
             "configured"
         } else {
@@ -572,7 +572,7 @@ async fn integration_status_lines(config: &AppConfig) -> Vec<String> {
     ));
     lines.push(format!(
         "TTS: {}",
-        if skill_secret_available(&config.skills.tts.elevenlabs.api_key).await {
+        if skill_secret_available(config, &config.skills.tts.elevenlabs.api_key).await {
             "configured"
         } else {
             "not configured"
@@ -594,15 +594,15 @@ async fn integration_doctor_lines(config: &AppConfig) -> Vec<String> {
     let mut lines = Vec::new();
     lines.push(format!(
         "{} GitHub integration {}",
-        marker(skill_secret_available(&config.skills.github.token).await),
-        if skill_secret_available(&config.skills.github.token).await {
+        marker(skill_secret_available(config, &config.skills.github.token).await),
+        if skill_secret_available(config, &config.skills.github.token).await {
             "configured"
         } else {
             "missing token"
         }
     ));
-    let google_ready = skill_secret_available(&config.skills.google.client_id).await
-        && skill_secret_available(&config.skills.google.client_secret).await;
+    let google_ready = skill_secret_available(config, &config.skills.google.client_id).await
+        && skill_secret_available(config, &config.skills.google.client_secret).await;
     lines.push(format!(
         "{} Google OAuth {}",
         marker(google_ready),
@@ -629,8 +629,8 @@ async fn integration_doctor_lines(config: &AppConfig) -> Vec<String> {
     ));
     lines.push(format!(
         "{} TTS credentials {}",
-        marker(skill_secret_available(&config.skills.tts.elevenlabs.api_key).await),
-        if skill_secret_available(&config.skills.tts.elevenlabs.api_key).await {
+        marker(skill_secret_available(config, &config.skills.tts.elevenlabs.api_key).await),
+        if skill_secret_available(config, &config.skills.tts.elevenlabs.api_key).await {
             "present"
         } else {
             "missing"
@@ -667,18 +667,19 @@ async fn image_provider_status(config: &AppConfig) -> &'static str {
 
 async fn stt_backend_ready(config: &AppConfig) -> bool {
     match config.skills.stt.backend.as_str() {
-        "openwebui" => !config.skills.stt.openwebui.base_url.is_empty(),
+        "openwebui" => {
+            !config.skills.stt.openwebui.base_url.is_empty()
+                && skill_secret_available(config, &config.skills.stt.openwebui.api_key).await
+        }
         "whispercpp" => config.skills.stt.whispercpp.binary_path.exists(),
-        _ => skill_secret_available(&config.skills.stt.openai.api_key).await
-            || std::env::var("OPENAI_API_KEY").is_ok(),
+        _ => skill_secret_available(config, &config.skills.stt.openai.api_key).await,
     }
 }
 
 async fn image_provider_ready(config: &AppConfig) -> bool {
     match config.skills.image.provider.as_str() {
         "stable_diffusion" => !config.skills.image.stable_diffusion.base_url.is_empty(),
-        _ => skill_secret_available(&config.skills.image.dalle.api_key).await
-            || std::env::var("OPENAI_API_KEY").is_ok(),
+        _ => skill_secret_available(config, &config.skills.image.dalle.api_key).await,
     }
 }
 
@@ -687,16 +688,31 @@ async fn url_shortener_ready(config: &AppConfig) -> bool {
         "yourls" => {
             !config.skills.url_shortener.yourls.base_url.is_empty()
                 && (!config.skills.url_shortener.yourls.signature.is_empty()
+                    || skill_secret_available(config, &config.skills.url_shortener.yourls.signature)
+                        .await
                     || (!config.skills.url_shortener.yourls.username.is_empty()
-                        && !config.skills.url_shortener.yourls.password.is_empty()))
+                        && skill_secret_available(
+                            config,
+                            &config.skills.url_shortener.yourls.password,
+                        )
+                        .await))
         }
         _ => true,
     }
 }
 
-async fn skill_secret_available(value: &str) -> bool {
+async fn skill_secret_available(config: &AppConfig, value: &str) -> bool {
     if let Some(env) = value.strip_prefix("${").and_then(|v| v.strip_suffix('}')) {
-        return std::env::var(env)
+        if std::env::var(env)
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+        {
+            return true;
+        }
+
+        return SecurityLayer::with_config(config.security.clone())
+            .get_secret(env)
+            .await
             .map(|v| !v.trim().is_empty())
             .unwrap_or(false);
     }
@@ -949,6 +965,16 @@ fn copy_dir_recursive(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use borgclaw_core::config::AppConfig;
+    use borgclaw_core::security::SecurityLayer;
+
+    fn temp_config() -> AppConfig {
+        let mut config = AppConfig::default();
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_cli_status_test_{}", uuid::Uuid::new_v4()));
+        config.security.secrets_path = root.join("secrets.enc");
+        config
+    }
 
     #[test]
     fn installs_local_skill_directory() {
@@ -1079,6 +1105,64 @@ mod tests {
         assert_eq!(parse_repl_command("status"), ReplCommand::Status);
         assert_eq!(parse_repl_command("clear"), ReplCommand::Clear);
         assert_eq!(parse_repl_command("hello"), ReplCommand::Message);
+    }
+
+    #[test]
+    fn secure_store_skill_placeholders_count_as_available() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let config = temp_config();
+        runtime
+            .block_on(
+                SecurityLayer::with_config(config.security.clone())
+                    .store_secret("ELEVENLABS_API_KEY", "eleven-secret"),
+            )
+            .unwrap();
+
+        assert!(runtime.block_on(skill_secret_available(
+            &config,
+            "${ELEVENLABS_API_KEY}"
+        )));
+    }
+
+    #[test]
+    fn openwebui_backend_requires_secret_and_base_url() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut config = temp_config();
+        config.skills.stt.backend = "openwebui".to_string();
+        config.skills.stt.openwebui.base_url = "http://localhost:3000".to_string();
+        config.skills.stt.openwebui.api_key = "${OPENWEBUI_API_KEY}".to_string();
+
+        assert!(!runtime.block_on(stt_backend_ready(&config)));
+
+        runtime
+            .block_on(
+                SecurityLayer::with_config(config.security.clone())
+                    .store_secret("OPENWEBUI_API_KEY", "openwebui-secret"),
+            )
+            .unwrap();
+
+        assert!(runtime.block_on(stt_backend_ready(&config)));
+    }
+
+    #[test]
+    fn yourls_provider_accepts_secure_store_password() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut config = temp_config();
+        config.skills.url_shortener.provider = "yourls".to_string();
+        config.skills.url_shortener.yourls.base_url = "https://sho.rt".to_string();
+        config.skills.url_shortener.yourls.username = "borg".to_string();
+        config.skills.url_shortener.yourls.password = "${YOURLS_PASSWORD}".to_string();
+
+        assert!(!runtime.block_on(url_shortener_ready(&config)));
+
+        runtime
+            .block_on(
+                SecurityLayer::with_config(config.security.clone())
+                    .store_secret("YOURLS_PASSWORD", "yourls-secret"),
+            )
+            .unwrap();
+
+        assert!(runtime.block_on(url_shortener_ready(&config)));
     }
 }
 
