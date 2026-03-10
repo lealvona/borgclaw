@@ -2289,14 +2289,23 @@ fn mcp_client_for_server(runtime: &ToolRuntime, server: &str) -> Result<McpClien
         .get(server)
         .ok_or_else(|| format!("unknown mcp server '{}'", server))?;
     let transport_config = match config.transport.as_str() {
-        "stdio" => McpTransportConfig::Stdio(StdioTransportConfig {
-            command: config
+        "stdio" => {
+            let command = config
                 .command
                 .clone()
-                .ok_or_else(|| "missing MCP command".to_string())?,
-            args: config.args.clone(),
-            env: config.env.clone(),
-        }),
+                .ok_or_else(|| "missing MCP command".to_string())?;
+            match runtime.security.check_command(&command) {
+                CommandCheck::Blocked(pattern) => {
+                    return Err(format!("blocked MCP command by policy: {}", pattern));
+                }
+                CommandCheck::Allowed => {}
+            }
+            McpTransportConfig::Stdio(StdioTransportConfig {
+                command,
+                args: config.args.clone(),
+                env: config.env.clone(),
+            })
+        }
         "sse" => McpTransportConfig::Sse(SseTransportConfig {
             url: config
                 .url
@@ -2926,6 +2935,38 @@ mod tests {
             Err(err) => err,
         };
         assert!(err.contains("unsupported MCP transport"));
+    }
+
+    #[test]
+    fn mcp_client_blocks_stdio_command_by_policy() {
+        let runtime = ToolRuntime {
+            workspace_root: PathBuf::from("."),
+            memory: Arc::new(SqliteMemory::new(
+                std::env::temp_dir().join("borgclaw_mcp_blocked_memory"),
+            )),
+            heartbeat: Arc::new(HeartbeatEngine::new()),
+            scheduler: Arc::new(Mutex::new(Scheduler::new())),
+            heartbeat_config: HeartbeatConfig::default(),
+            scheduler_config: SchedulerConfig::default(),
+            plugins: Arc::new(PluginRegistry::new()),
+            skills: crate::config::SkillsConfig::default(),
+            mcp_servers: HashMap::from([(
+                "blocked".to_string(),
+                McpServerConfig {
+                    transport: "stdio".to_string(),
+                    command: Some("rm -rf /".to_string()),
+                    ..Default::default()
+                },
+            )]),
+            security: Arc::new(SecurityLayer::with_config(SecurityConfig::default())),
+            invocation: None,
+        };
+
+        let err = match mcp_client_for_server(&runtime, "blocked") {
+            Ok(_) => panic!("expected blocked MCP command error"),
+            Err(err) => err,
+        };
+        assert!(err.contains("blocked MCP command by policy"));
     }
 
     #[tokio::test]
