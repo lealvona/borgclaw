@@ -389,6 +389,10 @@ async fn status(config: AppConfig) {
         config.skills.image.provider,
         config.skills.url_shortener.provider,
     );
+    println!("Integrations:");
+    for line in integration_status_lines(&config).await {
+        println!("  - {}", line);
+    }
     println!("\nChannels:");
     for (name, channel) in &config.channels {
         println!(
@@ -476,6 +480,9 @@ async fn doctor(config: AppConfig) {
         Some(other) => println!("✗ Unsupported vault provider '{}'", other),
         None => println!("• Vault integration disabled"),
     }
+    for line in integration_doctor_lines(&config).await {
+        println!("{}", line);
+    }
     println!("\nDiagnostics complete.");
 }
 
@@ -531,6 +538,198 @@ fn cli_path_available(binary: &std::path::Path) -> bool {
             })
         })
         .unwrap_or(false)
+}
+
+async fn integration_status_lines(config: &AppConfig) -> Vec<String> {
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "GitHub: {}",
+        if skill_secret_available(&config.skills.github.token).await {
+            "configured"
+        } else {
+            "not configured"
+        }
+    ));
+    lines.push(format!(
+        "Google: {}",
+        if skill_secret_available(&config.skills.google.client_id).await
+            && skill_secret_available(&config.skills.google.client_secret).await
+        {
+            "configured"
+        } else {
+            "not configured"
+        }
+    ));
+    lines.push(format!(
+        "Browser: node={}, bridge={}",
+        binary_or_placeholder_status(&config.skills.browser.node_path),
+        path_or_placeholder_status(&config.skills.browser.bridge_path)
+    ));
+    lines.push(format!(
+        "STT: backend={} ({})",
+        config.skills.stt.backend,
+        stt_backend_status(config).await
+    ));
+    lines.push(format!(
+        "TTS: {}",
+        if skill_secret_available(&config.skills.tts.elevenlabs.api_key).await {
+            "configured"
+        } else {
+            "not configured"
+        }
+    ));
+    lines.push(format!(
+        "Image: provider={} ({})",
+        config.skills.image.provider,
+        image_provider_status(config).await
+    ));
+    lines.push(format!(
+        "URL shortener: provider={}",
+        config.skills.url_shortener.provider
+    ));
+    lines
+}
+
+async fn integration_doctor_lines(config: &AppConfig) -> Vec<String> {
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "{} GitHub integration {}",
+        marker(skill_secret_available(&config.skills.github.token).await),
+        if skill_secret_available(&config.skills.github.token).await {
+            "configured"
+        } else {
+            "missing token"
+        }
+    ));
+    let google_ready = skill_secret_available(&config.skills.google.client_id).await
+        && skill_secret_available(&config.skills.google.client_secret).await;
+    lines.push(format!(
+        "{} Google OAuth {}",
+        marker(google_ready),
+        if google_ready {
+            "configured"
+        } else {
+            "missing client_id or client_secret"
+        }
+    ));
+    lines.push(format!(
+        "{} Browser node path {}",
+        marker(cli_path_available(&config.skills.browser.node_path)),
+        config.skills.browser.node_path.display()
+    ));
+    lines.push(format!(
+        "{} Browser bridge path {}",
+        marker(path_exists_or_placeholder(&config.skills.browser.bridge_path)),
+        config.skills.browser.bridge_path.display()
+    ));
+    lines.push(format!(
+        "{} STT backend {}",
+        marker(stt_backend_ready(config).await),
+        config.skills.stt.backend
+    ));
+    lines.push(format!(
+        "{} TTS credentials {}",
+        marker(skill_secret_available(&config.skills.tts.elevenlabs.api_key).await),
+        if skill_secret_available(&config.skills.tts.elevenlabs.api_key).await {
+            "present"
+        } else {
+            "missing"
+        }
+    ));
+    lines.push(format!(
+        "{} Image provider {}",
+        marker(image_provider_ready(config).await),
+        config.skills.image.provider
+    ));
+    lines.push(format!(
+        "{} URL shortener provider {}",
+        marker(url_shortener_ready(config).await),
+        config.skills.url_shortener.provider
+    ));
+    lines
+}
+
+async fn stt_backend_status(config: &AppConfig) -> &'static str {
+    if stt_backend_ready(config).await {
+        "ready"
+    } else {
+        "missing config"
+    }
+}
+
+async fn image_provider_status(config: &AppConfig) -> &'static str {
+    if image_provider_ready(config).await {
+        "ready"
+    } else {
+        "missing config"
+    }
+}
+
+async fn stt_backend_ready(config: &AppConfig) -> bool {
+    match config.skills.stt.backend.as_str() {
+        "openwebui" => !config.skills.stt.openwebui.base_url.is_empty(),
+        "whispercpp" => config.skills.stt.whispercpp.binary_path.exists(),
+        _ => skill_secret_available(&config.skills.stt.openai.api_key).await
+            || std::env::var("OPENAI_API_KEY").is_ok(),
+    }
+}
+
+async fn image_provider_ready(config: &AppConfig) -> bool {
+    match config.skills.image.provider.as_str() {
+        "stable_diffusion" => !config.skills.image.stable_diffusion.base_url.is_empty(),
+        _ => skill_secret_available(&config.skills.image.dalle.api_key).await
+            || std::env::var("OPENAI_API_KEY").is_ok(),
+    }
+}
+
+async fn url_shortener_ready(config: &AppConfig) -> bool {
+    match config.skills.url_shortener.provider.as_str() {
+        "yourls" => {
+            !config.skills.url_shortener.yourls.base_url.is_empty()
+                && (!config.skills.url_shortener.yourls.signature.is_empty()
+                    || (!config.skills.url_shortener.yourls.username.is_empty()
+                        && !config.skills.url_shortener.yourls.password.is_empty()))
+        }
+        _ => true,
+    }
+}
+
+async fn skill_secret_available(value: &str) -> bool {
+    if let Some(env) = value.strip_prefix("${").and_then(|v| v.strip_suffix('}')) {
+        return std::env::var(env)
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false);
+    }
+
+    !value.trim().is_empty()
+}
+
+fn path_or_placeholder_status(path: &std::path::Path) -> &'static str {
+    if path_exists_or_placeholder(path) {
+        "ready"
+    } else {
+        "missing"
+    }
+}
+
+fn path_exists_or_placeholder(path: &std::path::Path) -> bool {
+    path.exists() || path.to_string_lossy().starts_with("${")
+}
+
+fn binary_or_placeholder_status(path: &std::path::Path) -> &'static str {
+    if cli_path_available(path) || path.to_string_lossy().starts_with("${") {
+        "ready"
+    } else {
+        "missing"
+    }
+}
+
+fn marker(ok: bool) -> &'static str {
+    if ok {
+        "✓"
+    } else {
+        "✗"
+    }
 }
 
 async fn install_skill(
