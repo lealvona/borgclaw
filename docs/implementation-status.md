@@ -15,8 +15,8 @@ Last reviewed: March 10, 2026
 | WebSocket gateway auth/events | `partial` | Auth, pairing, error, and heartbeat events exist; broader control-plane UX is still thin. |
 | SQLite memory + group isolation | `complete` | Metadata round-trip, isolation, recall, and compaction are implemented. |
 | Solution memory | `complete` | Documented public structs and search helpers are aligned. |
-| Heartbeat engine | `partial` | Documented task/handler surface exists. Engine state gating, enable/disable consistency, and manual-run state updates are landed; background loop durability and richer operator ergonomics remain. |
-| Sub-agent coordinator | `partial` | Spawn/status/result flow exists. Concurrency limits, cancellation precedence, memory policy enforcement, and parent-context inheritance are landed; retry/dead-letter and stronger persistence remain. |
+| Heartbeat engine | `partial` | Documented task/handler surface exists. Engine state gating, enable/disable consistency, manual-run state updates, and persisted task snapshots are landed; richer operator ergonomics and retry/dead-letter behavior remain. |
+| Sub-agent coordinator | `partial` | Spawn/status/result flow exists. Concurrency limits, cancellation precedence, memory policy enforcement, parent-context inheritance, and persisted task snapshots are landed; retry/dead-letter behavior and deeper execution policy inheritance remain. |
 | Security config contract | `complete` | Documented TOML shape parses and core enforcement exists. |
 | Secret storage + vault | `partial` | Encrypted secrets and vault clients exist; onboarding/auth UX is still mixed. |
 | Skill registry lifecycle | `partial` | Local install, remote `SKILL.md`, and GitHub-backed listing exist; packaging/publishing remain planned. |
@@ -31,7 +31,7 @@ Last reviewed: March 10, 2026
 
 1. Finish typed skill config and runtime integration for every documented `skills.*` section.
 2. Make onboarding/auth the authoritative setup path for providers and integrations.
-3. Harden scheduler/subagent execution with inherited security/workspace policy.
+3. Harden scheduler, heartbeat, and subagent execution with inherited security/workspace policy.
 4. Expand end-to-end coverage for gateway, onboarding, MCP, and skills.
 
 ## Temporary Limitations That Must Stay Explicit
@@ -39,3 +39,4 @@ Last reviewed: March 10, 2026
 - Skill registry publishing/package workflow is still planned-only.
 - Remote skill installs currently persist manifest content, not companion assets.
 - Several skill families have library clients and config support before full agent-tool exposure.
+- Background execution now persists scheduler run history, heartbeat task state, and sub-agent task state locally, but retry/dead-letter semantics are still not implemented.
