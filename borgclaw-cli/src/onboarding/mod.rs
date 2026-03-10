@@ -673,6 +673,11 @@ async fn configure_skill_integrations(
 
     configure_github_skill(config, theme, quick, env_updates).await?;
     configure_google_skill(config, theme, quick, env_updates).await?;
+    configure_browser_skill(config, theme, quick)?;
+    configure_stt_skill(config, theme, quick, env_updates).await?;
+    configure_tts_skill(config, theme, quick, env_updates).await?;
+    configure_image_skill(config, theme, quick, env_updates).await?;
+    configure_url_shortener_skill(config, theme, quick, env_updates).await?;
 
     Ok(())
 }
@@ -806,6 +811,335 @@ async fn configure_google_skill(
         .interact_text()
         .map_err(|e| e.to_string())?;
     config.skills.google.token_path = PathBuf::from(token_path);
+
+    Ok(())
+}
+
+fn configure_browser_skill(
+    config: &mut AppConfig,
+    theme: &ColorfulTheme,
+    quick: bool,
+) -> Result<(), String> {
+    if quick {
+        return Ok(());
+    }
+
+    let enable = Confirm::with_theme(theme)
+        .with_prompt("Configure browser automation now?")
+        .default(true)
+        .interact()
+        .map_err(|e| e.to_string())?;
+    if !enable {
+        return Ok(());
+    }
+
+    let browser_items = vec!["chromium", "firefox", "webkit"];
+    let browser_idx = Select::with_theme(theme)
+        .with_prompt("Browser engine")
+        .items(&browser_items)
+        .default(0)
+        .interact()
+        .map_err(|e| e.to_string())?;
+    config.skills.browser.browser = match browser_items[browser_idx] {
+        "firefox" => borgclaw_core::skills::BrowserType::Firefox,
+        "webkit" => borgclaw_core::skills::BrowserType::Webkit,
+        _ => borgclaw_core::skills::BrowserType::Chromium,
+    };
+
+    config.skills.browser.headless = Confirm::with_theme(theme)
+        .with_prompt("Run browser in headless mode?")
+        .default(config.skills.browser.headless)
+        .interact()
+        .map_err(|e| e.to_string())?;
+
+    let node_path: String = Input::with_theme(theme)
+        .with_prompt("Node.js binary path")
+        .default(config.skills.browser.node_path.display().to_string())
+        .interact_text()
+        .map_err(|e| e.to_string())?;
+    config.skills.browser.node_path = PathBuf::from(node_path);
+
+    let bridge_path: String = Input::with_theme(theme)
+        .with_prompt("Playwright bridge path")
+        .default(config.skills.browser.bridge_path.display().to_string())
+        .interact_text()
+        .map_err(|e| e.to_string())?;
+    config.skills.browser.bridge_path = PathBuf::from(bridge_path);
+
+    let use_cdp = Confirm::with_theme(theme)
+        .with_prompt("Use CDP fallback URL?")
+        .default(config.skills.browser.cdp_url.is_some())
+        .interact()
+        .map_err(|e| e.to_string())?;
+    if use_cdp {
+        let cdp_url: String = Input::with_theme(theme)
+            .with_prompt("CDP URL")
+            .default(
+                config
+                    .skills
+                    .browser
+                    .cdp_url
+                    .clone()
+                    .unwrap_or_else(|| "http://localhost:9222".to_string()),
+            )
+            .interact_text()
+            .map_err(|e| e.to_string())?;
+        config.skills.browser.cdp_url = Some(cdp_url);
+    } else {
+        config.skills.browser.cdp_url = None;
+    }
+
+    Ok(())
+}
+
+async fn configure_stt_skill(
+    config: &mut AppConfig,
+    theme: &ColorfulTheme,
+    quick: bool,
+    env_updates: &mut HashMap<String, String>,
+) -> Result<(), String> {
+    if quick {
+        return Ok(());
+    }
+
+    let enable = Confirm::with_theme(theme)
+        .with_prompt("Configure speech-to-text now?")
+        .default(false)
+        .interact()
+        .map_err(|e| e.to_string())?;
+    if !enable {
+        return Ok(());
+    }
+
+    let backends = vec!["openai", "openwebui", "whispercpp"];
+    let default_idx = backends
+        .iter()
+        .position(|backend| *backend == config.skills.stt.backend)
+        .unwrap_or(0);
+    let backend_idx = Select::with_theme(theme)
+        .with_prompt("STT backend")
+        .items(&backends)
+        .default(default_idx)
+        .interact()
+        .map_err(|e| e.to_string())?;
+    config.skills.stt.backend = backends[backend_idx].to_string();
+
+    match config.skills.stt.backend.as_str() {
+        "openwebui" => {
+            let base_url: String = Input::with_theme(theme)
+                .with_prompt("Open WebUI base URL")
+                .default(config.skills.stt.openwebui.base_url.clone())
+                .interact_text()
+                .map_err(|e| e.to_string())?;
+            config.skills.stt.openwebui.base_url = base_url;
+            let api_key = Password::with_theme(theme)
+                .with_prompt("Enter OPENWEBUI_API_KEY")
+                .allow_empty_password(false)
+                .interact()
+                .map_err(|e| e.to_string())?;
+            store_provider_secret(&config.security, "OPENWEBUI_API_KEY", &api_key).await?;
+            env_updates.remove("OPENWEBUI_API_KEY");
+            config.skills.stt.openwebui.api_key = "${OPENWEBUI_API_KEY}".to_string();
+        }
+        "whispercpp" => {
+            let binary_path: String = Input::with_theme(theme)
+                .with_prompt("whisper.cpp binary path")
+                .default(config.skills.stt.whispercpp.binary_path.display().to_string())
+                .interact_text()
+                .map_err(|e| e.to_string())?;
+            config.skills.stt.whispercpp.binary_path = PathBuf::from(binary_path);
+
+            let model_path: String = Input::with_theme(theme)
+                .with_prompt("whisper.cpp model path")
+                .default(config.skills.stt.whispercpp.model_path.display().to_string())
+                .interact_text()
+                .map_err(|e| e.to_string())?;
+            config.skills.stt.whispercpp.model_path = PathBuf::from(model_path);
+        }
+        _ => {
+            let use_existing = std::env::var("OPENAI_API_KEY").is_ok()
+                || SecurityLayer::with_config(config.security.clone())
+                    .get_secret("OPENAI_API_KEY")
+                    .await
+                    .is_some();
+            if !use_existing {
+                let api_key = Password::with_theme(theme)
+                    .with_prompt("Enter OPENAI_API_KEY for STT")
+                    .allow_empty_password(false)
+                    .interact()
+                    .map_err(|e| e.to_string())?;
+                store_provider_secret(&config.security, "OPENAI_API_KEY", &api_key).await?;
+                env_updates.remove("OPENAI_API_KEY");
+            }
+            config.skills.stt.openai.api_key = "${OPENAI_API_KEY}".to_string();
+        }
+    }
+
+    Ok(())
+}
+
+async fn configure_tts_skill(
+    config: &mut AppConfig,
+    theme: &ColorfulTheme,
+    quick: bool,
+    env_updates: &mut HashMap<String, String>,
+) -> Result<(), String> {
+    if quick {
+        return Ok(());
+    }
+
+    let enable = Confirm::with_theme(theme)
+        .with_prompt("Configure text-to-speech now?")
+        .default(false)
+        .interact()
+        .map_err(|e| e.to_string())?;
+    if !enable {
+        return Ok(());
+    }
+
+    config.skills.tts.provider = "elevenlabs".to_string();
+    let api_key = Password::with_theme(theme)
+        .with_prompt("Enter ELEVENLABS_API_KEY")
+        .allow_empty_password(false)
+        .interact()
+        .map_err(|e| e.to_string())?;
+    store_provider_secret(&config.security, "ELEVENLABS_API_KEY", &api_key).await?;
+    env_updates.remove("ELEVENLABS_API_KEY");
+    config.skills.tts.elevenlabs.api_key = "${ELEVENLABS_API_KEY}".to_string();
+
+    let voice_id: String = Input::with_theme(theme)
+        .with_prompt("ElevenLabs voice ID")
+        .default(config.skills.tts.elevenlabs.voice_id.clone())
+        .interact_text()
+        .map_err(|e| e.to_string())?;
+    config.skills.tts.elevenlabs.voice_id = voice_id;
+
+    let model_id: String = Input::with_theme(theme)
+        .with_prompt("ElevenLabs model ID")
+        .default(config.skills.tts.elevenlabs.model_id.clone())
+        .interact_text()
+        .map_err(|e| e.to_string())?;
+    config.skills.tts.elevenlabs.model_id = model_id;
+
+    Ok(())
+}
+
+async fn configure_image_skill(
+    config: &mut AppConfig,
+    theme: &ColorfulTheme,
+    quick: bool,
+    env_updates: &mut HashMap<String, String>,
+) -> Result<(), String> {
+    if quick {
+        return Ok(());
+    }
+
+    let enable = Confirm::with_theme(theme)
+        .with_prompt("Configure image generation now?")
+        .default(false)
+        .interact()
+        .map_err(|e| e.to_string())?;
+    if !enable {
+        return Ok(());
+    }
+
+    let providers = vec!["dalle", "stable_diffusion"];
+    let default_idx = providers
+        .iter()
+        .position(|provider| *provider == config.skills.image.provider)
+        .unwrap_or(0);
+    let provider_idx = Select::with_theme(theme)
+        .with_prompt("Image provider")
+        .items(&providers)
+        .default(default_idx)
+        .interact()
+        .map_err(|e| e.to_string())?;
+    config.skills.image.provider = providers[provider_idx].to_string();
+
+    if config.skills.image.provider == "stable_diffusion" {
+        let base_url: String = Input::with_theme(theme)
+            .with_prompt("Stable Diffusion base URL")
+            .default(config.skills.image.stable_diffusion.base_url.clone())
+            .interact_text()
+            .map_err(|e| e.to_string())?;
+        config.skills.image.stable_diffusion.base_url = base_url;
+    } else {
+        let use_existing = std::env::var("OPENAI_API_KEY").is_ok()
+            || SecurityLayer::with_config(config.security.clone())
+                .get_secret("OPENAI_API_KEY")
+                .await
+                .is_some();
+        if !use_existing {
+            let api_key = Password::with_theme(theme)
+                .with_prompt("Enter OPENAI_API_KEY for image generation")
+                .allow_empty_password(false)
+                .interact()
+                .map_err(|e| e.to_string())?;
+            store_provider_secret(&config.security, "OPENAI_API_KEY", &api_key).await?;
+            env_updates.remove("OPENAI_API_KEY");
+        }
+        config.skills.image.dalle.api_key = "${OPENAI_API_KEY}".to_string();
+    }
+
+    Ok(())
+}
+
+async fn configure_url_shortener_skill(
+    config: &mut AppConfig,
+    theme: &ColorfulTheme,
+    quick: bool,
+    env_updates: &mut HashMap<String, String>,
+) -> Result<(), String> {
+    if quick {
+        return Ok(());
+    }
+
+    let enable = Confirm::with_theme(theme)
+        .with_prompt("Configure URL shortener now?")
+        .default(false)
+        .interact()
+        .map_err(|e| e.to_string())?;
+    if !enable {
+        return Ok(());
+    }
+
+    let providers = vec!["isgd", "tinyurl", "yourls"];
+    let default_idx = providers
+        .iter()
+        .position(|provider| *provider == config.skills.url_shortener.provider)
+        .unwrap_or(0);
+    let provider_idx = Select::with_theme(theme)
+        .with_prompt("URL shortener provider")
+        .items(&providers)
+        .default(default_idx)
+        .interact()
+        .map_err(|e| e.to_string())?;
+    config.skills.url_shortener.provider = providers[provider_idx].to_string();
+
+    if config.skills.url_shortener.provider == "yourls" {
+        let base_url: String = Input::with_theme(theme)
+            .with_prompt("YOURLS base URL")
+            .default(config.skills.url_shortener.yourls.base_url.clone())
+            .interact_text()
+            .map_err(|e| e.to_string())?;
+        config.skills.url_shortener.yourls.base_url = base_url;
+
+        let username: String = Input::with_theme(theme)
+            .with_prompt("YOURLS username")
+            .default(config.skills.url_shortener.yourls.username.clone())
+            .interact_text()
+            .map_err(|e| e.to_string())?;
+        config.skills.url_shortener.yourls.username = username;
+
+        let password = Password::with_theme(theme)
+            .with_prompt("Enter YOURLS_PASSWORD")
+            .allow_empty_password(false)
+            .interact()
+            .map_err(|e| e.to_string())?;
+        store_provider_secret(&config.security, "YOURLS_PASSWORD", &password).await?;
+        env_updates.remove("YOURLS_PASSWORD");
+        config.skills.url_shortener.yourls.password = "${YOURLS_PASSWORD}".to_string();
+    }
 
     Ok(())
 }
@@ -1029,7 +1363,14 @@ async fn provider_env_entry(config: &AppConfig) -> Option<(String, String)> {
 async fn integration_env_entries(config: &AppConfig) -> Vec<(String, String)> {
     let mut entries = Vec::new();
 
-    for key in ["GITHUB_TOKEN", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"] {
+    for key in [
+        "GITHUB_TOKEN",
+        "GOOGLE_CLIENT_ID",
+        "GOOGLE_CLIENT_SECRET",
+        "OPENWEBUI_API_KEY",
+        "ELEVENLABS_API_KEY",
+        "YOURLS_PASSWORD",
+    ] {
         if let Some(value) = config_secret_entry(config, key).await {
             entries.push((key.to_string(), value));
         }
@@ -1200,6 +1541,8 @@ mod tests {
         config.skills.github.token = "${GITHUB_TOKEN}".to_string();
         config.skills.google.client_id = "${GOOGLE_CLIENT_ID}".to_string();
         config.skills.google.client_secret = "${GOOGLE_CLIENT_SECRET}".to_string();
+        config.skills.tts.elevenlabs.api_key = "${ELEVENLABS_API_KEY}".to_string();
+        config.skills.url_shortener.yourls.password = "${YOURLS_PASSWORD}".to_string();
 
         let env_path = root.join(".env");
         let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -1225,6 +1568,20 @@ mod tests {
             ))
             .unwrap();
         runtime
+            .block_on(store_provider_secret(
+                &config.security,
+                "ELEVENLABS_API_KEY",
+                "eleven-secret",
+            ))
+            .unwrap();
+        runtime
+            .block_on(store_provider_secret(
+                &config.security,
+                "YOURLS_PASSWORD",
+                "yourls-secret",
+            ))
+            .unwrap();
+        runtime
             .block_on(generate_env_file(&config, &HashMap::new(), &env_path))
             .unwrap();
 
@@ -1232,6 +1589,8 @@ mod tests {
         assert!(env.contains("GITHUB_TOKEN=ghp-secret"));
         assert!(env.contains("GOOGLE_CLIENT_ID=google-client-id"));
         assert!(env.contains("GOOGLE_CLIENT_SECRET=google-client-secret"));
+        assert!(env.contains("ELEVENLABS_API_KEY=eleven-secret"));
+        assert!(env.contains("YOURLS_PASSWORD=yourls-secret"));
 
         std::fs::remove_dir_all(root).unwrap();
     }
