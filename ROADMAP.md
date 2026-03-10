@@ -37,6 +37,7 @@ Status note as of March 10, 2026:
 Recent landed work in this phase:
 - Heartbeat engine state gating, manual-run state updates, and disable/re-enable consistency.
 - Heartbeat background loop startup with duplicate-start protection.
+- Heartbeat config is now owned by the shared runtime, with auto-started persistent engine state when enabled.
 - Heartbeat task persistence across engine reconstruction.
 - Heartbeat retry rescheduling and dead-letter handling for exhausted tasks.
 - Sub-agent concurrency limits, cancellation precedence, memory tool policy enforcement, parent-context inheritance, and persisted task state.

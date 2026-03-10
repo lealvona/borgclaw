@@ -404,6 +404,7 @@ impl SubAgentCoordinator {
         let mut agent = SimpleAgent::new(
             self.config.clone(),
             Some(self.memory_config.clone()),
+            None,
             Some(self.scheduler_config.clone()),
             Some(self.skills_config.clone()),
             Some(self.mcp_config.clone()),
