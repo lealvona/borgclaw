@@ -4,6 +4,13 @@
 
 Implement the remaining documented BorgClaw feature set in a security-first sequence. The goal is to make the runtime match the README and `docs/` contract without breaking the existing config and crate layout.
 
+Status note as of March 10, 2026:
+- Phase 1 is largely complete.
+- Phase 2 is largely complete.
+- Phase 3 is partially complete, with heartbeat/subagent durability still behind the documented end state.
+- Phase 4 is partially complete, with several skill families implemented as clients but not fully exposed through the shared tool/runtime layer.
+- Phase 5 is partially complete, with security enforcement substantially improved but onboarding/auth/operator UX still behind the documented end state.
+
 ## Phase 1: Core Runtime
 
 - Replace the echo-only `SimpleAgent` path with provider-backed chat execution.

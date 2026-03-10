@@ -371,6 +371,24 @@ async fn status(config: AppConfig) {
         config.heartbeat.enabled, config.heartbeat.check_interval_seconds
     );
     println!("Skills path: {:?}", config.skills.skills_path);
+    println!(
+        "Skill providers: github={}, google={}, browser={:?}, stt={}, tts={}, image={}, url={}",
+        if config.skills.github.token.is_empty() {
+            "disabled"
+        } else {
+            "configured"
+        },
+        if config.skills.google.client_id.is_empty() {
+            "disabled"
+        } else {
+            "configured"
+        },
+        config.skills.browser.browser,
+        config.skills.stt.backend,
+        config.skills.tts.provider,
+        config.skills.image.provider,
+        config.skills.url_shortener.provider,
+    );
     println!("\nChannels:");
     for (name, channel) in &config.channels {
         println!(

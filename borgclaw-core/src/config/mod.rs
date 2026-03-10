@@ -4,6 +4,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::skills::{
+    BrowserConfig, ElevenLabsConfig, GitHubConfig, GitHubSafety, GoogleOAuthConfig,
+    ImageBackend, OperationType, RepoAccess, SttBackend, UrlShortenerProvider,
+};
+use crate::skills::image::{SdApiType, SdConfig};
+use crate::skills::stt::{OpenAiConfig, OpenWebUiConfig, WhisperCppConfig};
+use crate::skills::url_shortener::YourlsConfig;
+
 /// Main application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -375,6 +383,20 @@ pub struct SkillsConfig {
     pub auto_load: bool,
     /// Skill registry URL (for remote skills)
     pub registry_url: Option<String>,
+    /// GitHub skill configuration
+    pub github: GitHubSkillConfig,
+    /// Google skill configuration
+    pub google: GoogleOAuthConfig,
+    /// Browser skill configuration
+    pub browser: BrowserConfig,
+    /// Speech-to-text configuration
+    pub stt: SttSkillConfig,
+    /// Text-to-speech configuration
+    pub tts: TtsSkillConfig,
+    /// Image generation configuration
+    pub image: ImageSkillConfig,
+    /// URL shortener configuration
+    pub url_shortener: UrlShortenerSkillConfig,
 }
 
 impl Default for SkillsConfig {
@@ -383,6 +405,294 @@ impl Default for SkillsConfig {
             skills_path: PathBuf::from(".borgclaw/skills"),
             auto_load: true,
             registry_url: None,
+            github: GitHubSkillConfig::default(),
+            google: GoogleOAuthConfig::default(),
+            browser: BrowserConfig::default(),
+            stt: SttSkillConfig::default(),
+            tts: TtsSkillConfig::default(),
+            image: ImageSkillConfig::default(),
+            url_shortener: UrlShortenerSkillConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GitHubSkillConfig {
+    pub token: String,
+    pub user_agent: String,
+    pub base_url: String,
+    pub safety: GitHubSafetyConfig,
+}
+
+impl Default for GitHubSkillConfig {
+    fn default() -> Self {
+        Self {
+            token: String::new(),
+            user_agent: "BorgClaw/1.0".to_string(),
+            base_url: "https://api.github.com".to_string(),
+            safety: GitHubSafetyConfig::default(),
+        }
+    }
+}
+
+impl GitHubSkillConfig {
+    pub fn client_config(&self) -> Option<GitHubConfig> {
+        if self.token.trim().is_empty() {
+            return None;
+        }
+
+        Some(
+            GitHubConfig::new(self.token.clone())
+                .with_base_url(self.base_url.clone())
+                .with_user_agent(self.user_agent.clone()),
+        )
+    }
+
+    pub fn safety_policy(&self) -> GitHubSafety {
+        self.safety.to_runtime()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GitHubSafetyConfig {
+    pub repo_access: String,
+    pub require_confirmation: bool,
+    pub allowlist: Vec<String>,
+}
+
+impl Default for GitHubSafetyConfig {
+    fn default() -> Self {
+        Self {
+            repo_access: "owned_only".to_string(),
+            require_confirmation: true,
+            allowlist: Vec::new(),
+        }
+    }
+}
+
+impl GitHubSafetyConfig {
+    pub fn to_runtime(&self) -> GitHubSafety {
+        let repo_access = match self.repo_access.as_str() {
+            "all" => RepoAccess::Any,
+            "whitelist" | "allowlist" => RepoAccess::Allowlisted(self.allowlist.clone()),
+            _ => RepoAccess::OwnedOnly,
+        };
+
+        let require_double_confirm_for = if self.require_confirmation {
+            vec![
+                OperationType::DeleteBranch,
+                OperationType::ForcePush,
+                OperationType::MergePR,
+                OperationType::DeleteRepo,
+                OperationType::DeleteRelease,
+                OperationType::DeleteTag,
+                OperationType::ClosePR,
+            ]
+        } else {
+            Vec::new()
+        };
+
+        GitHubSafety {
+            repo_access,
+            require_double_confirm_for,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SttSkillConfig {
+    pub backend: String,
+    pub openai: OpenAiSttConfig,
+    pub openwebui: OpenWebUiConfig,
+    pub whispercpp: WhisperCppConfig,
+}
+
+impl Default for SttSkillConfig {
+    fn default() -> Self {
+        Self {
+            backend: "openai".to_string(),
+            openai: OpenAiSttConfig::default(),
+            openwebui: OpenWebUiConfig::default(),
+            whispercpp: WhisperCppConfig::default(),
+        }
+    }
+}
+
+impl SttSkillConfig {
+    pub fn backend_config(&self) -> SttBackend {
+        match self.backend.as_str() {
+            "openwebui" => SttBackend::OpenWebUi(self.openwebui.clone()),
+            "whispercpp" => SttBackend::WhisperCpp(self.whispercpp.clone()),
+            _ => SttBackend::OpenAI(OpenAiConfig {
+                api_key: self.openai.api_key.clone(),
+                model: self.openai.model.clone(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OpenAiSttConfig {
+    pub api_key: String,
+    pub model: String,
+}
+
+impl Default for OpenAiSttConfig {
+    fn default() -> Self {
+        Self {
+            api_key: String::new(),
+            model: "whisper-1".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TtsSkillConfig {
+    pub provider: String,
+    #[serde(flatten)]
+    pub elevenlabs: ElevenLabsConfig,
+}
+
+impl Default for TtsSkillConfig {
+    fn default() -> Self {
+        Self {
+            provider: "elevenlabs".to_string(),
+            elevenlabs: ElevenLabsConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ImageSkillConfig {
+    pub provider: String,
+    pub dalle: DallEImageConfig,
+    pub stable_diffusion: StableDiffusionImageConfig,
+}
+
+impl Default for ImageSkillConfig {
+    fn default() -> Self {
+        Self {
+            provider: "dalle".to_string(),
+            dalle: DallEImageConfig::default(),
+            stable_diffusion: StableDiffusionImageConfig::default(),
+        }
+    }
+}
+
+impl ImageSkillConfig {
+    pub fn backend(&self) -> ImageBackend {
+        match self.provider.as_str() {
+            "stable_diffusion" => ImageBackend::StableDiffusion(SdConfig {
+                base_url: self.stable_diffusion.base_url.clone(),
+                api_type: self.stable_diffusion.api_type,
+            }),
+            _ => ImageBackend::DallE3,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DallEImageConfig {
+    pub api_key: String,
+    pub model: String,
+    pub size: String,
+}
+
+impl Default for DallEImageConfig {
+    fn default() -> Self {
+        Self {
+            api_key: String::new(),
+            model: "dall-e-3".to_string(),
+            size: "1024x1024".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StableDiffusionImageConfig {
+    pub base_url: String,
+    pub api_type: SdApiType,
+}
+
+impl Default for StableDiffusionImageConfig {
+    fn default() -> Self {
+        Self {
+            base_url: "http://localhost:7860".to_string(),
+            api_type: SdApiType::Automatic1111,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UrlShortenerSkillConfig {
+    pub provider: String,
+    pub yourls: DocumentedYourlsConfig,
+}
+
+impl Default for UrlShortenerSkillConfig {
+    fn default() -> Self {
+        Self {
+            provider: "isgd".to_string(),
+            yourls: DocumentedYourlsConfig::default(),
+        }
+    }
+}
+
+impl UrlShortenerSkillConfig {
+    pub fn provider_config(&self) -> UrlShortenerProvider {
+        match self.provider.as_str() {
+            "tinyurl" => UrlShortenerProvider::TinyUrl,
+            "yourls" => UrlShortenerProvider::Yourls(self.yourls.to_runtime()),
+            _ => UrlShortenerProvider::IsGd,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DocumentedYourlsConfig {
+    #[serde(alias = "api_url")]
+    pub base_url: String,
+    pub signature: String,
+    pub username: String,
+    pub password: String,
+}
+
+impl Default for DocumentedYourlsConfig {
+    fn default() -> Self {
+        Self {
+            base_url: String::new(),
+            signature: String::new(),
+            username: String::new(),
+            password: String::new(),
+        }
+    }
+}
+
+impl DocumentedYourlsConfig {
+    pub fn to_runtime(&self) -> YourlsConfig {
+        YourlsConfig {
+            api_url: self.base_url.clone(),
+            signature: self.signature.clone(),
+            username: if self.username.is_empty() {
+                None
+            } else {
+                Some(self.username.clone())
+            },
+            password: if self.password.is_empty() {
+                None
+            } else {
+                Some(self.password.clone())
+            },
         }
     }
 }
@@ -616,6 +926,93 @@ mod tests {
                 .get("require_pairing")
                 .and_then(|value| value.as_bool()),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn skills_config_parses_documented_skill_sections() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [skills.github]
+            token = "${GITHUB_TOKEN}"
+            user_agent = "BorgClaw/1.0"
+            base_url = "https://api.github.com"
+
+            [skills.github.safety]
+            repo_access = "owned_only"
+            require_confirmation = true
+
+            [skills.google]
+            client_id = "${GOOGLE_CLIENT_ID}"
+            client_secret = "${GOOGLE_CLIENT_SECRET}"
+            redirect_uri = "http://localhost:8080/callback"
+            token_path = ".local/data/google_token.json"
+
+            [skills.browser]
+            browser = "chromium"
+            headless = true
+            bridge_path = ".local/tools/playwright/playwright-bridge.js"
+            node_path = "node"
+            cdp_url = "http://localhost:9222"
+
+            [skills.stt]
+            backend = "whispercpp"
+
+            [skills.stt.openai]
+            api_key = "${OPENAI_API_KEY}"
+            model = "whisper-1"
+
+            [skills.stt.openwebui]
+            base_url = "http://localhost:3000"
+            api_key = "${OPENWEBUI_API_KEY}"
+            model = "whisper-1"
+
+            [skills.stt.whispercpp]
+            binary_path = ".local/tools/whisper.cpp/build/bin/whisper-cli"
+            model_path = ".local/tools/whisper.cpp/models/ggml-base.en.bin"
+
+            [skills.tts]
+            provider = "elevenlabs"
+            api_key = "${ELEVENLABS_API_KEY}"
+            voice_id = "21m00Tcm4TlvDq8ikWAM"
+            model_id = "eleven_monolingual_v1"
+
+            [skills.image]
+            provider = "stable_diffusion"
+
+            [skills.image.dalle]
+            api_key = "${OPENAI_API_KEY}"
+            model = "dall-e-3"
+            size = "1024x1024"
+
+            [skills.image.stable_diffusion]
+            base_url = "http://localhost:7860"
+            api_type = "automatic1111"
+
+            [skills.url_shortener]
+            provider = "yourls"
+
+            [skills.url_shortener.yourls]
+            base_url = "https://your-domain.com/yourls-api.php"
+            username = "admin"
+            password = "${YOURLS_PASSWORD}"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.skills.github.user_agent, "BorgClaw/1.0");
+        assert_eq!(config.skills.google.redirect_uri, "http://localhost:8080/callback");
+        assert_eq!(
+            config.skills.browser.browser,
+            crate::skills::browser::BrowserType::Chromium
+        );
+        assert_eq!(config.skills.stt.backend, "whispercpp");
+        assert_eq!(config.skills.tts.provider, "elevenlabs");
+        assert_eq!(config.skills.image.provider, "stable_diffusion");
+        assert_eq!(config.skills.url_shortener.provider, "yourls");
+        assert_eq!(
+            config.skills.url_shortener.yourls.base_url,
+            "https://your-domain.com/yourls-api.php"
         );
     }
 }

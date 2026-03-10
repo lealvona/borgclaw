@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ImageBackend {
     DallE3,
     StableDiffusion(SdConfig),
@@ -15,6 +16,7 @@ pub struct SdConfig {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum SdApiType {
     Automatic1111,
     ComfyUI,
@@ -62,6 +64,7 @@ pub enum ImageFormat {
 
 pub struct ImageClient {
     backend: ImageBackend,
+    openai_api_key: Option<String>,
     http: reqwest::Client,
 }
 
@@ -69,8 +72,14 @@ impl ImageClient {
     pub fn new(backend: ImageBackend) -> Self {
         Self {
             backend,
+            openai_api_key: None,
             http: reqwest::Client::new(),
         }
+    }
+
+    pub fn with_openai_api_key(mut self, api_key: impl Into<String>) -> Self {
+        self.openai_api_key = Some(api_key.into());
+        self
     }
 
     pub async fn generate(
@@ -89,8 +98,12 @@ impl ImageClient {
         prompt: &str,
         params: &ImageParams,
     ) -> Result<ImageResult, ImageError> {
-        let api_key = std::env::var("OPENAI_API_KEY")
-            .map_err(|_| ImageError::ConfigError("OPENAI_API_KEY not set".to_string()))?;
+        let api_key = if let Some(api_key) = &self.openai_api_key {
+            api_key.clone()
+        } else {
+            std::env::var("OPENAI_API_KEY")
+                .map_err(|_| ImageError::ConfigError("OPENAI_API_KEY not set".to_string()))?
+        };
 
         let body = serde_json::json!({
             "prompt": prompt,

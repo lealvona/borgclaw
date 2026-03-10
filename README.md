@@ -232,6 +232,7 @@ borgclaw/
 - [Security](docs/security.md) - Defense in depth
 - [Integrations](docs/integrations.md) - External services
 - [Inspirations And Implementation Notes](docs/inspirations.md) - Upstream examples mapped to BorgClaw gaps
+- [Implementation Status](docs/implementation-status.md) - Current contract-completion tracking
 
 ## Origin
 

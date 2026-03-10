@@ -23,9 +23,9 @@ pub use google::{
 };
 pub use image::{ImageBackend, ImageClient, ImageFormat, ImageParams, ImageResult};
 pub use plugin::{PluginManifest, PluginRegistry, WasmPermission};
-pub use qr::{QrFormat, QrSkill};
+pub use qr::{QrCodeSkill, QrFormat, QrSkill};
 pub use stt::{AudioFormat, SttBackend, SttClient};
-pub use tts::{ElevenLabsConfig, TtsClient, Voice};
+pub use tts::{ElevenLabsClient, ElevenLabsConfig, TtsClient, Voice};
 pub use url_shortener::{UrlShortener, UrlShortenerProvider};
 
 use std::collections::HashMap;
