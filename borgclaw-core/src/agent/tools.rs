@@ -290,8 +290,10 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "github_get_file" => github_get_file(&call.arguments, runtime).await,
         "github_create_file" => github_create_file(&call.arguments, runtime).await,
         "google_list_messages" => google_list_messages(&call.arguments, runtime).await,
+        "google_get_message" => google_get_message(&call.arguments, runtime).await,
         "google_send_email" => google_send_email(&call.arguments, runtime).await,
         "google_search_files" => google_search_files(&call.arguments, runtime).await,
+        "google_download_file" => google_download_file(&call.arguments, runtime).await,
         "google_list_events" => google_list_events(&call.arguments, runtime).await,
         "google_upload_file" => google_upload_file(&call.arguments, runtime).await,
         "google_create_event" => google_create_event(&call.arguments, runtime).await,
@@ -1227,6 +1229,28 @@ async fn google_list_messages(
     }
 }
 
+async fn google_get_message(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = google_client(runtime);
+    let id = match get_required_string(arguments, "id") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    let gmail = crate::skills::GmailClient::new(client.auth());
+    match gmail.get_message(&id).await {
+        Ok(message) => ToolResult::ok(format!(
+            "{} | {} | {}",
+            message.id,
+            message.from.unwrap_or_default(),
+            message.subject.unwrap_or_default()
+        )),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
 async fn google_send_email(
     arguments: &HashMap<String, serde_json::Value>,
     runtime: &ToolRuntime,
@@ -1269,6 +1293,24 @@ async fn google_search_files(
                 .collect::<Vec<_>>()
                 .join("\n"),
         ),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn google_download_file(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = google_client(runtime);
+    let id = match get_required_string(arguments, "id") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    let drive = crate::skills::DriveClient::new(client.auth());
+    match drive.download_file(&id).await {
+        Ok(bytes) => ToolResult::ok(format!("downloaded {} bytes", bytes.len()))
+            .with_metadata("file_id", id),
         Err(err) => ToolResult::err(err.to_string()),
     }
 }
@@ -2485,6 +2527,8 @@ mod tests {
         assert!(names.iter().any(|name| name == "github_list_releases"));
         assert!(names.iter().any(|name| name == "github_get_file"));
         assert!(names.iter().any(|name| name == "github_create_file"));
+        assert!(names.iter().any(|name| name == "google_get_message"));
+        assert!(names.iter().any(|name| name == "google_download_file"));
     }
 
     #[tokio::test]
@@ -2963,6 +3007,12 @@ pub fn builtin_tools() -> Vec<Tool> {
                 Vec::new(),
             ))
             .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new("google_get_message", "Get a Gmail message by id")
+            .with_schema(ToolSchema::object(
+                [("id".to_string(), string_property("Gmail message id"))].into(),
+                vec!["id".to_string()],
+            ))
+            .with_tags(vec!["google".to_string(), "integration".to_string()]),
         Tool::new("google_send_email", "Send an email via Gmail")
             .with_schema(ToolSchema::object(
                 [
@@ -2978,6 +3028,12 @@ pub fn builtin_tools() -> Vec<Tool> {
             .with_schema(ToolSchema::object(
                 [("query".to_string(), string_property("Drive search query"))].into(),
                 vec!["query".to_string()],
+            ))
+            .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new("google_download_file", "Download a Google Drive file")
+            .with_schema(ToolSchema::object(
+                [("id".to_string(), string_property("Drive file id"))].into(),
+                vec!["id".to_string()],
             ))
             .with_tags(vec!["google".to_string(), "integration".to_string()]),
         Tool::new("google_list_events", "List Google Calendar events")
