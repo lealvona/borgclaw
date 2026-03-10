@@ -58,13 +58,24 @@ impl Scheduler {
         poll_interval: Duration,
         handler: ScheduledJobHandler,
     ) -> Result<(), SchedulerError> {
-        self.start_with_limit(poll_interval, 1, handler).await
+        self.start_with_policy(poll_interval, 1, None, handler).await
     }
 
     pub async fn start_with_limit(
         &self,
         poll_interval: Duration,
         max_concurrent_jobs: usize,
+        handler: ScheduledJobHandler,
+    ) -> Result<(), SchedulerError> {
+        self.start_with_policy(poll_interval, max_concurrent_jobs, None, handler)
+            .await
+    }
+
+    pub async fn start_with_policy(
+        &self,
+        poll_interval: Duration,
+        max_concurrent_jobs: usize,
+        job_timeout: Option<Duration>,
         handler: ScheduledJobHandler,
     ) -> Result<(), SchedulerError> {
         if poll_interval.is_zero() {
@@ -89,7 +100,7 @@ impl Scheduler {
             loop {
                 ticker.tick().await;
                 let _ = scheduler
-                    .run_due_with_limit(max_concurrent_jobs, |job| {
+                    .run_due_with_policy(max_concurrent_jobs, job_timeout, |job| {
                         let loop_handler = loop_handler.clone();
                         async move { loop_handler(job).await }
                     })
@@ -223,12 +234,26 @@ impl Scheduler {
         F: Fn(Job) -> Fut + Send + Sync,
         Fut: Future<Output = Result<(), SchedulerError>>,
     {
-        self.run_due_with_limit(1, handler).await
+        self.run_due_with_policy(1, None, handler).await
     }
 
     pub async fn run_due_with_limit<F, Fut>(
         &self,
         max_concurrent_jobs: usize,
+        handler: F,
+    ) -> Vec<Result<String, SchedulerError>>
+    where
+        F: Fn(Job) -> Fut + Send + Sync,
+        Fut: Future<Output = Result<(), SchedulerError>>,
+    {
+        self.run_due_with_policy(max_concurrent_jobs, None, handler)
+            .await
+    }
+
+    pub async fn run_due_with_policy<F, Fut>(
+        &self,
+        max_concurrent_jobs: usize,
+        job_timeout: Option<Duration>,
         handler: F,
     ) -> Vec<Result<String, SchedulerError>>
     where
@@ -264,7 +289,17 @@ impl Scheduler {
         let mut results = Vec::with_capacity(due_jobs.len());
         for batch in due_jobs.chunks(max_concurrent_jobs) {
             let batch_results = join_all(batch.iter().cloned().map(|job| async {
-                let result = handler(job.clone()).await;
+                let result = match job_timeout {
+                    Some(timeout) => match tokio::time::timeout(timeout, handler(job.clone())).await
+                    {
+                        Ok(result) => result,
+                        Err(_) => Err(SchedulerError::JobFailed(format!(
+                            "job timed out after {} seconds",
+                            timeout.as_secs()
+                        ))),
+                    },
+                    None => handler(job.clone()).await,
+                };
                 (job, result)
             }))
             .await;
@@ -570,5 +605,30 @@ mod tests {
 
         assert_eq!(results.len(), 2);
         assert_eq!(peak.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn scheduler_run_due_with_policy_marks_timeouts_failed() {
+        let scheduler = Scheduler::new();
+        let mut job = new_job(
+            "slow-job",
+            JobTrigger::OneShot(Utc::now() + Duration::seconds(5)),
+            "echo hi",
+        );
+        job.next_run = Some(Utc::now() - Duration::seconds(1));
+        let id = scheduler.schedule(job).await.unwrap();
+
+        let results = scheduler
+            .run_due_with_policy(1, Some(std::time::Duration::from_secs(1)), |_| async {
+                tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                Ok(())
+            })
+            .await;
+
+        let stored = scheduler.get(&id).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_err());
+        assert_eq!(stored.status, JobStatus::Failed);
+        assert_eq!(stored.run_count, 1);
     }
 }

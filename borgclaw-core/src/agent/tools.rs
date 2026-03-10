@@ -234,9 +234,12 @@ impl ToolRuntime {
     async fn start_scheduler_loop(&self) -> Result<(), String> {
         let scheduler = self.scheduler.lock().await;
         scheduler
-            .start_with_limit(
+            .start_with_policy(
                 std::time::Duration::from_secs(1),
                 self.scheduler_config.max_concurrent_jobs,
+                Some(std::time::Duration::from_secs(
+                    self.scheduler_config.job_timeout.max(1),
+                )),
                 Arc::new(|job| Box::pin(async move { execute_scheduled_job(&job) })),
             )
             .await
