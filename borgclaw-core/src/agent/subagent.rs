@@ -8,6 +8,7 @@ use crate::memory::{new_entry_for_group, Memory, SqliteMemory};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock, Semaphore};
 use uuid::Uuid;
@@ -144,6 +145,7 @@ pub struct SubAgentCoordinator {
     result_sender: mpsc::Sender<SubAgentResult>,
     max_concurrent: usize,
     permits: Arc<Semaphore>,
+    state_path: PathBuf,
 }
 
 impl SubAgentCoordinator {
@@ -168,6 +170,7 @@ impl SubAgentCoordinator {
         security_config: SecurityConfig,
         result_sender: mpsc::Sender<SubAgentResult>,
     ) -> Self {
+        let state_path = config.workspace.join("subagents.json");
         Self {
             config,
             memory_config,
@@ -175,10 +178,11 @@ impl SubAgentCoordinator {
             skills_config,
             mcp_config,
             security_config,
-            tasks: Arc::new(RwLock::new(HashMap::new())),
+            tasks: Arc::new(RwLock::new(load_tasks(&state_path))),
             result_sender,
             max_concurrent: 5,
             permits: Arc::new(Semaphore::new(5)),
+            state_path,
         }
     }
 
@@ -192,6 +196,7 @@ impl SubAgentCoordinator {
         let id = task.id.clone();
         let mut tasks = self.tasks.write().await;
         tasks.insert(id.clone(), task);
+        persist_tasks(&self.state_path, &tasks);
         id
     }
 
@@ -262,6 +267,7 @@ impl SubAgentCoordinator {
         if let Some(task) = tasks.get_mut(id) {
             if task.status == TaskStatus::Pending || task.status == TaskStatus::Running {
                 task.status = TaskStatus::Cancelled;
+                persist_tasks(&self.state_path, &tasks);
                 return true;
             }
         }
@@ -293,6 +299,7 @@ impl SubAgentCoordinator {
             task.status = TaskStatus::Running;
             task.clone()
         };
+        self.persist_state().await;
 
         let start = std::time::Instant::now();
         let timeout = std::time::Duration::from_secs(task.timeout_seconds);
@@ -359,6 +366,7 @@ impl SubAgentCoordinator {
                 false
             }
         };
+        self.persist_state().await;
 
         if was_cancelled {
             let cancelled = SubAgentResult {
@@ -470,6 +478,11 @@ impl SubAgentCoordinator {
         }
         results
     }
+
+    async fn persist_state(&self) {
+        let tasks = self.tasks.read().await;
+        persist_tasks(&self.state_path, &tasks);
+    }
 }
 
 struct InnerTaskResult {
@@ -536,6 +549,28 @@ fn agent_response_from_task(task: &SubAgentTask) -> super::AgentResponse {
         .map(|result| result.output.clone())
         .unwrap_or_default();
     super::AgentResponse::text(text)
+}
+
+fn load_tasks(path: &PathBuf) -> HashMap<String, SubAgentTask> {
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return HashMap::new();
+    };
+
+    serde_json::from_str(&contents).unwrap_or_default()
+}
+
+fn persist_tasks(path: &PathBuf, tasks: &HashMap<String, SubAgentTask>) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    let Ok(serialized) = serde_json::to_string_pretty(tasks) else {
+        return;
+    };
+    let temp_path = path.with_extension("json.tmp");
+    if std::fs::write(&temp_path, serialized).is_ok() {
+        let _ = std::fs::rename(temp_path, path);
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1022,5 +1057,55 @@ mod tests {
         assert!(result.success);
         assert_eq!(result.memory_entries_created, 1);
         assert_eq!(recalled.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn subagent_persists_tasks_across_reconstruction() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_subagent_persist_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let (sender, _receiver) = mpsc::channel(4);
+        let config = AgentConfig {
+            provider: "unsupported".to_string(),
+            workspace: root.clone(),
+            ..Default::default()
+        };
+        let memory = MemoryConfig {
+            database_path: root.join("memory"),
+            ..Default::default()
+        };
+
+        let coordinator = SubAgentCoordinator::with_configs(
+            config.clone(),
+            memory.clone(),
+            crate::config::SchedulerConfig::default(),
+            SkillsConfig::default(),
+            McpConfig::default(),
+            SecurityConfig::default(),
+            sender,
+        );
+        let task_id = coordinator
+            .submit(SubAgentBuilder::new("persisted").build("hello"))
+            .await;
+        let _ = coordinator.execute(&task_id).await;
+
+        let (sender2, _receiver2) = mpsc::channel(4);
+        let reconstructed = SubAgentCoordinator::with_configs(
+            config,
+            memory,
+            crate::config::SchedulerConfig::default(),
+            SkillsConfig::default(),
+            McpConfig::default(),
+            SecurityConfig::default(),
+            sender2,
+        );
+
+        let task = reconstructed.get_task(&task_id).await.unwrap();
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(task.status, TaskStatus::Completed);
+        assert!(task.result.is_some());
     }
 }
