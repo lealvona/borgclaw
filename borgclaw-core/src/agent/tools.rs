@@ -277,11 +277,19 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "github_list_repos" => github_list_repos(&call.arguments, runtime).await,
         "github_create_pr" => github_create_pr(&call.arguments, runtime).await,
         "github_prepare_delete_branch" => github_prepare_delete_branch(&call.arguments, runtime).await,
+        "github_delete_branch" => github_delete_branch(&call.arguments, runtime).await,
+        "github_prepare_merge_pr" => github_prepare_merge_pr(&call.arguments, runtime).await,
+        "github_merge_pr" => github_merge_pr(&call.arguments, runtime).await,
         "google_list_messages" => google_list_messages(&call.arguments, runtime).await,
         "google_send_email" => google_send_email(&call.arguments, runtime).await,
         "google_search_files" => google_search_files(&call.arguments, runtime).await,
         "google_list_events" => google_list_events(&call.arguments, runtime).await,
+        "google_upload_file" => google_upload_file(&call.arguments, runtime).await,
+        "google_create_event" => google_create_event(&call.arguments, runtime).await,
         "browser_navigate" => browser_navigate(&call.arguments, runtime).await,
+        "browser_click" => browser_click(&call.arguments, runtime).await,
+        "browser_fill" => browser_fill(&call.arguments, runtime).await,
+        "browser_wait_for" => browser_wait_for(&call.arguments, runtime).await,
         "browser_get_text" => browser_get_text(&call.arguments, runtime).await,
         "browser_get_html" => browser_get_html(&call.arguments, runtime).await,
         "browser_screenshot" => browser_screenshot(&call.arguments, runtime).await,
@@ -791,6 +799,99 @@ async fn github_prepare_delete_branch(
     }
 }
 
+async fn github_delete_branch(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = match github_client(runtime) {
+        Ok(client) => client,
+        Err(err) => return ToolResult::err(err),
+    };
+    let owner = match get_required_string(arguments, "owner") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let repo = match get_required_string(arguments, "repo") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let branch = match get_required_string(arguments, "branch") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let confirmation_token = arguments
+        .get("confirmation_token")
+        .and_then(|value| value.as_str());
+
+    match client
+        .delete_branch(&owner, &repo, &branch, confirmation_token)
+        .await
+    {
+        Ok(()) => ToolResult::ok(format!("deleted branch {}", branch)),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn github_prepare_merge_pr(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = match github_client(runtime) {
+        Ok(client) => client,
+        Err(err) => return ToolResult::err(err),
+    };
+    let owner = match get_required_string(arguments, "owner") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let repo = match get_required_string(arguments, "repo") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let number = match get_u64(arguments, "number") {
+        Some(value) => value as u32,
+        None => return ToolResult::err("missing number argument 'number'"),
+    };
+
+    match client.prepare_merge_pr(&owner, &repo, number).await {
+        Ok(confirmation) => ToolResult::ok(confirmation.description)
+            .with_metadata("confirmation_token", confirmation.token)
+            .with_metadata("expires_at", confirmation.expires_at.to_rfc3339()),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn github_merge_pr(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = match github_client(runtime) {
+        Ok(client) => client,
+        Err(err) => return ToolResult::err(err),
+    };
+    let owner = match get_required_string(arguments, "owner") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let repo = match get_required_string(arguments, "repo") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let number = match get_u64(arguments, "number") {
+        Some(value) => value as u32,
+        None => return ToolResult::err("missing number argument 'number'"),
+    };
+    let confirmation_token = arguments
+        .get("confirmation_token")
+        .and_then(|value| value.as_str());
+
+    match client.merge_pr(&owner, &repo, number, confirmation_token).await {
+        Ok(true) => ToolResult::ok(format!("merged pull request {}", number)),
+        Ok(false) => ToolResult::err("merge request was not accepted"),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
 async fn google_list_messages(
     arguments: &HashMap<String, serde_json::Value>,
     runtime: &ToolRuntime,
@@ -892,6 +993,89 @@ async fn google_list_events(
     }
 }
 
+async fn google_upload_file(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = google_client(runtime);
+    let path = match get_required_string(arguments, "path") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let mime_type = arguments
+        .get("mime_type")
+        .and_then(|value| value.as_str())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let folder_id = arguments.get("folder_id").and_then(|value| value.as_str());
+    let resolved = match resolve_workspace_path(&runtime.workspace_root, &path) {
+        Ok(path) => path,
+        Err(err) => return ToolResult::err(err),
+    };
+    let bytes = match std::fs::read(&resolved) {
+        Ok(bytes) => bytes,
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
+    let name = resolved
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("upload.bin")
+        .to_string();
+
+    match client
+        .upload_file(&name, bytes, &mime_type, folder_id)
+        .await
+    {
+        Ok(file) => ToolResult::ok(format!("{} | {}", file.id, file.name)),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn google_create_event(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = google_client(runtime);
+    let summary = match get_required_string(arguments, "summary") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let start = match get_required_string(arguments, "start") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let end = match get_required_string(arguments, "end") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let start = match chrono::DateTime::parse_from_rfc3339(&start) {
+        Ok(value) => value.with_timezone(&chrono::Utc),
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
+    let end = match chrono::DateTime::parse_from_rfc3339(&end) {
+        Ok(value) => value.with_timezone(&chrono::Utc),
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
+    let description = arguments
+        .get("description")
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string);
+
+    match client
+        .create_event(crate::skills::CalendarEvent {
+            summary,
+            start,
+            end,
+            description,
+            ..Default::default()
+        })
+        .await
+    {
+        Ok(event) => ToolResult::ok(format!("{} | {}", event.id, event.summary)),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
 async fn browser_navigate(
     arguments: &HashMap<String, serde_json::Value>,
     runtime: &ToolRuntime,
@@ -906,6 +1090,66 @@ async fn browser_navigate(
         Ok(ToolResult::ok(url))
     })
     .await
+}
+
+async fn browser_click(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let selector = match get_required_string(arguments, "selector") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    with_browser(runtime, |browser| async move {
+        browser.click(&selector).await?;
+        Ok(ToolResult::ok(format!("clicked {}", selector)))
+    })
+    .await
+}
+
+async fn browser_fill(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let selector = match get_required_string(arguments, "selector") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let value = match get_required_string(arguments, "value") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    with_browser(runtime, |browser| async move {
+        browser.fill(&selector, &value).await?;
+        Ok(ToolResult::ok(format!("filled {}", selector)))
+    })
+    .await
+}
+
+async fn browser_wait_for(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let timeout_ms = get_u64(arguments, "timeout_ms").unwrap_or(5000);
+    if let Some(selector) = arguments.get("selector").and_then(|value| value.as_str()) {
+        let selector = selector.to_string();
+        return with_browser(runtime, |browser| async move {
+            browser.wait_for(&selector, timeout_ms).await?;
+            Ok(ToolResult::ok(format!("found {}", selector)))
+        })
+        .await;
+    }
+    if let Some(text) = arguments.get("text").and_then(|value| value.as_str()) {
+        let text = text.to_string();
+        return with_browser(runtime, |browser| async move {
+            browser.wait_for_text(&text, timeout_ms).await?;
+            Ok(ToolResult::ok(format!("found text {}", text)))
+        })
+        .await;
+    }
+    ToolResult::err("browser_wait_for requires 'selector' or 'text'")
 }
 
 async fn browser_get_text(
@@ -2173,6 +2417,56 @@ pub fn builtin_tools() -> Vec<Tool> {
             vec!["owner".to_string(), "repo".to_string(), "branch".to_string()],
         ))
         .with_tags(vec!["github".to_string(), "security".to_string()]),
+        Tool::new("github_delete_branch", "Delete a GitHub branch")
+            .with_schema(ToolSchema::object(
+                [
+                    ("owner".to_string(), string_property("Repository owner")),
+                    ("repo".to_string(), string_property("Repository name")),
+                    ("branch".to_string(), string_property("Branch name")),
+                    (
+                        "confirmation_token".to_string(),
+                        string_property("Confirmation token from preparation step"),
+                    ),
+                ]
+                .into(),
+                vec!["owner".to_string(), "repo".to_string(), "branch".to_string()],
+            ))
+            .with_tags(vec!["github".to_string(), "integration".to_string()]),
+        Tool::new(
+            "github_prepare_merge_pr",
+            "Prepare a GitHub pull request merge confirmation",
+        )
+        .with_schema(ToolSchema::object(
+            [
+                ("owner".to_string(), string_property("Repository owner")),
+                ("repo".to_string(), string_property("Repository name")),
+                (
+                    "number".to_string(),
+                    number_property("Pull request number", serde_json::json!(1)),
+                ),
+            ]
+            .into(),
+            vec!["owner".to_string(), "repo".to_string(), "number".to_string()],
+        ))
+        .with_tags(vec!["github".to_string(), "security".to_string()]),
+        Tool::new("github_merge_pr", "Merge a GitHub pull request")
+            .with_schema(ToolSchema::object(
+                [
+                    ("owner".to_string(), string_property("Repository owner")),
+                    ("repo".to_string(), string_property("Repository name")),
+                    (
+                        "number".to_string(),
+                        number_property("Pull request number", serde_json::json!(1)),
+                    ),
+                    (
+                        "confirmation_token".to_string(),
+                        string_property("Confirmation token from preparation step"),
+                    ),
+                ]
+                .into(),
+                vec!["owner".to_string(), "repo".to_string(), "number".to_string()],
+            ))
+            .with_tags(vec!["github".to_string(), "integration".to_string()]),
         Tool::new("google_list_messages", "List Gmail messages")
             .with_schema(ToolSchema::object(
                 [
@@ -2219,10 +2513,69 @@ pub fn builtin_tools() -> Vec<Tool> {
                 Vec::new(),
             ))
             .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new("google_upload_file", "Upload a file to Google Drive")
+            .with_schema(ToolSchema::object(
+                [
+                    ("path".to_string(), string_property("Local file path")),
+                    ("mime_type".to_string(), string_property("File MIME type")),
+                    ("folder_id".to_string(), string_property("Optional Drive folder id")),
+                ]
+                .into(),
+                vec!["path".to_string()],
+            ))
+            .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new("google_create_event", "Create a Google Calendar event")
+            .with_schema(ToolSchema::object(
+                [
+                    ("summary".to_string(), string_property("Event summary")),
+                    (
+                        "description".to_string(),
+                        string_property("Optional event description"),
+                    ),
+                    (
+                        "start".to_string(),
+                        string_property("RFC3339 start time"),
+                    ),
+                    ("end".to_string(), string_property("RFC3339 end time")),
+                ]
+                .into(),
+                vec!["summary".to_string(), "start".to_string(), "end".to_string()],
+            ))
+            .with_tags(vec!["google".to_string(), "integration".to_string()]),
         Tool::new("browser_navigate", "Navigate the browser to a URL")
             .with_schema(ToolSchema::object(
                 [("url".to_string(), string_property("Target URL"))].into(),
                 vec!["url".to_string()],
+            ))
+            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
+        Tool::new("browser_click", "Click an element in the current page")
+            .with_schema(ToolSchema::object(
+                [("selector".to_string(), string_property("CSS selector"))].into(),
+                vec!["selector".to_string()],
+            ))
+            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
+        Tool::new("browser_fill", "Fill an input element in the current page")
+            .with_schema(ToolSchema::object(
+                [
+                    ("selector".to_string(), string_property("CSS selector")),
+                    ("value".to_string(), string_property("Input value")),
+                ]
+                .into(),
+                vec!["selector".to_string(), "value".to_string()],
+            ))
+            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
+        Tool::new("browser_wait_for", "Wait for a selector or text on the current page")
+            .with_schema(ToolSchema::object(
+                [
+                    ("selector".to_string(), string_property("Optional CSS selector")),
+                    ("text".to_string(), string_property("Optional page text")),
+                    (
+                        "timeout_ms".to_string(),
+                        number_property("Timeout in milliseconds", serde_json::json!(5000)),
+                    ),
+                ]
+                .into(),
+                Vec::new(),
             ))
             .with_tags(vec!["browser".to_string(), "integration".to_string()]),
         Tool::new("browser_get_text", "Extract text from the current page")
