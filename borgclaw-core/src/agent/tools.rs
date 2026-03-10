@@ -5,7 +5,7 @@ use crate::mcp::transport::{
     McpTransportConfig, SseTransportConfig, StdioTransportConfig, WebSocketTransportConfig,
 };
 use crate::memory::{new_entry, Memory, MemoryQuery, SqliteMemory};
-use crate::scheduler::{new_job, JobTrigger, Scheduler, SchedulerTrait};
+use crate::scheduler::{new_job, JobTrigger, Scheduler, SchedulerError, SchedulerTrait};
 use crate::security::{CommandCheck, SecurityLayer};
 use crate::skills::{
     BrowserSkill, CdpClient, GitHubClient, GoogleClient, ImageClient, ImageParams, PluginRegistry,
@@ -270,6 +270,7 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "fetch_url" => fetch_url(&call.arguments).await,
         "message" => message(&call.arguments),
         "schedule_task" => schedule_task(&call.arguments, runtime).await,
+        "run_scheduled_tasks" => run_scheduled_tasks(runtime).await,
         "approve" => approve_tool(&call.arguments, runtime).await,
         "web_search" => web_search(&call.arguments).await,
         "plugin_list" => plugin_list(runtime).await,
@@ -602,7 +603,10 @@ async fn schedule_task(
         None => JobTrigger::OneShot(chrono::Utc::now() + chrono::Duration::seconds(1)),
     };
 
-    let job = new_job(message.clone(), trigger, message);
+    let mut job = new_job(message.clone(), trigger, message.clone());
+    job.metadata
+        .insert("action_tool".to_string(), "message".to_string());
+    job.metadata.insert("text".to_string(), message);
     let id = {
         let scheduler = runtime.scheduler.lock().await;
         match scheduler.schedule(job).await {
@@ -612,6 +616,59 @@ async fn schedule_task(
     };
 
     ToolResult::ok(format!("scheduled {}", id))
+}
+
+async fn run_scheduled_tasks(runtime: &ToolRuntime) -> ToolResult {
+    let scheduler = runtime.scheduler.lock().await;
+    let results = scheduler
+        .run_due(|job| async move {
+            execute_scheduled_job(&job)
+        })
+        .await;
+
+    if results.is_empty() {
+        return ToolResult::ok("no due jobs");
+    }
+
+    let success_count = results.iter().filter(|result| result.is_ok()).count();
+    let failure_count = results.len() - success_count;
+    ToolResult::ok(format!(
+        "executed {} scheduled jobs ({} ok, {} failed)",
+        results.len(),
+        success_count,
+        failure_count
+    ))
+    .with_metadata("executed", results.len().to_string())
+    .with_metadata("succeeded", success_count.to_string())
+    .with_metadata("failed", failure_count.to_string())
+}
+
+fn execute_scheduled_job(job: &crate::scheduler::Job) -> Result<(), SchedulerError> {
+    match job.metadata.get("action_tool").map(String::as_str) {
+        Some("message") => {
+            let result = message(&HashMap::from([(
+                "text".to_string(),
+                serde_json::json!(
+                    job.metadata
+                        .get("text")
+                        .cloned()
+                        .unwrap_or_else(|| job.action.clone())
+                ),
+            )]));
+            if result.success {
+                Ok(())
+            } else {
+                Err(SchedulerError::JobFailed(result.output))
+            }
+        }
+        Some(other) => Err(SchedulerError::Error(format!(
+            "unsupported scheduled action tool: {}",
+            other
+        ))),
+        None => Err(SchedulerError::Error(
+            "scheduled job missing action_tool metadata".to_string(),
+        )),
+    }
 }
 
 async fn web_search(arguments: &HashMap<String, serde_json::Value>) -> ToolResult {
@@ -2105,6 +2162,7 @@ mod tests {
     use crate::config::{
         AgentConfig, ApprovalMode, McpConfig, McpServerConfig, MemoryConfig, SecurityConfig,
     };
+    use crate::scheduler::JobStatus;
 
     #[test]
     fn parses_json_tool_command() {
@@ -2648,6 +2706,69 @@ mod tests {
         assert_eq!(jobs.len(), 1);
         assert!(matches!(jobs[0].trigger, JobTrigger::OneShot(_)));
         assert!(jobs[0].next_run.is_some());
+        assert_eq!(
+            jobs[0].metadata.get("action_tool").map(String::as_str),
+            Some("message")
+        );
+    }
+
+    #[tokio::test]
+    async fn run_scheduled_tasks_executes_due_scheduled_messages() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_run_scheduled_task_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let schedule = execute_tool(
+            &ToolCall::new(
+                "schedule_task",
+                HashMap::from([("message".to_string(), serde_json::json!("scheduled task"))]),
+            ),
+            &runtime,
+        )
+        .await;
+        assert!(schedule.success);
+
+        {
+            let scheduler = runtime.scheduler.lock().await;
+            let jobs = scheduler.list().await;
+            let id = jobs[0].id.clone();
+            drop(jobs);
+            let mut stored = scheduler.get(&id).await.unwrap();
+            stored.next_run = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+            scheduler.unschedule(&id).await.unwrap();
+            scheduler.schedule(stored).await.unwrap();
+        }
+
+        let result = execute_tool(&ToolCall::new("run_scheduled_tasks", HashMap::new()), &runtime).await;
+        let jobs = runtime.scheduler.lock().await.list().await;
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(result.success);
+        assert_eq!(result.metadata.get("executed").map(String::as_str), Some("1"));
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].status, JobStatus::Completed);
+        assert_eq!(jobs[0].run_count, 1);
     }
 }
 
@@ -3408,6 +3529,9 @@ pub fn builtin_tools() -> Vec<Tool> {
                 .into(),
                 vec!["message".to_string()],
             ))
+            .with_tags(vec!["scheduling".to_string()]),
+        Tool::new("run_scheduled_tasks", "Execute due scheduled tasks")
+            .with_schema(ToolSchema::object(HashMap::new(), Vec::new()))
             .with_tags(vec!["scheduling".to_string()]),
         Tool::new("approve", "Approve a pending protected tool operation")
             .with_schema(ToolSchema::object(
