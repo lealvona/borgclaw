@@ -669,6 +669,8 @@ async fn channel_status_lines(config: &AppConfig) -> Vec<String> {
             "signal" => {
                 if signal_channel_ready(channel) {
                     "ready"
+                } else if !signal_cli_ready(channel) {
+                    "missing signal-cli"
                 } else {
                     "missing phone_number"
                 }
@@ -714,13 +716,14 @@ async fn channel_doctor_lines(config: &AppConfig) -> Vec<String> {
                 }
             ),
             "signal" => format!(
-                "{} Signal phone number {}",
+                "{} Signal phone={} cli={}",
                 marker(signal_channel_ready(channel)),
                 channel
                     .extra
                     .get("phone_number")
                     .and_then(|value| value.as_str())
-                    .unwrap_or("missing")
+                    .unwrap_or("missing"),
+                signal_cli_display(channel)
             ),
             "webhook" => format!(
                 "{} Webhook secret {} on port {}",
@@ -824,12 +827,25 @@ async fn channel_credentials_available(
 }
 
 fn signal_channel_ready(channel: &borgclaw_core::config::ChannelConfig) -> bool {
+    signal_cli_ready(channel)
+        && channel
+            .extra
+            .get("phone_number")
+            .and_then(|value| value.as_str())
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+}
+
+fn signal_cli_ready(channel: &borgclaw_core::config::ChannelConfig) -> bool {
+    cli_path_available(std::path::Path::new(signal_cli_display(channel)))
+}
+
+fn signal_cli_display(channel: &borgclaw_core::config::ChannelConfig) -> &str {
     channel
         .extra
-        .get("phone_number")
+        .get("signal_cli_path")
         .and_then(|value| value.as_str())
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
+        .unwrap_or("signal-cli")
 }
 
 async fn webhook_channel_ready(
@@ -1339,6 +1355,27 @@ mod tests {
         assert!(lines
             .iter()
             .any(|line| line == "✗ Webhook secret missing on port 8080"));
+    }
+
+    #[test]
+    fn signal_channel_status_reports_missing_cli() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut config = temp_config();
+        let signal = config.channels.entry("signal".to_string()).or_default();
+        signal.enabled = true;
+        signal.extra.insert(
+            "phone_number".to_string(),
+            toml::Value::String("+1234567890".to_string()),
+        );
+        signal.extra.insert(
+            "signal_cli_path".to_string(),
+            toml::Value::String("/definitely/missing/signal-cli".to_string()),
+        );
+
+        let lines = runtime.block_on(channel_status_lines(&config));
+        assert!(lines
+            .iter()
+            .any(|line| line == "signal: enabled (missing signal-cli)"));
     }
 }
 
