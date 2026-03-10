@@ -140,8 +140,8 @@ impl Scheduler {
     /// Execute all due jobs using the supplied handler.
     pub async fn run_due<F, Fut>(&self, handler: F) -> Vec<Result<String, SchedulerError>>
     where
-        F: Fn(Job) -> Fut + Copy + Send + Sync + 'static,
-        Fut: Future<Output = Result<(), SchedulerError>> + Send,
+        F: Fn(Job) -> Fut + Copy + Send + Sync,
+        Fut: Future<Output = Result<(), SchedulerError>>,
     {
         let due_jobs: Vec<Job> = {
             let now = Utc::now();
