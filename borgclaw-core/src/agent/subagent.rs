@@ -261,6 +261,10 @@ impl SubAgentCoordinator {
                 .get_mut(task_id)
                 .ok_or_else(|| SubAgentError::NotFound(task_id.to_string()))?;
 
+            if task.status == TaskStatus::Cancelled {
+                return Err(SubAgentError::Cancelled);
+            }
+
             if task.status != TaskStatus::Pending {
                 return Err(SubAgentError::InvalidState(task.status));
             }
@@ -311,12 +315,42 @@ impl SubAgentCoordinator {
             }
         };
 
-        {
+        let was_cancelled = {
             let mut tasks = self.tasks.write().await;
             if let Some(t) = tasks.get_mut(task_id) {
-                t.status = status;
-                t.result = Some(sub_result.clone());
+                if t.status == TaskStatus::Cancelled {
+                    t.result = Some(SubAgentResult {
+                        task_id: task_id.to_string(),
+                        success: false,
+                        output: String::new(),
+                        tools_used: vec![],
+                        duration_ms,
+                        memory_entries_created: 0,
+                        error: Some("Task cancelled".to_string()),
+                    });
+                    true
+                } else {
+                    t.status = status;
+                    t.result = Some(sub_result.clone());
+                    false
+                }
+            } else {
+                false
             }
+        };
+
+        if was_cancelled {
+            let cancelled = SubAgentResult {
+                task_id: task_id.to_string(),
+                success: false,
+                output: String::new(),
+                tools_used: vec![],
+                duration_ms,
+                memory_entries_created: 0,
+                error: Some("Task cancelled".to_string()),
+            };
+            let _ = self.result_sender.send(cancelled).await;
+            return Err(SubAgentError::Cancelled);
         }
 
         let _ = self.result_sender.send(sub_result.clone()).await;
@@ -452,6 +486,8 @@ pub enum SubAgentError {
     NotFound(String),
     #[error("Invalid task state: {0:?}")]
     InvalidState(TaskStatus),
+    #[error("Task cancelled")]
+    Cancelled,
     #[error("Task timeout after {0} seconds")]
     Timeout(u64),
     #[error("Execution failed: {0}")]
@@ -694,5 +730,61 @@ mod tests {
         let _ = second_task.await.unwrap().unwrap();
 
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn subagent_cancelled_task_keeps_cancelled_status() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_subagent_cancel_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let (sender, _receiver) = mpsc::channel(4);
+        let coordinator = SubAgentCoordinator::with_configs(
+            AgentConfig {
+                provider: "unsupported".to_string(),
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            SkillsConfig::default(),
+            McpConfig::default(),
+            SecurityConfig::default(),
+            sender,
+        );
+
+        let task_id = coordinator
+            .submit(
+                SubAgentBuilder::new("slow")
+                    .description("__borgclaw_test_delay_ms=150")
+                    .build("hello"),
+            )
+            .await;
+
+        let handle = {
+            let coordinator = coordinator.clone();
+            let task_id = task_id.clone();
+            tokio::spawn(async move { coordinator.execute(&task_id).await })
+        };
+
+        loop {
+            if matches!(coordinator.status(&task_id).await, SubAgentStatus::Running) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        assert!(coordinator.cancel(&task_id).await);
+        let result = handle.await.unwrap();
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(matches!(result, Err(SubAgentError::Cancelled)));
+        assert!(matches!(
+            coordinator.status(&task_id).await,
+            SubAgentStatus::Cancelled
+        ));
     }
 }
