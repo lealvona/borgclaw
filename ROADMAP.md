@@ -36,6 +36,7 @@ Status note as of March 10, 2026:
 
 Recent landed work in this phase:
 - Heartbeat engine state gating, manual-run state updates, and disable/re-enable consistency.
+- Heartbeat background loop startup with duplicate-start protection.
 - Heartbeat task persistence across engine reconstruction.
 - Sub-agent concurrency limits, cancellation precedence, memory tool policy enforcement, parent-context inheritance, and persisted task state.
 - Scheduler job initialization with stable `next_run` state for cron, interval, and one-shot jobs.
