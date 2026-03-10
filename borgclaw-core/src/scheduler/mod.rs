@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use cron::Schedule;
 use std::collections::HashMap;
+use std::future::Future;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -135,6 +136,61 @@ impl Scheduler {
 
         next_runs
     }
+
+    /// Execute all due jobs using the supplied handler.
+    pub async fn run_due<F, Fut>(&self, handler: F) -> Vec<Result<String, SchedulerError>>
+    where
+        F: Fn(Job) -> Fut + Copy + Send + Sync + 'static,
+        Fut: Future<Output = Result<(), SchedulerError>> + Send,
+    {
+        let due_jobs: Vec<Job> = {
+            let now = Utc::now();
+            let jobs = self.jobs.read().await;
+            jobs.values()
+                .filter(|job| {
+                    job.status != JobStatus::Disabled
+                        && job.next_run.map(|next| next <= now).unwrap_or(false)
+                })
+                .cloned()
+                .collect()
+        };
+
+        let mut results = Vec::with_capacity(due_jobs.len());
+        for job in due_jobs {
+            {
+                let mut jobs = self.jobs.write().await;
+                if let Some(stored) = jobs.get_mut(&job.id) {
+                    stored.status = JobStatus::Running;
+                }
+            }
+
+            let result = handler(job.clone()).await;
+
+            {
+                let mut jobs = self.jobs.write().await;
+                if let Some(stored) = jobs.get_mut(&job.id) {
+                    stored.last_run = Some(Utc::now());
+                    stored.run_count += 1;
+                    match result.as_ref() {
+                        Ok(()) => {
+                            stored.status = JobStatus::Completed;
+                            stored.next_run = match stored.trigger {
+                                JobTrigger::OneShot(_) => None,
+                                _ => stored.trigger.next_run(),
+                            };
+                        }
+                        Err(_) => {
+                            stored.status = JobStatus::Failed;
+                        }
+                    }
+                }
+            }
+
+            results.push(result.map(|_| job.id));
+        }
+
+        results
+    }
 }
 
 /// Trigger type
@@ -217,5 +273,62 @@ mod tests {
         let next_runs = scheduler.next_runs().await;
         assert!(next_runs.contains_key(&interval_id));
         assert!(next_runs.contains_key(&oneshot_id));
+    }
+
+    #[tokio::test]
+    async fn scheduler_run_due_executes_due_jobs_and_updates_state() {
+        let scheduler = Scheduler::new();
+        let mut job = new_job("oneshot", JobTrigger::OneShot(Utc::now() + Duration::seconds(5)), "echo hi");
+        job.next_run = Some(Utc::now() - Duration::seconds(1));
+        let id = scheduler.schedule(job).await.unwrap();
+
+        let results = scheduler
+            .run_due(|job| async move {
+                assert_eq!(job.action, "echo hi");
+                Ok(())
+            })
+            .await;
+
+        let stored = scheduler.get(&id).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_ok());
+        assert_eq!(stored.status, JobStatus::Completed);
+        assert_eq!(stored.run_count, 1);
+        assert!(stored.last_run.is_some());
+        assert!(stored.next_run.is_none());
+    }
+
+    #[tokio::test]
+    async fn scheduler_run_due_recalculates_repeating_job_next_run() {
+        let scheduler = Scheduler::new();
+        let mut job = new_job("interval", JobTrigger::Interval(30), "echo tick");
+        job.next_run = Some(Utc::now() - Duration::seconds(1));
+        let id = scheduler.schedule(job).await.unwrap();
+
+        let _ = scheduler.run_due(|_| async { Ok(()) }).await;
+
+        let stored = scheduler.get(&id).await.unwrap();
+        assert_eq!(stored.status, JobStatus::Completed);
+        assert_eq!(stored.run_count, 1);
+        assert!(stored.next_run.is_some());
+    }
+
+    #[tokio::test]
+    async fn scheduler_run_due_marks_failures() {
+        let scheduler = Scheduler::new();
+        let mut job = new_job("oneshot", JobTrigger::OneShot(Utc::now() + Duration::seconds(5)), "echo hi");
+        job.next_run = Some(Utc::now() - Duration::seconds(1));
+        let id = scheduler.schedule(job).await.unwrap();
+
+        let results = scheduler
+            .run_due(|_| async { Err(SchedulerError::JobFailed("boom".to_string())) })
+            .await;
+
+        let stored = scheduler.get(&id).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_err());
+        assert_eq!(stored.status, JobStatus::Failed);
+        assert_eq!(stored.run_count, 1);
+        assert!(stored.last_run.is_some());
     }
 }
