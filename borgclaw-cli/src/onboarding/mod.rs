@@ -227,7 +227,7 @@ pub async fn run_init(
 
     configure_provider_and_model(&mut config, &registry, &theme, &mut env_updates, args.quick)
         .await?;
-    configure_channels(&mut config, &theme, args.quick)?;
+    configure_channels(&mut config, &theme, args.quick, &mut env_updates).await?;
     configure_security(&mut config, &theme, args.quick)?;
     configure_memory(&mut config, &theme, args.quick)?;
     configure_skills_registry(&mut config, &theme, args.quick)?;
@@ -393,10 +393,11 @@ async fn configure_provider_and_model(
     Ok(())
 }
 
-fn configure_channels(
+async fn configure_channels(
     config: &mut AppConfig,
     theme: &ColorfulTheme,
     quick: bool,
+    env_updates: &mut HashMap<String, String>,
 ) -> Result<(), String> {
     println!("{}", paint(OPTIONAL, "[OPTIONAL] Channel configuration"));
     println!(
@@ -417,7 +418,7 @@ fn configure_channels(
         return Ok(());
     }
 
-    let options = vec!["CLI", "WebSocket", "Telegram", "Signal"];
+    let options = vec!["CLI", "WebSocket", "Webhook", "Telegram", "Signal"];
     for channel in options {
         let enable = Confirm::with_theme(theme)
             .with_prompt(format!("Enable {} channel?", channel))
@@ -448,6 +449,57 @@ fn configure_channels(
             entry
                 .extra
                 .insert("port".to_string(), toml::Value::Integer(port));
+        }
+        if channel == "Webhook" {
+            let port: i64 = Input::with_theme(theme)
+                .with_prompt("Webhook port")
+                .default(
+                    entry
+                        .extra
+                        .get("port")
+                        .and_then(|v| v.as_integer())
+                        .unwrap_or(8080),
+                )
+                .interact_text()
+                .map_err(|e| e.to_string())?;
+            entry
+                .extra
+                .insert("port".to_string(), toml::Value::Integer(port));
+
+            let rate_limit: i64 = Input::with_theme(theme)
+                .with_prompt("Webhook rate limit per minute")
+                .default(
+                    entry
+                        .extra
+                        .get("rate_limit_per_minute")
+                        .and_then(|v| v.as_integer())
+                        .unwrap_or(60),
+                )
+                .interact_text()
+                .map_err(|e| e.to_string())?;
+            entry.extra.insert(
+                "rate_limit_per_minute".to_string(),
+                toml::Value::Integer(rate_limit),
+            );
+
+            if Confirm::with_theme(theme)
+                .with_prompt("Configure WEBHOOK_SECRET now?")
+                .default(true)
+                .interact()
+                .map_err(|e| e.to_string())?
+            {
+                let secret = Password::with_theme(theme)
+                    .with_prompt("Enter WEBHOOK_SECRET")
+                    .allow_empty_password(false)
+                    .interact()
+                    .map_err(|e| e.to_string())?;
+                store_provider_secret(&config.security, "WEBHOOK_SECRET", &secret).await?;
+                env_updates.remove("WEBHOOK_SECRET");
+                entry.extra.insert(
+                    "secret".to_string(),
+                    toml::Value::String("${WEBHOOK_SECRET}".to_string()),
+                );
+            }
         }
         if channel == "Telegram" {
             // Telegram: offer existing token OR create new via @BotFather
@@ -1371,6 +1423,9 @@ async fn generate_env_file(
     for (env_key, env_value) in integration_env_entries(config).await {
         env.insert(env_key, env_value);
     }
+    for (env_key, env_value) in channel_env_entries(config).await {
+        env.insert(env_key, env_value);
+    }
 
     let mut lines = Vec::new();
     lines.push("# BorgClaw Environment (generated)".to_string());
@@ -1427,6 +1482,32 @@ async fn integration_env_entries(config: &AppConfig) -> Vec<(String, String)> {
     }
 
     entries
+}
+
+async fn channel_env_entries(config: &AppConfig) -> Vec<(String, String)> {
+    let mut entries = Vec::new();
+
+    if let Some(value) = channel_secret_entry(config, "webhook", "secret", "WEBHOOK_SECRET").await
+    {
+        entries.push(("WEBHOOK_SECRET".to_string(), value));
+    }
+
+    entries
+}
+
+async fn channel_secret_entry(
+    config: &AppConfig,
+    channel_name: &str,
+    key: &str,
+    env_key: &str,
+) -> Option<String> {
+    let channel = config.channels.get(channel_name)?;
+    let configured = channel.extra.get(key)?.as_str()?;
+    if configured != format!("${{{}}}", env_key) {
+        return None;
+    }
+
+    config_secret_entry(config, env_key).await
 }
 
 async fn config_secret_entry(config: &AppConfig, env_key: &str) -> Option<String> {
@@ -1719,6 +1800,42 @@ mod tests {
                 .iter()
                 .all(|chapter| chapter != "telegram")
         );
+    }
+
+    #[test]
+    fn generate_env_includes_webhook_secret_from_secure_store() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_onboarding_webhook_env_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let mut config = AppConfig::default();
+        config.security.secrets_path = root.join("secrets.enc");
+        let webhook = config.channels.entry("webhook".to_string()).or_default();
+        webhook.enabled = true;
+        webhook.extra.insert(
+            "secret".to_string(),
+            toml::Value::String("${WEBHOOK_SECRET}".to_string()),
+        );
+
+        let env_path = root.join(".env");
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime
+            .block_on(store_provider_secret(
+                &config.security,
+                "WEBHOOK_SECRET",
+                "hook-secret",
+            ))
+            .unwrap();
+        runtime
+            .block_on(generate_env_file(&config, &HashMap::new(), &env_path))
+            .unwrap();
+
+        let env = std::fs::read_to_string(&env_path).unwrap();
+        assert!(env.contains("WEBHOOK_SECRET=hook-secret"));
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
 

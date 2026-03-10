@@ -18,6 +18,7 @@ use borgclaw_core::{
         WebhookError, WebhookTrigger,
     },
     config::load_config,
+    security::SecurityLayer,
     AppConfig,
 };
 use futures_util::StreamExt;
@@ -393,8 +394,9 @@ async fn configured_webhook_channel(config: &AppConfig) -> Option<WebhookChannel
         return None;
     }
 
+    let shared_secret = configured_channel_secret(config, channel, "secret").await;
     let mut trigger = WebhookTrigger::new("incoming", "/webhook");
-    if let Some(secret) = channel.extra.get("secret").and_then(|value| value.as_str()) {
+    if let Some(secret) = shared_secret.clone() {
         trigger = trigger.with_secret(secret);
     }
     if let Some(rpm) = channel
@@ -407,12 +409,12 @@ async fn configured_webhook_channel(config: &AppConfig) -> Option<WebhookChannel
     }
 
     let webhook = WebhookChannel::new();
-    for trigger in configured_named_webhook_triggers(channel) {
+    for trigger in configured_named_webhook_triggers(channel, shared_secret.clone()) {
         webhook.register_trigger(trigger).await;
     }
 
     let mut named_trigger = WebhookTrigger::new("named_trigger", "/webhook/trigger/{id}");
-    if let Some(secret) = channel.extra.get("secret").and_then(|value| value.as_str()) {
+    if let Some(secret) = shared_secret {
         named_trigger = named_trigger.with_secret(secret);
     }
     if let Some(rpm) = channel
@@ -429,8 +431,33 @@ async fn configured_webhook_channel(config: &AppConfig) -> Option<WebhookChannel
     Some(webhook)
 }
 
+async fn configured_channel_secret(
+    config: &AppConfig,
+    channel: &borgclaw_core::config::ChannelConfig,
+    key: &str,
+) -> Option<String> {
+    let configured = channel.extra.get(key)?.as_str()?;
+    if let Some(env_key) = configured
+        .strip_prefix("${")
+        .and_then(|value| value.strip_suffix('}'))
+    {
+        if let Ok(value) = std::env::var(env_key) {
+            if !value.trim().is_empty() {
+                return Some(value);
+            }
+        }
+
+        return SecurityLayer::with_config(config.security.clone())
+            .get_secret(env_key)
+            .await;
+    }
+
+    Some(configured.to_string())
+}
+
 fn configured_named_webhook_triggers(
     channel: &borgclaw_core::config::ChannelConfig,
+    inherited_secret: Option<String>,
 ) -> Vec<WebhookTrigger> {
     let Some(triggers) = channel
         .extra
@@ -440,11 +467,6 @@ fn configured_named_webhook_triggers(
         return Vec::new();
     };
 
-    let inherited_secret = channel
-        .extra
-        .get("secret")
-        .and_then(|value| value.as_str())
-        .map(str::to_string);
     let inherited_rate_limit = channel
         .extra
         .get("rate_limit_per_minute")
@@ -791,7 +813,7 @@ mod tests {
             )])),
         );
 
-        let triggers = configured_named_webhook_triggers(&channel);
+        let triggers = configured_named_webhook_triggers(&channel, None);
         assert_eq!(triggers.len(), 1);
         assert_eq!(triggers[0].id, "notify_slack");
         assert_eq!(triggers[0].path, "/webhook/trigger/notify_slack");
@@ -811,5 +833,37 @@ mod tests {
             render_webhook_body(Some("{\"text\":\"{{message}}\"}"), "hello"),
             "{\"text\":\"hello\"}"
         );
+    }
+
+    #[tokio::test]
+    async fn configured_webhook_channel_resolves_secret_placeholder_from_secure_store() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_gateway_webhook_secret_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let mut config = AppConfig::default();
+        config.security.secrets_path = root.join("secrets.enc");
+        let webhook = config.channels.entry("webhook".to_string()).or_default();
+        webhook.enabled = true;
+        webhook.extra.insert(
+            "secret".to_string(),
+            toml::Value::String("${WEBHOOK_SECRET}".to_string()),
+        );
+
+        SecurityLayer::with_config(config.security.clone())
+            .store_secret("WEBHOOK_SECRET", "hook-secret")
+            .await
+            .unwrap();
+
+        let webhook = configured_webhook_channel(&config).await.unwrap();
+        let triggers = webhook.list_triggers().await;
+
+        assert!(triggers.iter().all(|trigger| {
+            trigger.secret.as_deref() == Some("hook-secret")
+        }));
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
