@@ -4,7 +4,7 @@ use crate::mcp::client::{McpClient, McpClientConfig};
 use crate::mcp::transport::{
     McpTransportConfig, SseTransportConfig, StdioTransportConfig, WebSocketTransportConfig,
 };
-use crate::memory::{new_entry, Memory, MemoryQuery, SqliteMemory};
+use crate::memory::{new_entry, new_entry_for_group, Memory, MemoryQuery, SqliteMemory};
 use crate::scheduler::{new_job, JobTrigger, Scheduler, SchedulerError, SchedulerTrait};
 use crate::security::{CommandCheck, SecurityLayer};
 use crate::skills::{
@@ -193,6 +193,14 @@ pub struct ToolRuntime {
     pub skills: crate::config::SkillsConfig,
     pub mcp_servers: HashMap<String, crate::config::McpServerConfig>,
     pub security: Arc<SecurityLayer>,
+    pub invocation: Option<Arc<ToolInvocationContext>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ToolInvocationContext {
+    pub session_id: super::SessionId,
+    pub sender: super::SenderInfo,
+    pub metadata: HashMap<String, String>,
 }
 
 impl ToolRuntime {
@@ -222,6 +230,7 @@ impl ToolRuntime {
             skills: skills_config.clone(),
             mcp_servers: mcp_config.servers.clone(),
             security: Arc::new(SecurityLayer::with_config(security_config.clone())),
+            invocation: None,
         };
 
         if scheduler_config.enabled {
@@ -229,6 +238,49 @@ impl ToolRuntime {
         }
 
         Ok(runtime)
+    }
+
+    pub fn with_context(&self, ctx: &super::AgentContext) -> Self {
+        let mut runtime = self.clone();
+        runtime.invocation = Some(Arc::new(ToolInvocationContext {
+            session_id: ctx.session_id.clone(),
+            sender: ctx.sender.clone(),
+            metadata: ctx.metadata.clone(),
+        }));
+        runtime
+    }
+
+    fn with_scheduled_job_context(&self, job: &crate::scheduler::Job) -> Self {
+        let session_id = job
+            .metadata
+            .get("scheduled_session_id")
+            .cloned()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| format!("scheduled:{}", job.id));
+        let sender = super::SenderInfo {
+            id: job
+                .metadata
+                .get("scheduled_sender_id")
+                .cloned()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| format!("scheduler:{}", job.id)),
+            name: job.metadata.get("scheduled_sender_name").cloned(),
+            channel: job
+                .metadata
+                .get("scheduled_sender_channel")
+                .cloned()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "scheduler".to_string()),
+        };
+        let metadata = scheduled_metadata(job);
+
+        let mut runtime = self.clone();
+        runtime.invocation = Some(Arc::new(ToolInvocationContext {
+            session_id: super::SessionId(session_id),
+            sender,
+            metadata,
+        }));
+        runtime
     }
 
     async fn start_scheduler_loop(&self) -> Result<(), String> {
@@ -407,9 +459,19 @@ async fn memory_store(
         Err(err) => return ToolResult::err(err),
     };
 
-    let entry = new_entry(key, value);
+    let group_id = optional_group_id(arguments, runtime);
+    let entry = match group_id.clone() {
+        Some(group_id) => new_entry_for_group(key, value, group_id),
+        None => new_entry(key, value),
+    };
     match runtime.memory.store(entry).await {
-        Ok(()) => ToolResult::ok("stored"),
+        Ok(()) => {
+            let mut result = ToolResult::ok("stored");
+            if let Some(group_id) = group_id {
+                result = result.with_metadata("group_id", group_id);
+            }
+            result
+        }
         Err(err) => ToolResult::err(err.to_string()),
     }
 }
@@ -423,6 +485,7 @@ async fn memory_recall(
         Err(err) => return ToolResult::err(err),
     };
     let limit = get_u64(arguments, "limit").unwrap_or(5) as usize;
+    let group_id = optional_group_id(arguments, runtime);
 
     match runtime
         .memory
@@ -430,18 +493,30 @@ async fn memory_recall(
             query,
             limit,
             min_score: 0.0,
-            group_id: None,
+            group_id: group_id.clone(),
         })
         .await
     {
-        Ok(results) if results.is_empty() => ToolResult::ok("no matching memories"),
-        Ok(results) => ToolResult::ok(
-            results
-                .into_iter()
-                .map(|result| format!("{}: {}", result.entry.key, result.entry.content))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        ),
+        Ok(results) if results.is_empty() => {
+            let mut result = ToolResult::ok("no matching memories");
+            if let Some(group_id) = group_id {
+                result = result.with_metadata("group_id", group_id);
+            }
+            result
+        }
+        Ok(results) => {
+            let mut result = ToolResult::ok(
+                results
+                    .into_iter()
+                    .map(|result| format!("{}: {}", result.entry.key, result.entry.content))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
+            if let Some(group_id) = group_id {
+                result = result.with_metadata("group_id", group_id);
+            }
+            result
+        }
         Err(err) => ToolResult::err(err.to_string()),
     }
 }
@@ -639,6 +714,7 @@ async fn schedule_task(
         scheduled.job_action(),
     );
     scheduled.apply_metadata(&mut job.metadata);
+    apply_invocation_metadata(runtime, &mut job.metadata);
     let id = {
         let scheduler = runtime.scheduler.lock().await;
         match scheduler.schedule(job).await {
@@ -727,7 +803,9 @@ async fn execute_scheduled_job(
                 .transpose()
                 .map_err(|err| SchedulerError::Error(err.to_string()))?
                 .unwrap_or_default();
-            let result = execute_tool(&ToolCall::new(tool_name.clone(), arguments), runtime).await;
+            let scheduled_runtime = runtime.with_scheduled_job_context(job);
+            let result =
+                execute_tool(&ToolCall::new(tool_name.clone(), arguments), &scheduled_runtime).await;
             if result.success {
                 Ok(())
             } else {
@@ -814,6 +892,57 @@ fn scheduled_action(
         (Some(_), Some(_)) => Err("provide either message or tool, not both".to_string()),
         (None, None) => Err("missing required argument: message or tool".to_string()),
     }
+}
+
+fn optional_group_id(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> Option<String> {
+    arguments
+        .get("group_id")
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string)
+        .or_else(|| {
+            runtime
+                .invocation
+                .as_ref()
+                .and_then(|ctx| ctx.metadata.get("group_id").cloned())
+        })
+}
+
+fn apply_invocation_metadata(runtime: &ToolRuntime, metadata: &mut HashMap<String, String>) {
+    let Some(invocation) = runtime.invocation.as_ref() else {
+        return;
+    };
+
+    metadata.insert(
+        "scheduled_session_id".to_string(),
+        invocation.session_id.0.clone(),
+    );
+    metadata.insert(
+        "scheduled_sender_id".to_string(),
+        invocation.sender.id.clone(),
+    );
+    metadata.insert(
+        "scheduled_sender_channel".to_string(),
+        invocation.sender.channel.clone(),
+    );
+    if let Some(name) = &invocation.sender.name {
+        metadata.insert("scheduled_sender_name".to_string(), name.clone());
+    }
+    for (key, value) in &invocation.metadata {
+        metadata.insert(format!("scheduled_meta_{}", key), value.clone());
+    }
+}
+
+fn scheduled_metadata(job: &crate::scheduler::Job) -> HashMap<String, String> {
+    job.metadata
+        .iter()
+        .filter_map(|(key, value)| {
+            key.strip_prefix("scheduled_meta_")
+                .map(|key| (key.to_string(), value.clone()))
+        })
+        .collect()
 }
 
 async fn web_search(arguments: &HashMap<String, serde_json::Value>) -> ToolResult {
@@ -2304,6 +2433,7 @@ fn number_property(description: &str, default: serde_json::Value) -> PropertySch
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::{AgentContext, SenderInfo, SessionId};
     use crate::config::{
         AgentConfig, ApprovalMode, McpConfig, McpServerConfig, MemoryConfig, SchedulerConfig,
         SecurityConfig,
@@ -2717,6 +2847,7 @@ mod tests {
             skills: crate::config::SkillsConfig::default(),
             mcp_servers: HashMap::new(),
             security: Arc::new(SecurityLayer::with_config(SecurityConfig::default())),
+            invocation: None,
         };
 
         let err = match mcp_client_for_server(&runtime, "missing") {
@@ -2745,6 +2876,7 @@ mod tests {
                 },
             )]),
             security: Arc::new(SecurityLayer::with_config(SecurityConfig::default())),
+            invocation: None,
         };
 
         let err = match mcp_client_for_server(&runtime, "bad") {
@@ -2946,6 +3078,104 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn memory_tools_inherit_group_context() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_memory_group_context_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let scheduler = SchedulerConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &scheduler,
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap()
+        .with_context(&AgentContext {
+            session_id: SessionId("session-a".to_string()),
+            message: "remember this".to_string(),
+            sender: SenderInfo {
+                id: "user-a".to_string(),
+                name: Some("User A".to_string()),
+                channel: "cli".to_string(),
+            },
+            metadata: HashMap::from([("group_id".to_string(), "group-a".to_string())]),
+        });
+
+        let store = execute_tool(
+            &ToolCall::new(
+                "memory_store",
+                HashMap::from([
+                    ("key".to_string(), serde_json::json!("groupkey")),
+                    ("value".to_string(), serde_json::json!("group value")),
+                ]),
+            ),
+            &runtime,
+        )
+        .await;
+        let recall = execute_tool(
+            &ToolCall::new(
+                "memory_recall",
+                HashMap::from([("query".to_string(), serde_json::json!("groupkey"))]),
+            ),
+            &runtime,
+        )
+        .await;
+        let global = runtime
+            .memory
+            .recall(&MemoryQuery {
+                query: "groupkey".to_string(),
+                limit: 5,
+                min_score: 0.0,
+                group_id: None,
+            })
+            .await
+            .unwrap();
+        let grouped = runtime
+            .memory
+            .recall(&MemoryQuery {
+                query: "groupkey".to_string(),
+                limit: 5,
+                min_score: 0.0,
+                group_id: Some("group-a".to_string()),
+            })
+            .await
+            .unwrap();
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(store.success);
+        assert_eq!(
+            store.metadata.get("group_id").map(String::as_str),
+            Some("group-a")
+        );
+        assert!(recall.success);
+        assert_eq!(
+            recall.metadata.get("group_id").map(String::as_str),
+            Some("group-a")
+        );
+        assert!(recall.output.contains("groupkey: group value"));
+        assert!(global.is_empty());
+        assert_eq!(grouped.len(), 1);
+    }
+
+    #[tokio::test]
     async fn run_scheduled_tasks_executes_due_scheduled_messages() {
         let root = std::env::temp_dir().join(format!(
             "borgclaw_run_scheduled_task_test_{}",
@@ -3083,6 +3313,111 @@ mod tests {
         assert_eq!(jobs[0].status, JobStatus::Completed);
         assert!(recalled.iter().any(|entry| entry.entry.key == "scheduledkey"
             && entry.entry.content == "scheduled content"));
+    }
+
+    #[tokio::test]
+    async fn scheduled_tool_calls_inherit_group_context() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_scheduled_group_context_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let scheduler = SchedulerConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &scheduler,
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap()
+        .with_context(&AgentContext {
+            session_id: SessionId("session-scheduled".to_string()),
+            message: "schedule this".to_string(),
+            sender: SenderInfo {
+                id: "user-scheduled".to_string(),
+                name: Some("Scheduled User".to_string()),
+                channel: "telegram".to_string(),
+            },
+            metadata: HashMap::from([("group_id".to_string(), "group-scheduled".to_string())]),
+        });
+
+        let schedule = execute_tool(
+            &ToolCall::new(
+                "schedule_task",
+                HashMap::from([
+                    ("tool".to_string(), serde_json::json!("memory_store")),
+                    (
+                        "arguments".to_string(),
+                        serde_json::json!({
+                            "key": "scheduledgroupkey",
+                            "value": "scheduled group content"
+                        }),
+                    ),
+                ]),
+            ),
+            &runtime,
+        )
+        .await;
+        assert!(schedule.success);
+
+        {
+            let scheduler = runtime.scheduler.lock().await;
+            let jobs = scheduler.list().await;
+            let id = jobs[0].id.clone();
+            drop(jobs);
+            let mut stored = scheduler.get(&id).await.unwrap();
+            assert_eq!(
+                stored.metadata.get("scheduled_meta_group_id").map(String::as_str),
+                Some("group-scheduled")
+            );
+            stored.next_run = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+            scheduler.unschedule(&id).await.unwrap();
+            scheduler.schedule(stored).await.unwrap();
+        }
+
+        let result =
+            execute_tool(&ToolCall::new("run_scheduled_tasks", HashMap::new()), &runtime).await;
+        let grouped = runtime
+            .memory
+            .recall(&MemoryQuery {
+                query: "scheduledgroupkey".to_string(),
+                limit: 5,
+                min_score: 0.0,
+                group_id: Some("group-scheduled".to_string()),
+            })
+            .await
+            .unwrap();
+        let global = runtime
+            .memory
+            .recall(&MemoryQuery {
+                query: "scheduledgroupkey".to_string(),
+                limit: 5,
+                min_score: 0.0,
+                group_id: None,
+            })
+            .await
+            .unwrap();
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(result.success);
+        assert_eq!(grouped.len(), 1);
+        assert!(global.is_empty());
     }
 
     #[tokio::test]

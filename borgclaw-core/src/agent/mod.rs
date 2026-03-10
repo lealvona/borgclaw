@@ -342,7 +342,8 @@ impl Agent for SimpleAgent {
                     return AgentResponse::text(format!("Tool runtime error: {}", err));
                 }
             };
-            let result = execute_tool(&call, runtime).await;
+            let runtime = runtime.with_context(ctx);
+            let result = execute_tool(&call, &runtime).await;
             let response_text = result.output.clone();
             let session =
                 self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
