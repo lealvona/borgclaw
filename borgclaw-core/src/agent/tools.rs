@@ -311,6 +311,7 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "tts_speak" => tts_speak(&call.arguments, runtime).await,
         "image_generate" => image_generate(&call.arguments, runtime).await,
         "qr_encode" => qr_encode(&call.arguments).await,
+        "qr_encode_url" => qr_encode_url(&call.arguments).await,
         "url_shorten" => url_shorten(&call.arguments, runtime).await,
         "url_expand" => url_expand(&call.arguments, runtime).await,
         "mcp_list_tools" => mcp_list_tools(&call.arguments, runtime).await,
@@ -1666,11 +1667,19 @@ async fn image_generate(
     }
 
     match client.generate(&prompt, params).await {
-        Ok(image) => ToolResult::ok(format!(
-            "generated {:?} image ({} bytes)",
-            image.format,
-            image.bytes.as_ref().map(|bytes| bytes.len()).unwrap_or(0)
-        )),
+        Ok(image) => {
+            let byte_len = image.bytes.as_ref().map(|bytes| bytes.len()).unwrap_or(0);
+            let mut result = ToolResult::ok(format!("generated {:?} image ({}) bytes", image.format, byte_len))
+                .with_metadata("format", format!("{:?}", image.format).to_lowercase())
+                .with_metadata("bytes", byte_len.to_string());
+            if let Some(url) = image.url {
+                result = result.with_metadata("url", url);
+            }
+            if let Some(revised_prompt) = image.revised_prompt {
+                result = result.with_metadata("revised_prompt", revised_prompt);
+            }
+            result
+        }
         Err(err) => ToolResult::err(err.to_string()),
     }
 }
@@ -1687,6 +1696,24 @@ async fn qr_encode(arguments: &HashMap<String, serde_json::Value>) -> ToolResult
     };
 
     match QrSkill::encode(&data, format) {
+        Ok(bytes) => ToolResult::ok(format!("generated {} bytes", bytes.len()))
+            .with_metadata("bytes", bytes.len().to_string()),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn qr_encode_url(arguments: &HashMap<String, serde_json::Value>) -> ToolResult {
+    let url = match get_required_string(arguments, "url") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let format = match arguments.get("format").and_then(|value| value.as_str()) {
+        Some("svg") => QrFormat::Svg,
+        Some("terminal") => QrFormat::Terminal,
+        _ => QrFormat::default(),
+    };
+
+    match QrSkill::encode_url(&url, format) {
         Ok(bytes) => ToolResult::ok(format!("generated {} bytes", bytes.len()))
             .with_metadata("bytes", bytes.len().to_string()),
         Err(err) => ToolResult::err(err.to_string()),
@@ -2575,6 +2602,7 @@ mod tests {
         assert!(names.iter().any(|name| name == "browser_get_url"));
         assert!(names.iter().any(|name| name == "browser_eval_js"));
         assert!(names.iter().any(|name| name == "tts_list_voices"));
+        assert!(names.iter().any(|name| name == "qr_encode_url"));
     }
 
     #[tokio::test]
@@ -3243,6 +3271,16 @@ pub fn builtin_tools() -> Vec<Tool> {
                 ]
                 .into(),
                 vec!["data".to_string()],
+            ))
+            .with_tags(vec!["qr".to_string(), "integration".to_string()]),
+        Tool::new("qr_encode_url", "Generate a QR code from a URL")
+            .with_schema(ToolSchema::object(
+                [
+                    ("url".to_string(), string_property("URL to encode")),
+                    ("format".to_string(), string_property("png, svg, or terminal")),
+                ]
+                .into(),
+                vec!["url".to_string()],
             ))
             .with_tags(vec!["qr".to_string(), "integration".to_string()]),
         Tool::new("url_shorten", "Shorten a URL")
