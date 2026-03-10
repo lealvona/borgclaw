@@ -584,7 +584,7 @@ async fn schedule_task(
 
     let trigger = match arguments.get("cron").and_then(|value| value.as_str()) {
         Some(cron) => JobTrigger::Cron(cron.to_string()),
-        None => JobTrigger::OneShot(chrono::Utc::now()),
+        None => JobTrigger::OneShot(chrono::Utc::now() + chrono::Duration::seconds(1)),
     };
 
     let job = new_job(message.clone(), trigger, message);
@@ -2160,6 +2160,51 @@ mod tests {
 
         std::fs::remove_dir_all(&root).unwrap();
         assert!(runtime.mcp_servers.contains_key("filesystem"));
+    }
+
+    #[tokio::test]
+    async fn schedule_task_defaults_to_future_one_shot() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_schedule_task_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let result = execute_tool(
+            &ToolCall::new(
+                "schedule_task",
+                HashMap::from([("message".to_string(), serde_json::json!("scheduled task"))]),
+            ),
+            &runtime,
+        )
+        .await;
+
+        let jobs = runtime.scheduler.lock().await.list().await;
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(result.success);
+        assert_eq!(jobs.len(), 1);
+        assert!(matches!(jobs[0].trigger, JobTrigger::OneShot(_)));
+        assert!(jobs[0].next_run.is_some());
     }
 }
 

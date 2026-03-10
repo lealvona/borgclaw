@@ -54,10 +54,15 @@ impl Default for Scheduler {
 impl SchedulerTrait for Scheduler {
     async fn schedule(&self, job: Job) -> Result<String, SchedulerError> {
         let id = job.id.clone();
+        let mut job = job;
 
         if let JobTrigger::Cron(cron_expr) = &job.trigger {
             Schedule::from_str(cron_expr)
                 .map_err(|e| SchedulerError::InvalidSchedule(e.to_string()))?;
+        }
+
+        if job.next_run.is_none() {
+            job.next_run = job.trigger.next_run();
         }
 
         let mut jobs = self.jobs.write().await;
@@ -123,12 +128,8 @@ impl Scheduler {
         let mut next_runs = HashMap::new();
 
         for (id, job) in jobs.iter() {
-            if let JobTrigger::Cron(cron_expr) = &job.trigger {
-                if let Ok(schedule) = Schedule::from_str(cron_expr) {
-                    if let Some(next) = schedule.upcoming(Utc).next() {
-                        next_runs.insert(id.clone(), next);
-                    }
-                }
+            if let Some(next) = job.next_run.or_else(|| job.trigger.next_run()) {
+                next_runs.insert(id.clone(), next);
             }
         }
 
@@ -159,6 +160,7 @@ pub enum SchedulerError {
 
 /// Create a new job
 pub fn new_job(name: impl Into<String>, trigger: JobTrigger, action: impl Into<String>) -> Job {
+    let next_run = trigger.next_run();
     Job {
         id: Uuid::new_v4().to_string(),
         name: name.into(),
@@ -168,8 +170,52 @@ pub fn new_job(name: impl Into<String>, trigger: JobTrigger, action: impl Into<S
         status: JobStatus::Pending,
         created_at: Utc::now(),
         last_run: None,
-        next_run: None,
+        next_run,
         run_count: 0,
         metadata: HashMap::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration;
+
+    #[test]
+    fn new_job_initializes_next_run_from_trigger() {
+        let job = new_job("interval", JobTrigger::Interval(30), "echo hi");
+        assert!(job.next_run.is_some());
+    }
+
+    #[tokio::test]
+    async fn scheduler_schedule_populates_missing_next_run() {
+        let scheduler = Scheduler::new();
+        let mut job = new_job("oneshot", JobTrigger::OneShot(Utc::now() + Duration::seconds(5)), "echo hi");
+        job.next_run = None;
+        let id = scheduler.schedule(job).await.unwrap();
+
+        let stored = scheduler.get(&id).await.unwrap();
+        assert!(stored.next_run.is_some());
+    }
+
+    #[tokio::test]
+    async fn scheduler_next_runs_includes_non_cron_jobs() {
+        let scheduler = Scheduler::new();
+        let interval_id = scheduler
+            .schedule(new_job("interval", JobTrigger::Interval(30), "echo interval"))
+            .await
+            .unwrap();
+        let oneshot_id = scheduler
+            .schedule(new_job(
+                "oneshot",
+                JobTrigger::OneShot(Utc::now() + Duration::seconds(5)),
+                "echo oneshot",
+            ))
+            .await
+            .unwrap();
+
+        let next_runs = scheduler.next_runs().await;
+        assert!(next_runs.contains_key(&interval_id));
+        assert!(next_runs.contains_key(&oneshot_id));
     }
 }
