@@ -74,7 +74,7 @@ pub async fn run_init(
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join("providers.toml");
-    let registry = ProviderRegistry::load_or_create(&providers_path)?;
+    let mut registry = ProviderRegistry::load_or_create(&providers_path)?;
 
     if args.list_providers {
         banner("NEON PROVIDER DIRECTORY");
@@ -102,12 +102,34 @@ pub async fn run_init(
 
     if args.refresh_models {
         banner("NEON MODEL REFRESH");
-        for provider in ordered_providers(&registry) {
-            let models = fetch_models(provider, None).await;
+        let providers = ordered_providers(&registry)
+            .into_iter()
+            .map(|provider| provider.id.clone())
+            .collect::<Vec<_>>();
+        let mut changed = false;
+        for provider_id in providers {
+            let Some(provider) = registry.providers.get(&provider_id).cloned() else {
+                continue;
+            };
+            let api_key = resolve_provider_api_key(&config, &provider).await;
+            let models = fetch_models(&provider, api_key.as_deref()).await;
             match models {
-                Ok(list) => println!("{} {} {}", paint(SUCCESS, "OK"), provider.id, list.len()),
+                Ok(list) => {
+                    if let Some(entry) = registry.providers.get_mut(&provider_id) {
+                        entry.static_models = list.clone();
+                    }
+                    changed = true;
+                    println!("{} {} {}", paint(SUCCESS, "OK"), provider.id, list.len());
+                }
                 Err(e) => println!("{} {} {}", paint(WARN, "WARN"), provider.id, e),
             }
+        }
+        if changed {
+            registry.save(&providers_path)?;
+            println!(
+                "{}",
+                paint(SUCCESS, format!("Updated {}", providers_path.display()))
+            );
         }
         return Ok(InitOutcome {
             config,
@@ -318,7 +340,8 @@ async fn configure_provider_and_model(
     let provider = providers[selection];
     config.agent.provider = provider.id.clone();
 
-    let models = fetch_models(provider, None)
+    let resolved_api_key = resolve_provider_api_key(config, provider).await;
+    let models = fetch_models(provider, resolved_api_key.as_deref())
         .await
         .unwrap_or_else(|_| provider.static_models.clone());
     let mut model_options = models.clone();
@@ -845,6 +868,20 @@ async fn provider_env_entry(config: &AppConfig) -> Option<(String, String)> {
         .map(|value| (env_key.to_string(), value))
 }
 
+async fn resolve_provider_api_key(config: &AppConfig, provider: &ProviderDef) -> Option<String> {
+    let env_key = provider.api_key_env.as_deref()?;
+
+    if let Ok(value) = std::env::var(env_key) {
+        if !value.trim().is_empty() {
+            return Some(value);
+        }
+    }
+
+    SecurityLayer::with_config(config.security.clone())
+        .get_secret(env_key)
+        .await
+}
+
 async fn store_provider_secret(
     security_config: &borgclaw_core::config::SecurityConfig,
     env_key: &str,
@@ -928,6 +965,42 @@ mod tests {
         let env = std::fs::read_to_string(&env_path).unwrap();
         assert!(env.contains("BORGCLAW_PROVIDER=anthropic"));
         assert!(env.contains("ANTHROPIC_API_KEY=secret-value"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resolve_provider_api_key_prefers_secure_store_when_env_missing() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_onboarding_provider_key_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let mut config = AppConfig::default();
+        config.security.secrets_path = root.join("secrets.enc");
+        let provider = ProviderDef {
+            id: "anthropic".to_string(),
+            display: "Anthropic".to_string(),
+            api_base: "https://api.anthropic.com/v1".to_string(),
+            models_endpoint: "https://api.anthropic.com/v1/models".to_string(),
+            api_key_env: Some("ANTHROPIC_API_KEY".to_string()),
+            default_model: "claude-sonnet-4-20250514".to_string(),
+            static_models: vec![],
+            requires_auth: true,
+        };
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime
+            .block_on(store_provider_secret(
+                &config.security,
+                "ANTHROPIC_API_KEY",
+                "secret-value",
+            ))
+            .unwrap();
+
+        let resolved = runtime.block_on(resolve_provider_api_key(&config, &provider));
+        assert_eq!(resolved.as_deref(), Some("secret-value"));
 
         std::fs::remove_dir_all(root).unwrap();
     }
