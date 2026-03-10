@@ -30,6 +30,10 @@ pub struct HeartbeatTask {
     pub last_run: Option<DateTime<Utc>>,
     pub next_run: Option<DateTime<Utc>>,
     pub run_count: u32,
+    pub max_retries: u32,
+    pub retry_count: u32,
+    pub retry_delay_seconds: u64,
+    pub dead_lettered_at: Option<DateTime<Utc>>,
     pub last_result: Option<HeartbeatResult>,
     pub metadata: HashMap<String, String>,
     #[serde(skip, default = "default_task_handler")]
@@ -46,6 +50,10 @@ impl std::fmt::Debug for HeartbeatTask {
             .field("last_run", &self.last_run)
             .field("next_run", &self.next_run)
             .field("run_count", &self.run_count)
+            .field("max_retries", &self.max_retries)
+            .field("retry_count", &self.retry_count)
+            .field("retry_delay_seconds", &self.retry_delay_seconds)
+            .field("dead_lettered_at", &self.dead_lettered_at)
             .field("last_result", &self.last_result)
             .field("metadata", &self.metadata)
             .finish()
@@ -66,6 +74,10 @@ impl HeartbeatTask {
             last_run: None,
             next_run: None,
             run_count: 0,
+            max_retries: 0,
+            retry_count: 0,
+            retry_delay_seconds: 60,
+            dead_lettered_at: None,
             last_result: None,
             metadata: HashMap::new(),
             handler: default_task_handler(),
@@ -104,6 +116,12 @@ impl HeartbeatTask {
         H: HeartbeatHandler + 'static,
     {
         self.handler = Box::new(handler);
+        self
+    }
+
+    pub fn with_retry_policy(mut self, max_retries: u32, retry_delay_seconds: u64) -> Self {
+        self.max_retries = max_retries;
+        self.retry_delay_seconds = retry_delay_seconds.max(1);
         self
     }
 
@@ -245,6 +263,8 @@ impl HeartbeatEngine {
         let mut tasks = self.tasks.write().await;
         if let Some(task) = tasks.get_mut(id) {
             task.enabled = true;
+            task.retry_count = 0;
+            task.dead_lettered_at = None;
             task.calculate_next_run();
             self.persist_state(&tasks);
             true
@@ -361,10 +381,7 @@ impl HeartbeatEngine {
             {
                 let mut tasks = self.tasks.write().await;
                 if let Some(t) = tasks.get_mut(&task_id) {
-                    t.last_run = Some(Utc::now());
-                    t.run_count += 1;
-                    t.last_result = Some(result.clone());
-                    t.calculate_next_run();
+                    update_task_after_result(t, &result);
                 }
                 self.persist_state(&tasks);
             }
@@ -447,10 +464,7 @@ impl HeartbeatEngine {
         {
             let mut tasks = self.tasks.write().await;
             if let Some(t) = tasks.get_mut(id) {
-                t.last_run = Some(Utc::now());
-                t.run_count += 1;
-                t.last_result = Some(result.clone());
-                t.calculate_next_run();
+                update_task_after_result(t, &result);
             }
             self.persist_state(&tasks);
         }
@@ -503,6 +517,31 @@ fn load_tasks(path: &PathBuf) -> HashMap<String, HeartbeatTask> {
     };
 
     serde_json::from_str(&contents).unwrap_or_default()
+}
+
+fn update_task_after_result(task: &mut HeartbeatTask, result: &HeartbeatResult) {
+    let now = Utc::now();
+    task.last_run = Some(now);
+    task.run_count += 1;
+    task.last_result = Some(result.clone());
+
+    if result.success {
+        task.retry_count = 0;
+        task.dead_lettered_at = None;
+        task.calculate_next_run();
+        return;
+    }
+
+    if task.retry_count < task.max_retries {
+        task.retry_count += 1;
+        task.dead_lettered_at = None;
+        task.next_run = Some(now + chrono::Duration::seconds(task.retry_delay_seconds as i64));
+        return;
+    }
+
+    task.enabled = false;
+    task.next_run = None;
+    task.dead_lettered_at = Some(now);
 }
 
 #[async_trait]
@@ -703,6 +742,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn heartbeat_failure_reschedules_retryable_task() {
+        let engine = HeartbeatEngine::new();
+        let id = engine
+            .add_task(
+                HeartbeatTask::new("retry_task", "0 0 0 * * *")
+                    .with_retry_policy(2, 30)
+                    .with_handler(|_task: &HeartbeatTask| async move {
+                        Err::<(), String>("boom".to_string())
+                    }),
+            )
+            .await;
+
+        let result = engine.run_task_now(&id).await.unwrap();
+        let task = engine.get(&id).await.unwrap();
+
+        assert!(!result.success);
+        assert_eq!(task.retry_count, 1);
+        assert!(task.enabled);
+        assert!(task.next_run.is_some());
+        assert!(task.dead_lettered_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn heartbeat_failure_dead_letters_after_retry_exhaustion() {
+        let engine = HeartbeatEngine::new();
+        let id = engine
+            .add_task(
+                HeartbeatTask::new("dead_letter_task", "0 0 0 * * *")
+                    .with_retry_policy(1, 5)
+                    .with_handler(|_task: &HeartbeatTask| async move {
+                        Err::<(), String>("boom".to_string())
+                    }),
+            )
+            .await;
+
+        let first = engine.run_task_now(&id).await.unwrap();
+        let second = engine.run_task_now(&id).await.unwrap();
+        let task = engine.get(&id).await.unwrap();
+
+        assert!(!first.success);
+        assert!(!second.success);
+        assert_eq!(task.retry_count, 1);
+        assert!(!task.enabled);
+        assert!(task.next_run.is_none());
+        assert!(task.dead_lettered_at.is_some());
+    }
+
+    #[tokio::test]
     async fn heartbeat_disable_clears_next_run_until_reenabled() {
         let engine = HeartbeatEngine::new();
         let id = engine
@@ -721,6 +808,8 @@ mod tests {
         let reenabled = engine.get(&id).await.unwrap();
         assert!(reenabled.enabled);
         assert!(reenabled.next_run.is_some());
+        assert_eq!(reenabled.retry_count, 0);
+        assert!(reenabled.dead_lettered_at.is_none());
     }
 
     #[tokio::test]
