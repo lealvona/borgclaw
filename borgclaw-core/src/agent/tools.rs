@@ -198,6 +198,7 @@ impl ToolRuntime {
     pub async fn from_config(
         agent: &crate::config::AgentConfig,
         memory_config: &crate::config::MemoryConfig,
+        scheduler_config: &crate::config::SchedulerConfig,
         skills_config: &crate::config::SkillsConfig,
         mcp_config: &crate::config::McpConfig,
         security_config: &crate::config::SecurityConfig,
@@ -211,7 +212,7 @@ impl ToolRuntime {
             .await
             .map_err(|e| e.to_string())?;
 
-        Ok(Self {
+        let runtime = Self {
             workspace_root,
             memory,
             scheduler: Arc::new(Mutex::new(Scheduler::new())),
@@ -219,7 +220,24 @@ impl ToolRuntime {
             skills: skills_config.clone(),
             mcp_servers: mcp_config.servers.clone(),
             security: Arc::new(SecurityLayer::with_config(security_config.clone())),
-        })
+        };
+
+        if scheduler_config.enabled {
+            runtime.start_scheduler_loop().await?;
+        }
+
+        Ok(runtime)
+    }
+
+    async fn start_scheduler_loop(&self) -> Result<(), String> {
+        let scheduler = self.scheduler.lock().await;
+        scheduler
+            .start(
+                std::time::Duration::from_secs(1),
+                Arc::new(|job| Box::pin(async move { execute_scheduled_job(&job) })),
+            )
+            .await
+            .map_err(|err| err.to_string())
     }
 }
 
@@ -2160,7 +2178,8 @@ fn number_property(description: &str, default: serde_json::Value) -> PropertySch
 mod tests {
     use super::*;
     use crate::config::{
-        AgentConfig, ApprovalMode, McpConfig, McpServerConfig, MemoryConfig, SecurityConfig,
+        AgentConfig, ApprovalMode, McpConfig, McpServerConfig, MemoryConfig, SchedulerConfig,
+        SecurityConfig,
     };
     use crate::scheduler::JobStatus;
 
@@ -2203,6 +2222,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
                 ..Default::default()
@@ -2298,6 +2318,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
                 ..Default::default()
@@ -2332,6 +2353,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
                 ..Default::default()
@@ -2371,6 +2393,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
                 ..Default::default()
@@ -2419,6 +2442,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
                 ..Default::default()
@@ -2468,6 +2492,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
                 ..Default::default()
@@ -2517,6 +2542,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
                 ..Default::default()
@@ -2616,6 +2642,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
                 ..Default::default()
@@ -2637,6 +2664,82 @@ mod tests {
 
         std::fs::remove_dir_all(&root).unwrap();
         assert!(runtime.mcp_servers.contains_key("filesystem"));
+    }
+
+    #[tokio::test]
+    async fn runtime_starts_scheduler_loop_when_enabled() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_scheduler_runtime_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &SchedulerConfig::default(),
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        {
+            let scheduler = runtime.scheduler.lock().await;
+            assert!(scheduler.is_running().await);
+            assert!(scheduler.stop().await);
+        }
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn runtime_leaves_scheduler_stopped_when_disabled() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_scheduler_disabled_runtime_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &SchedulerConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        {
+            let scheduler = runtime.scheduler.lock().await;
+            assert!(!scheduler.is_running().await);
+        }
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -2680,6 +2783,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
                 ..Default::default()
@@ -2729,6 +2833,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
                 ..Default::default()
