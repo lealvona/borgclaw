@@ -231,6 +231,7 @@ pub async fn run_init(
     configure_security(&mut config, &theme, args.quick)?;
     configure_memory(&mut config, &theme, args.quick)?;
     configure_skills_registry(&mut config, &theme, args.quick)?;
+    configure_skill_integrations(&mut config, &theme, args.quick, &mut env_updates).await?;
 
     let show_summary = Confirm::with_theme(&theme)
         .with_prompt("Show summary before save?")
@@ -655,6 +656,160 @@ fn configure_skills_registry(
     Ok(())
 }
 
+async fn configure_skill_integrations(
+    config: &mut AppConfig,
+    theme: &ColorfulTheme,
+    quick: bool,
+    env_updates: &mut HashMap<String, String>,
+) -> Result<(), String> {
+    println!("{}", paint(OPTIONAL, "[OPTIONAL] Skill integrations"));
+    println!(
+        "{}",
+        paint(
+            WARN,
+            "Ramifications: integration credentials unlock external side effects and API usage."
+        )
+    );
+
+    configure_github_skill(config, theme, quick, env_updates).await?;
+    configure_google_skill(config, theme, quick, env_updates).await?;
+
+    Ok(())
+}
+
+async fn configure_github_skill(
+    config: &mut AppConfig,
+    theme: &ColorfulTheme,
+    quick: bool,
+    env_updates: &mut HashMap<String, String>,
+) -> Result<(), String> {
+    let enable = if quick {
+        false
+    } else {
+        Confirm::with_theme(theme)
+            .with_prompt("Configure GitHub integration now?")
+            .default(!config.skills.github.token.is_empty())
+            .interact()
+            .map_err(|e| e.to_string())?
+    };
+
+    if !enable {
+        return Ok(());
+    }
+
+    let env_key = "GITHUB_TOKEN";
+    let token = Password::with_theme(theme)
+        .with_prompt("Enter GITHUB_TOKEN")
+        .allow_empty_password(false)
+        .interact()
+        .map_err(|e| e.to_string())?;
+    store_provider_secret(&config.security, env_key, &token).await?;
+    env_updates.remove(env_key);
+    config.skills.github.token = format!("${{{}}}", env_key);
+
+    let user_agent: String = Input::with_theme(theme)
+        .with_prompt("GitHub user agent")
+        .default(config.skills.github.user_agent.clone())
+        .interact_text()
+        .map_err(|e| e.to_string())?;
+    config.skills.github.user_agent = user_agent;
+
+    let repo_access_items = vec!["owned_only", "allowlist", "all"];
+    let default_access = repo_access_items
+        .iter()
+        .position(|item| *item == config.skills.github.safety.repo_access)
+        .unwrap_or(0);
+    let access_idx = Select::with_theme(theme)
+        .with_prompt("GitHub repo access policy")
+        .items(&repo_access_items)
+        .default(default_access)
+        .interact()
+        .map_err(|e| e.to_string())?;
+    config.skills.github.safety.repo_access = repo_access_items[access_idx].to_string();
+
+    if config.skills.github.safety.repo_access == "allowlist" {
+        let allowlist: String = Input::with_theme(theme)
+            .with_prompt("Allowlisted repos (comma-separated owner/repo)")
+            .default(config.skills.github.safety.allowlist.join(","))
+            .interact_text()
+            .map_err(|e| e.to_string())?;
+        config.skills.github.safety.allowlist = allowlist
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .collect();
+    } else {
+        config.skills.github.safety.allowlist.clear();
+    }
+
+    config.skills.github.safety.require_confirmation = Confirm::with_theme(theme)
+        .with_prompt("Require confirmation for destructive GitHub operations?")
+        .default(config.skills.github.safety.require_confirmation)
+        .interact()
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+async fn configure_google_skill(
+    config: &mut AppConfig,
+    theme: &ColorfulTheme,
+    quick: bool,
+    env_updates: &mut HashMap<String, String>,
+) -> Result<(), String> {
+    let enable = if quick {
+        false
+    } else {
+        Confirm::with_theme(theme)
+            .with_prompt("Configure Google Workspace integration now?")
+            .default(!config.skills.google.client_id.is_empty())
+            .interact()
+            .map_err(|e| e.to_string())?
+    };
+
+    if !enable {
+        return Ok(());
+    }
+
+    let client_id_key = "GOOGLE_CLIENT_ID";
+    let client_secret_key = "GOOGLE_CLIENT_SECRET";
+
+    let client_id: String = Input::with_theme(theme)
+        .with_prompt("Enter GOOGLE_CLIENT_ID")
+        .interact_text()
+        .map_err(|e| e.to_string())?;
+    let client_secret = Password::with_theme(theme)
+        .with_prompt("Enter GOOGLE_CLIENT_SECRET")
+        .allow_empty_password(false)
+        .interact()
+        .map_err(|e| e.to_string())?;
+
+    store_provider_secret(&config.security, client_id_key, &client_id).await?;
+    store_provider_secret(&config.security, client_secret_key, &client_secret).await?;
+    env_updates.remove(client_id_key);
+    env_updates.remove(client_secret_key);
+
+    config.skills.google.client_id = format!("${{{}}}", client_id_key);
+    config.skills.google.client_secret = format!("${{{}}}", client_secret_key);
+
+    let redirect_uri: String = Input::with_theme(theme)
+        .with_prompt("Google OAuth redirect URI")
+        .default(config.skills.google.redirect_uri.clone())
+        .interact_text()
+        .map_err(|e| e.to_string())?;
+    config.skills.google.redirect_uri = redirect_uri;
+
+    let token_path: String = Input::with_theme(theme)
+        .with_prompt("Google OAuth token path")
+        .default(config.skills.google.token_path.display().to_string())
+        .interact_text()
+        .map_err(|e| e.to_string())?;
+    config.skills.google.token_path = PathBuf::from(token_path);
+
+    Ok(())
+}
+
 fn print_summary(config: &AppConfig) {
     banner("ONBOARDING SUMMARY");
     println!("{} {}", paint(INFO, "Provider:"), config.agent.provider);
@@ -829,6 +984,9 @@ async fn generate_env_file(
     if let Some((env_key, env_value)) = provider_env_entry(config).await {
         env.insert(env_key, env_value);
     }
+    for (env_key, env_value) in integration_env_entries(config).await {
+        env.insert(env_key, env_value);
+    }
 
     let mut lines = Vec::new();
     lines.push("# BorgClaw Environment (generated)".to_string());
@@ -866,6 +1024,30 @@ async fn provider_env_entry(config: &AppConfig) -> Option<(String, String)> {
         .get_secret(env_key)
         .await
         .map(|value| (env_key.to_string(), value))
+}
+
+async fn integration_env_entries(config: &AppConfig) -> Vec<(String, String)> {
+    let mut entries = Vec::new();
+
+    for key in ["GITHUB_TOKEN", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"] {
+        if let Some(value) = config_secret_entry(config, key).await {
+            entries.push((key.to_string(), value));
+        }
+    }
+
+    entries
+}
+
+async fn config_secret_entry(config: &AppConfig, env_key: &str) -> Option<String> {
+    if let Ok(value) = std::env::var(env_key) {
+        if !value.trim().is_empty() {
+            return Some(value);
+        }
+    }
+
+    SecurityLayer::with_config(config.security.clone())
+        .get_secret(env_key)
+        .await
 }
 
 async fn resolve_provider_api_key(config: &AppConfig, provider: &ProviderDef) -> Option<String> {
@@ -1001,6 +1183,55 @@ mod tests {
 
         let resolved = runtime.block_on(resolve_provider_api_key(&config, &provider));
         assert_eq!(resolved.as_deref(), Some("secret-value"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn generate_env_includes_skill_integration_secrets_from_secure_store() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_onboarding_skill_env_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let mut config = AppConfig::default();
+        config.security.secrets_path = root.join("secrets.enc");
+        config.skills.github.token = "${GITHUB_TOKEN}".to_string();
+        config.skills.google.client_id = "${GOOGLE_CLIENT_ID}".to_string();
+        config.skills.google.client_secret = "${GOOGLE_CLIENT_SECRET}".to_string();
+
+        let env_path = root.join(".env");
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime
+            .block_on(store_provider_secret(
+                &config.security,
+                "GITHUB_TOKEN",
+                "ghp-secret",
+            ))
+            .unwrap();
+        runtime
+            .block_on(store_provider_secret(
+                &config.security,
+                "GOOGLE_CLIENT_ID",
+                "google-client-id",
+            ))
+            .unwrap();
+        runtime
+            .block_on(store_provider_secret(
+                &config.security,
+                "GOOGLE_CLIENT_SECRET",
+                "google-client-secret",
+            ))
+            .unwrap();
+        runtime
+            .block_on(generate_env_file(&config, &HashMap::new(), &env_path))
+            .unwrap();
+
+        let env = std::fs::read_to_string(&env_path).unwrap();
+        assert!(env.contains("GITHUB_TOKEN=ghp-secret"));
+        assert!(env.contains("GOOGLE_CLIENT_ID=google-client-id"));
+        assert!(env.contains("GOOGLE_CLIENT_SECRET=google-client-secret"));
 
         std::fs::remove_dir_all(root).unwrap();
     }
