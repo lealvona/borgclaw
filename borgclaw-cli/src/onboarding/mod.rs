@@ -151,7 +151,7 @@ pub async fn run_init(
             .chapter
             .clone()
             .ok_or_else(|| "--chapter is required with --component".to_string())?;
-        apply_component_action(&mut config, title, &chapter, &args.action, &theme)?;
+        apply_component_action(&mut config, title, &chapter, &args.action, &theme, &registry)?;
         return Ok(InitOutcome {
             config,
             start: StartTarget::None,
@@ -210,10 +210,10 @@ pub async fn run_init(
                 });
             }
             ExistingConfigAction::AddComponent => {
-                component_wizard(&mut config, "add", &theme)?;
+                component_wizard(&mut config, "add", &theme, &registry)?;
             }
             ExistingConfigAction::DeleteComponent => {
-                component_wizard(&mut config, "delete", &theme)?;
+                component_wizard(&mut config, "delete", &theme, &registry)?;
             }
             ExistingConfigAction::RegenerateEnv => {
                 generate_env_file(&config, &env_updates, &PathBuf::from(".env")).await?;
@@ -1184,14 +1184,28 @@ fn apply_component_action(
     chapter: &str,
     action: &str,
     theme: &ColorfulTheme,
+    registry: &ProviderRegistry,
 ) -> Result<(), String> {
+    let title = title.trim().to_ascii_lowercase();
+    let chapter = chapter.trim().to_ascii_lowercase();
     match action {
         "delete" => {
-            if let Some(v) = config.registrar.chapters.get_mut(title) {
-                v.retain(|c| c != chapter);
+            if let Some(v) = config.registrar.chapters.get_mut(&title) {
+                v.retain(|c| c != &chapter);
             }
-            if title == "channel" {
-                config.channels.remove(chapter);
+            match (title.as_str(), chapter.as_str()) {
+                ("channel", _) => {
+                    config.channels.remove(&chapter);
+                }
+                ("sandbox", "wasm") => config.security.wasm_sandbox = false,
+                ("sandbox", "docker") => config.security.docker_sandbox = false,
+                ("memory", "sqlite") => config.memory.hybrid_search = false,
+                ("memory", "vector") => config.memory.vector_provider = "sqlite".to_string(),
+                ("provider", provider) if config.agent.provider == provider => {
+                    config.agent.provider = AppConfig::default().agent.provider;
+                    config.agent.model = AppConfig::default().agent.model;
+                }
+                _ => {}
             }
             println!(
                 "{}",
@@ -1202,29 +1216,64 @@ fn apply_component_action(
             config
                 .registrar
                 .chapters
-                .entry(title.to_string())
+                .entry(title.clone())
                 .or_default()
-                .push(chapter.to_string());
-            if title == "channel" {
-                let entry = config
-                    .channels
-                    .entry(chapter.to_string())
-                    .or_insert_with(ChannelConfig::default);
-                entry.enabled = true;
-            }
-            if title == "sandbox" && chapter == "docker" {
-                config.security.docker_sandbox = true;
-                let image: String = Input::with_theme(theme)
-                    .with_prompt("Docker sandbox image")
-                    .default("borgclaw/sandbox:latest".to_string())
-                    .interact_text()
-                    .map_err(|e| e.to_string())?;
-                config
-                    .registrar
-                    .chapters
-                    .entry("sandbox_meta".to_string())
-                    .or_default()
-                    .push(format!("docker_image={}", image));
+                .retain(|c| c != &chapter);
+            config
+                .registrar
+                .chapters
+                .entry(title.clone())
+                .or_default()
+                .push(chapter.clone());
+
+            match (title.as_str(), chapter.as_str()) {
+                ("channel", _) => {
+                    let entry = config
+                        .channels
+                        .entry(chapter.clone())
+                        .or_insert_with(ChannelConfig::default);
+                    entry.enabled = true;
+                }
+                ("sandbox", "wasm") => {
+                    config.security.wasm_sandbox = true;
+                }
+                ("sandbox", "docker") => {
+                    config.security.docker_sandbox = true;
+                    let image: String = Input::with_theme(theme)
+                        .with_prompt("Docker sandbox image")
+                        .default("borgclaw/sandbox:latest".to_string())
+                        .interact_text()
+                        .map_err(|e| e.to_string())?;
+                    config
+                        .registrar
+                        .chapters
+                        .entry("sandbox_meta".to_string())
+                        .or_default()
+                        .retain(|value| !value.starts_with("docker_image="));
+                    config
+                        .registrar
+                        .chapters
+                        .entry("sandbox_meta".to_string())
+                        .or_default()
+                        .push(format!("docker_image={}", image));
+                }
+                ("memory", "sqlite") => {
+                    config.memory.hybrid_search = true;
+                    config.memory.vector_provider = "sqlite".to_string();
+                }
+                ("memory", "vector") => {
+                    config.memory.hybrid_search = true;
+                    if config.memory.vector_provider == "sqlite" {
+                        config.memory.vector_provider = "memory".to_string();
+                    }
+                }
+                ("provider", provider) => {
+                    config.agent.provider = provider.to_string();
+                    if let Some(def) = registry.providers.get(provider) {
+                        config.agent.model = def.default_model.clone();
+                    }
+                }
+                _ => {}
             }
             println!(
                 "{}",
@@ -1239,6 +1288,7 @@ fn component_wizard(
     config: &mut AppConfig,
     action: &str,
     theme: &ColorfulTheme,
+    registry: &ProviderRegistry,
 ) -> Result<(), String> {
     let title: String = Input::with_theme(theme)
         .with_prompt("Title (component type, e.g., channel/sandbox/memory/skill)")
@@ -1248,7 +1298,7 @@ fn component_wizard(
         .with_prompt("Chapter (component name, e.g., telegram/docker/postgres)")
         .interact_text()
         .map_err(|e| e.to_string())?;
-    apply_component_action(config, &title, &chapter, action, theme)
+    apply_component_action(config, &title, &chapter, action, theme, registry)
 }
 
 fn build_postgres_connection(theme: &ColorfulTheme) -> Result<String, String> {
@@ -1419,6 +1469,10 @@ async fn store_provider_secret(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_theme() -> ColorfulTheme {
+        ColorfulTheme::default()
+    }
 
     #[test]
     fn existing_config_choices_include_documented_status_flow() {
@@ -1593,6 +1647,78 @@ mod tests {
         assert!(env.contains("YOURLS_PASSWORD=yourls-secret"));
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn provider_component_action_updates_agent_provider_and_model() {
+        let mut config = AppConfig::default();
+        let registry = ProviderRegistry::default_registry();
+
+        apply_component_action(
+            &mut config,
+            "provider",
+            "openai",
+            "add",
+            &test_theme(),
+            &registry,
+        )
+        .unwrap();
+
+        assert_eq!(config.agent.provider, "openai");
+        assert_eq!(config.agent.model, "gpt-4o");
+        assert_eq!(
+            config.registrar.chapters.get("provider").unwrap(),
+            &vec!["openai".to_string()]
+        );
+    }
+
+    #[test]
+    fn memory_component_action_updates_runtime_memory_mode() {
+        let mut config = AppConfig::default();
+        let registry = ProviderRegistry::default_registry();
+
+        apply_component_action(
+            &mut config,
+            "memory",
+            "vector",
+            "add",
+            &test_theme(),
+            &registry,
+        )
+        .unwrap();
+
+        assert_eq!(config.memory.vector_provider, "memory");
+        assert!(config.memory.hybrid_search);
+    }
+
+    #[test]
+    fn deleting_channel_component_removes_channel_config() {
+        let mut config = AppConfig::default();
+        let registry = ProviderRegistry::default_registry();
+        config
+            .channels
+            .insert("telegram".to_string(), ChannelConfig::default());
+        config
+            .registrar
+            .chapters
+            .insert("channel".to_string(), vec!["telegram".to_string()]);
+
+        apply_component_action(
+            &mut config,
+            "channel",
+            "telegram",
+            "delete",
+            &test_theme(),
+            &registry,
+        )
+        .unwrap();
+
+        assert!(!config.channels.contains_key("telegram"));
+        assert!(
+            config.registrar.chapters["channel"]
+                .iter()
+                .all(|chapter| chapter != "telegram")
+        );
     }
 }
 
