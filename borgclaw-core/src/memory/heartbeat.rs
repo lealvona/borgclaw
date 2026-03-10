@@ -8,14 +8,17 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use std::time::Duration;
+use tokio::sync::{mpsc, Mutex, RwLock};
 
 pub struct HeartbeatEngine {
     tasks: Arc<RwLock<HashMap<String, HeartbeatTask>>>,
     handlers: Arc<RwLock<HashMap<String, Arc<dyn HeartbeatHandler>>>>,
     running: Arc<RwLock<bool>>,
+    loop_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     sender: mpsc::Sender<HeartbeatEvent>,
     state_path: Option<PathBuf>,
+    poll_interval: Duration,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -178,8 +181,10 @@ impl HeartbeatEngine {
             tasks: Arc::new(RwLock::new(HashMap::new())),
             handlers: Arc::new(RwLock::new(HashMap::new())),
             running: Arc::new(RwLock::new(false)),
+            loop_handle: Arc::new(Mutex::new(None)),
             sender,
             state_path: None,
+            poll_interval: Duration::from_secs(60),
         }
     }
 
@@ -192,6 +197,11 @@ impl HeartbeatEngine {
 
     pub fn with_event_channel(mut self, sender: mpsc::Sender<HeartbeatEvent>) -> Self {
         self.sender = sender;
+        self
+    }
+
+    pub fn with_poll_interval(mut self, poll_interval: Duration) -> Self {
+        self.poll_interval = poll_interval.max(Duration::from_millis(1));
         self
     }
 
@@ -277,9 +287,38 @@ impl HeartbeatEngine {
     }
 
     pub async fn start(&self) -> Result<(), String> {
-        let mut running = self.running.write().await;
-        *running = true;
-        drop(running);
+        self.start_with_interval(self.poll_interval).await
+    }
+
+    pub async fn start_with_interval(&self, poll_interval: Duration) -> Result<(), String> {
+        if poll_interval.is_zero() {
+            return Err("heartbeat poll interval must be greater than zero".to_string());
+        }
+
+        {
+            let mut running = self.running.write().await;
+            if *running {
+                return Err("heartbeat engine already running".to_string());
+            }
+            *running = true;
+        }
+
+        let engine = self.clone();
+        let handle = tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(poll_interval);
+            loop {
+                ticker.tick().await;
+                if !engine.is_running().await {
+                    break;
+                }
+                let _ = engine.tick().await;
+            }
+        });
+
+        {
+            let mut loop_handle = self.loop_handle.lock().await;
+            *loop_handle = Some(handle);
+        }
 
         let _ = self.sender.send(HeartbeatEvent::EngineStarted).await;
         Ok(())
@@ -289,6 +328,10 @@ impl HeartbeatEngine {
         let mut running = self.running.write().await;
         *running = false;
         drop(running);
+
+        if let Some(handle) = self.loop_handle.lock().await.take() {
+            handle.abort();
+        }
 
         let _ = self.sender.send(HeartbeatEvent::EngineStopped).await;
         Ok(())
@@ -440,6 +483,20 @@ impl Default for HeartbeatEngine {
     }
 }
 
+impl Clone for HeartbeatEngine {
+    fn clone(&self) -> Self {
+        Self {
+            tasks: Arc::clone(&self.tasks),
+            handlers: Arc::clone(&self.handlers),
+            running: Arc::clone(&self.running),
+            loop_handle: Arc::clone(&self.loop_handle),
+            sender: self.sender.clone(),
+            state_path: self.state_path.clone(),
+            poll_interval: self.poll_interval,
+        }
+    }
+}
+
 fn load_tasks(path: &PathBuf) -> HashMap<String, HeartbeatTask> {
     let Ok(contents) = std::fs::read_to_string(path) else {
         return HashMap::new();
@@ -558,7 +615,9 @@ mod tests {
     #[tokio::test]
     async fn heartbeat_add_task_and_start_follow_documented_contract() {
         let (sender, mut receiver) = mpsc::channel(2);
-        let engine = HeartbeatEngine::new().with_event_channel(sender);
+        let engine = HeartbeatEngine::new()
+            .with_event_channel(sender)
+            .with_poll_interval(Duration::from_secs(60));
         let task_id = engine
             .add_task(HeartbeatTask::new("doc_task", "0 0 0 * * *"))
             .await;
@@ -569,6 +628,41 @@ mod tests {
             Some(HeartbeatEvent::EngineStarted)
         ));
         assert!(engine.get(&task_id).await.is_some());
+        assert!(engine.stop().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn heartbeat_start_rejects_duplicate_loop() {
+        let engine = HeartbeatEngine::new().with_poll_interval(Duration::from_millis(25));
+
+        assert!(engine.start().await.is_ok());
+        let err = engine.start().await.unwrap_err();
+
+        assert_eq!(err, "heartbeat engine already running");
+        assert!(engine.stop().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn heartbeat_start_executes_due_tasks_automatically() {
+        let engine = HeartbeatEngine::new().with_poll_interval(Duration::from_millis(20));
+        let id = engine
+            .add_task(HeartbeatTask::new("auto_task", "0 0 0 * * *"))
+            .await;
+        {
+            let mut tasks = engine.tasks.write().await;
+            let task = tasks.get_mut(&id).unwrap();
+            task.next_run = Some(Utc::now());
+        }
+
+        assert!(engine.start().await.is_ok());
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        let task = engine.get(&id).await.unwrap();
+        assert!(task.run_count >= 1);
+        assert!(task.last_run.is_some());
+        assert!(task.last_result.is_some());
+
+        assert!(engine.stop().await.is_ok());
     }
 
     #[tokio::test]
