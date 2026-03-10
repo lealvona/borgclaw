@@ -1,7 +1,9 @@
 //! Background sub-agents for parallel task execution
 
 use crate::agent::{builtin_tools, Agent, AgentContext, SenderInfo, SessionId, SimpleAgent};
-use crate::config::{AgentConfig, McpConfig, MemoryConfig, SecurityConfig, SkillsConfig};
+use crate::config::{
+    AgentConfig, McpConfig, MemoryConfig, SchedulerConfig, SecurityConfig, SkillsConfig,
+};
 use crate::memory::{new_entry_for_group, Memory, SqliteMemory};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -134,6 +136,7 @@ pub struct SubAgentResult {
 pub struct SubAgentCoordinator {
     config: AgentConfig,
     memory_config: MemoryConfig,
+    scheduler_config: SchedulerConfig,
     skills_config: SkillsConfig,
     mcp_config: McpConfig,
     security_config: SecurityConfig,
@@ -148,6 +151,7 @@ impl SubAgentCoordinator {
         Self::with_configs(
             config,
             MemoryConfig::default(),
+            SchedulerConfig::default(),
             SkillsConfig::default(),
             McpConfig::default(),
             SecurityConfig::default(),
@@ -158,6 +162,7 @@ impl SubAgentCoordinator {
     pub fn with_configs(
         config: AgentConfig,
         memory_config: MemoryConfig,
+        scheduler_config: SchedulerConfig,
         skills_config: SkillsConfig,
         mcp_config: McpConfig,
         security_config: SecurityConfig,
@@ -166,6 +171,7 @@ impl SubAgentCoordinator {
         Self {
             config,
             memory_config,
+            scheduler_config,
             skills_config,
             mcp_config,
             security_config,
@@ -404,6 +410,7 @@ impl SubAgentCoordinator {
         let mut agent = SimpleAgent::new(
             self.config.clone(),
             Some(self.memory_config.clone()),
+            Some(self.scheduler_config.clone()),
             Some(self.skills_config.clone()),
             Some(self.mcp_config.clone()),
             Some(self.security_config.clone()),
@@ -690,6 +697,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            crate::config::SchedulerConfig::default(),
             SkillsConfig::default(),
             McpConfig::default(),
             SecurityConfig::default(),
@@ -730,6 +738,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            crate::config::SchedulerConfig::default(),
             SkillsConfig::default(),
             McpConfig::default(),
             SecurityConfig::default(),
@@ -790,6 +799,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            crate::config::SchedulerConfig::default(),
             SkillsConfig::default(),
             McpConfig::default(),
             SecurityConfig::default(),
@@ -846,6 +856,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            crate::config::SchedulerConfig::default(),
             SkillsConfig::default(),
             McpConfig::default(),
             SecurityConfig::default(),
@@ -910,6 +921,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            crate::config::SchedulerConfig::default(),
             SkillsConfig::default(),
             McpConfig::default(),
             SecurityConfig::default(),
@@ -967,6 +979,7 @@ mod tests {
                 database_path: memory_path.clone(),
                 ..Default::default()
             },
+            crate::config::SchedulerConfig::default(),
             SkillsConfig::default(),
             McpConfig::default(),
             SecurityConfig::default(),
