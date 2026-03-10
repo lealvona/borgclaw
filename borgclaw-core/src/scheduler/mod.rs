@@ -2,7 +2,7 @@
 
 mod jobs;
 
-pub use jobs::{Job, JobStatus, JobTrigger};
+pub use jobs::{Job, JobRun, JobStatus, JobTrigger};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -289,6 +289,7 @@ impl Scheduler {
         let mut results = Vec::with_capacity(due_jobs.len());
         for batch in due_jobs.chunks(max_concurrent_jobs) {
             let batch_results = join_all(batch.iter().cloned().map(|job| async {
+                let started_at = Utc::now();
                 let result = match job_timeout {
                     Some(timeout) => match tokio::time::timeout(timeout, handler(job.clone())).await
                     {
@@ -300,27 +301,43 @@ impl Scheduler {
                     },
                     None => handler(job.clone()).await,
                 };
-                (job, result)
+                (job, started_at, result)
             }))
             .await;
 
-            for (job, result) in batch_results {
+            for (job, started_at, result) in batch_results {
+                let finished_at = Utc::now();
                 {
                     let mut jobs = self.jobs.write().await;
                     if let Some(stored) = jobs.get_mut(&job.id) {
-                        stored.last_run = Some(Utc::now());
+                        stored.last_run = Some(finished_at);
                         stored.run_count += 1;
-                        match result.as_ref() {
+                        let (status, error) = match result.as_ref() {
                             Ok(()) => {
                                 stored.status = JobStatus::Completed;
                                 stored.next_run = match stored.trigger {
                                     JobTrigger::OneShot(_) => None,
                                     _ => stored.trigger.next_run(),
                                 };
+                                (JobStatus::Completed, None)
                             }
-                            Err(_) => {
+                            Err(err) => {
                                 stored.status = JobStatus::Failed;
+                                (
+                                    JobStatus::Failed,
+                                    Some(err.to_string()),
+                                )
                             }
+                        };
+                        stored.run_history.push(JobRun {
+                            started_at,
+                            finished_at,
+                            status,
+                            error,
+                        });
+                        if stored.run_history.len() > 20 {
+                            let excess = stored.run_history.len() - 20;
+                            stored.run_history.drain(0..excess);
                         }
                     }
                 }
@@ -368,6 +385,7 @@ pub fn new_job(name: impl Into<String>, trigger: JobTrigger, action: impl Into<S
         last_run: None,
         next_run,
         run_count: 0,
+        run_history: Vec::new(),
         metadata: HashMap::new(),
     }
 }
@@ -437,6 +455,9 @@ mod tests {
         assert_eq!(stored.run_count, 1);
         assert!(stored.last_run.is_some());
         assert!(stored.next_run.is_none());
+        assert_eq!(stored.run_history.len(), 1);
+        assert_eq!(stored.run_history[0].status, JobStatus::Completed);
+        assert!(stored.run_history[0].error.is_none());
     }
 
     #[tokio::test]
@@ -471,6 +492,9 @@ mod tests {
         assert_eq!(stored.status, JobStatus::Failed);
         assert_eq!(stored.run_count, 1);
         assert!(stored.last_run.is_some());
+        assert_eq!(stored.run_history.len(), 1);
+        assert_eq!(stored.run_history[0].status, JobStatus::Failed);
+        assert_eq!(stored.run_history[0].error.as_deref(), Some("Job failed: boom"));
     }
 
     #[tokio::test]
