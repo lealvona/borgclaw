@@ -264,10 +264,8 @@ impl HeartbeatEngine {
         *running = true;
         drop(running);
 
-        self.sender
-            .send(HeartbeatEvent::EngineStarted)
-            .await
-            .map_err(|err| err.to_string())
+        let _ = self.sender.send(HeartbeatEvent::EngineStarted).await;
+        Ok(())
     }
 
     pub async fn stop(&self) -> Result<(), String> {
@@ -275,10 +273,8 @@ impl HeartbeatEngine {
         *running = false;
         drop(running);
 
-        self.sender
-            .send(HeartbeatEvent::EngineStopped)
-            .await
-            .map_err(|err| err.to_string())
+        let _ = self.sender.send(HeartbeatEvent::EngineStopped).await;
+        Ok(())
     }
 
     pub async fn is_running(&self) -> bool {
@@ -286,6 +282,10 @@ impl HeartbeatEngine {
     }
 
     pub async fn tick(&self) -> Vec<(String, HeartbeatResult)> {
+        if !self.is_running().await {
+            return Vec::new();
+        }
+
         let due_tasks = self.list_due().await;
         let mut results = Vec::new();
 
@@ -582,5 +582,32 @@ mod tests {
         let reenabled = engine.get(&id).await.unwrap();
         assert!(reenabled.enabled);
         assert!(reenabled.next_run.is_some());
+    }
+
+    #[tokio::test]
+    async fn heartbeat_tick_requires_running_engine() {
+        let engine = HeartbeatEngine::new();
+        let id = engine
+            .add_task(HeartbeatTask::new("due_task", "0 0 0 * * *"))
+            .await;
+        engine
+            .tasks
+            .write()
+            .await
+            .get_mut(&id)
+            .unwrap()
+            .next_run = Some(Utc::now() - chrono::Duration::seconds(1));
+
+        let stopped = engine.tick().await;
+        assert!(stopped.is_empty());
+        assert_eq!(engine.get(&id).await.unwrap().run_count, 0);
+
+        assert!(engine.start().await.is_ok());
+        let running = engine.tick().await;
+        assert_eq!(running.len(), 1);
+
+        assert!(engine.stop().await.is_ok());
+        let after_stop = engine.tick().await;
+        assert!(after_stop.is_empty());
     }
 }
