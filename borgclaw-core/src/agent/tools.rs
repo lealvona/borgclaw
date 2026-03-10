@@ -280,6 +280,11 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "github_delete_branch" => github_delete_branch(&call.arguments, runtime).await,
         "github_prepare_merge_pr" => github_prepare_merge_pr(&call.arguments, runtime).await,
         "github_merge_pr" => github_merge_pr(&call.arguments, runtime).await,
+        "github_list_issues" => github_list_issues(&call.arguments, runtime).await,
+        "github_create_issue" => github_create_issue(&call.arguments, runtime).await,
+        "github_list_releases" => github_list_releases(&call.arguments, runtime).await,
+        "github_get_file" => github_get_file(&call.arguments, runtime).await,
+        "github_create_file" => github_create_file(&call.arguments, runtime).await,
         "google_list_messages" => google_list_messages(&call.arguments, runtime).await,
         "google_send_email" => google_send_email(&call.arguments, runtime).await,
         "google_search_files" => google_search_files(&call.arguments, runtime).await,
@@ -888,6 +893,180 @@ async fn github_merge_pr(
     match client.merge_pr(&owner, &repo, number, confirmation_token).await {
         Ok(true) => ToolResult::ok(format!("merged pull request {}", number)),
         Ok(false) => ToolResult::err("merge request was not accepted"),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn github_list_issues(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = match github_client(runtime) {
+        Ok(client) => client,
+        Err(err) => return ToolResult::err(err),
+    };
+    let owner = match get_required_string(arguments, "owner") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let repo = match get_required_string(arguments, "repo") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let state = arguments.get("state").and_then(|value| value.as_str());
+
+    match client.list_issues(&owner, &repo, state).await {
+        Ok(issues) if issues.is_empty() => ToolResult::ok("no issues"),
+        Ok(issues) => ToolResult::ok(
+            issues
+                .into_iter()
+                .map(|issue| format!("{} #{} [{}]", issue.title, issue.number, issue.state))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn github_create_issue(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = match github_client(runtime) {
+        Ok(client) => client,
+        Err(err) => return ToolResult::err(err),
+    };
+    let owner = match get_required_string(arguments, "owner") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let repo = match get_required_string(arguments, "repo") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let title = match get_required_string(arguments, "title") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let body = arguments.get("body").and_then(|value| value.as_str());
+
+    match client.create_issue(&owner, &repo, &title, body).await {
+        Ok(issue) => ToolResult::ok(format!("{} #{}", issue.html_url, issue.number))
+            .with_metadata("owner", owner)
+            .with_metadata("repo", repo),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn github_list_releases(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = match github_client(runtime) {
+        Ok(client) => client,
+        Err(err) => return ToolResult::err(err),
+    };
+    let owner = match get_required_string(arguments, "owner") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let repo = match get_required_string(arguments, "repo") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    match client.list_releases(&owner, &repo).await {
+        Ok(releases) if releases.is_empty() => ToolResult::ok("no releases"),
+        Ok(releases) => ToolResult::ok(
+            releases
+                .into_iter()
+                .map(|release| {
+                    format!(
+                        "{} | {} | draft={}",
+                        release.tag_name,
+                        release.name.unwrap_or_default(),
+                        release.draft
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn github_get_file(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = match github_client(runtime) {
+        Ok(client) => client,
+        Err(err) => return ToolResult::err(err),
+    };
+    let owner = match get_required_string(arguments, "owner") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let repo = match get_required_string(arguments, "repo") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let path = match get_required_string(arguments, "path") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let git_ref = arguments
+        .get("ref")
+        .and_then(|value| value.as_str())
+        .unwrap_or("HEAD");
+
+    match client.get_file(&owner, &repo, &path, git_ref).await {
+        Ok(content) => ToolResult::ok(truncate_output(&content)),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn github_create_file(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = match github_client(runtime) {
+        Ok(client) => client,
+        Err(err) => return ToolResult::err(err),
+    };
+    let owner = match get_required_string(arguments, "owner") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let repo = match get_required_string(arguments, "repo") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let path = match get_required_string(arguments, "path") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let content = match get_required_string(arguments, "content") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let message = match get_required_string(arguments, "message") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let branch = arguments
+        .get("branch")
+        .and_then(|value| value.as_str())
+        .unwrap_or("main");
+
+    match client
+        .create_file(&owner, &repo, &path, &content, &message, branch)
+        .await
+    {
+        Ok(()) => ToolResult::ok(format!("created {}", path))
+            .with_metadata("owner", owner)
+            .with_metadata("repo", repo)
+            .with_metadata("branch", branch.to_string()),
         Err(err) => ToolResult::err(err.to_string()),
     }
 }
@@ -2162,6 +2341,20 @@ mod tests {
         assert!(runtime.mcp_servers.contains_key("filesystem"));
     }
 
+    #[test]
+    fn builtin_tools_include_documented_github_issue_release_and_file_ops() {
+        let names = builtin_tools()
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+
+        assert!(names.iter().any(|name| name == "github_list_issues"));
+        assert!(names.iter().any(|name| name == "github_create_issue"));
+        assert!(names.iter().any(|name| name == "github_list_releases"));
+        assert!(names.iter().any(|name| name == "github_get_file"));
+        assert!(names.iter().any(|name| name == "github_create_file"));
+    }
+
     #[tokio::test]
     async fn schedule_task_defaults_to_future_one_shot() {
         let root = std::env::temp_dir().join(format!(
@@ -2510,6 +2703,71 @@ pub fn builtin_tools() -> Vec<Tool> {
                 ]
                 .into(),
                 vec!["owner".to_string(), "repo".to_string(), "number".to_string()],
+            ))
+            .with_tags(vec!["github".to_string(), "integration".to_string()]),
+        Tool::new("github_list_issues", "List GitHub issues")
+            .with_schema(ToolSchema::object(
+                [
+                    ("owner".to_string(), string_property("Repository owner")),
+                    ("repo".to_string(), string_property("Repository name")),
+                    ("state".to_string(), string_property("Optional issue state filter")),
+                ]
+                .into(),
+                vec!["owner".to_string(), "repo".to_string()],
+            ))
+            .with_tags(vec!["github".to_string(), "integration".to_string()]),
+        Tool::new("github_create_issue", "Create a GitHub issue")
+            .with_schema(ToolSchema::object(
+                [
+                    ("owner".to_string(), string_property("Repository owner")),
+                    ("repo".to_string(), string_property("Repository name")),
+                    ("title".to_string(), string_property("Issue title")),
+                    ("body".to_string(), string_property("Issue body")),
+                ]
+                .into(),
+                vec!["owner".to_string(), "repo".to_string(), "title".to_string()],
+            ))
+            .with_tags(vec!["github".to_string(), "integration".to_string()]),
+        Tool::new("github_list_releases", "List GitHub releases")
+            .with_schema(ToolSchema::object(
+                [
+                    ("owner".to_string(), string_property("Repository owner")),
+                    ("repo".to_string(), string_property("Repository name")),
+                ]
+                .into(),
+                vec!["owner".to_string(), "repo".to_string()],
+            ))
+            .with_tags(vec!["github".to_string(), "integration".to_string()]),
+        Tool::new("github_get_file", "Read a file from a GitHub repository")
+            .with_schema(ToolSchema::object(
+                [
+                    ("owner".to_string(), string_property("Repository owner")),
+                    ("repo".to_string(), string_property("Repository name")),
+                    ("path".to_string(), string_property("Repository file path")),
+                    ("ref".to_string(), string_property("Git ref or branch name")),
+                ]
+                .into(),
+                vec!["owner".to_string(), "repo".to_string(), "path".to_string()],
+            ))
+            .with_tags(vec!["github".to_string(), "integration".to_string()]),
+        Tool::new("github_create_file", "Create a file in a GitHub repository")
+            .with_schema(ToolSchema::object(
+                [
+                    ("owner".to_string(), string_property("Repository owner")),
+                    ("repo".to_string(), string_property("Repository name")),
+                    ("path".to_string(), string_property("Repository file path")),
+                    ("content".to_string(), string_property("File content")),
+                    ("message".to_string(), string_property("Commit message")),
+                    ("branch".to_string(), string_property("Target branch")),
+                ]
+                .into(),
+                vec![
+                    "owner".to_string(),
+                    "repo".to_string(),
+                    "path".to_string(),
+                    "content".to_string(),
+                    "message".to_string(),
+                ],
             ))
             .with_tags(vec!["github".to_string(), "integration".to_string()]),
         Tool::new("google_list_messages", "List Gmail messages")
