@@ -7,7 +7,7 @@ Implement the remaining documented BorgClaw feature set in a security-first sequ
 Status note as of March 10, 2026:
 - Phase 1 is largely complete.
 - Phase 2 is largely complete.
-- Phase 3 is partially complete, with heartbeat/subagent durability still behind the documented end state.
+- Phase 3 is partially complete. Memory, session compaction, sub-agent concurrency/status basics, and scheduler/heartbeat state handling are landed, but background execution durability is still behind the documented end state.
 - Phase 4 is partially complete, with several skill families implemented as clients but not fully exposed through the shared tool/runtime layer.
 - Phase 5 is partially complete, with security enforcement substantially improved but onboarding/auth/operator UX still behind the documented end state.
 
@@ -33,6 +33,11 @@ Status note as of March 10, 2026:
 - Implement session compaction before provider calls when transcripts exceed limits.
 - Complete solution memory recall and heartbeat scheduler execution.
 - Integrate sub-agent background execution with status tracking.
+
+Recent landed work in this phase:
+- Heartbeat engine state gating, manual-run state updates, and disable/re-enable consistency.
+- Sub-agent concurrency limits, cancellation precedence, memory tool policy enforcement, and parent-context inheritance.
+- Scheduler job initialization with stable `next_run` state for cron, interval, and one-shot jobs.
 
 ## Phase 4: Skills and Integrations
 
