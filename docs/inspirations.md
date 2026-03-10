@@ -241,7 +241,7 @@ Best upstream references:
 
 Current BorgClaw signal:
 
-- `ROADMAP.md` Phase 3 still lists heartbeat scheduler execution and sub-agent status tracking as incomplete.
+- `ROADMAP.md` Phase 3 still lists heartbeat scheduler execution and sub-agent status tracking as incomplete overall, but recent hardening landed engine-state gating, sub-agent concurrency/cancellation controls, parent-context inheritance, and stable scheduler `next_run` state.
 - `docs/memory.md` documents both features as if they already exist as finished runtime contracts.
 
 Best upstream references:

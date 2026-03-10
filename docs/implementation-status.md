@@ -15,8 +15,8 @@ Last reviewed: March 10, 2026
 | WebSocket gateway auth/events | `partial` | Auth, pairing, error, and heartbeat events exist; broader control-plane UX is still thin. |
 | SQLite memory + group isolation | `complete` | Metadata round-trip, isolation, recall, and compaction are implemented. |
 | Solution memory | `complete` | Documented public structs and search helpers are aligned. |
-| Heartbeat engine | `partial` | Documented task/handler surface exists; broader durability and richer operator ergonomics remain. |
-| Sub-agent coordinator | `partial` | Spawn/status/result flow exists; retry/dead-letter and stronger persistence remain. |
+| Heartbeat engine | `partial` | Documented task/handler surface exists. Engine state gating, enable/disable consistency, and manual-run state updates are landed; background loop durability and richer operator ergonomics remain. |
+| Sub-agent coordinator | `partial` | Spawn/status/result flow exists. Concurrency limits, cancellation precedence, memory policy enforcement, and parent-context inheritance are landed; retry/dead-letter and stronger persistence remain. |
 | Security config contract | `complete` | Documented TOML shape parses and core enforcement exists. |
 | Secret storage + vault | `partial` | Encrypted secrets and vault clients exist; onboarding/auth UX is still mixed. |
 | Skill registry lifecycle | `partial` | Local install, remote `SKILL.md`, and GitHub-backed listing exist; packaging/publishing remain planned. |
