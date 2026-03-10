@@ -549,7 +549,9 @@ async fn configure_channels(
             };
 
             if !token.is_empty() {
-                entry.credentials = Some(token);
+                store_provider_secret(&config.security, "TELEGRAM_BOT_TOKEN", &token).await?;
+                env_updates.remove("TELEGRAM_BOT_TOKEN");
+                entry.credentials = Some("${TELEGRAM_BOT_TOKEN}".to_string());
             }
 
             let bot_name: String = Input::with_theme(theme)
@@ -1487,6 +1489,10 @@ async fn integration_env_entries(config: &AppConfig) -> Vec<(String, String)> {
 async fn channel_env_entries(config: &AppConfig) -> Vec<(String, String)> {
     let mut entries = Vec::new();
 
+    if let Some(value) = channel_credentials_entry(config, "telegram", "TELEGRAM_BOT_TOKEN").await {
+        entries.push(("TELEGRAM_BOT_TOKEN".to_string(), value));
+    }
+
     if let Some(value) = channel_secret_entry(config, "webhook", "secret", "WEBHOOK_SECRET").await
     {
         entries.push(("WEBHOOK_SECRET".to_string(), value));
@@ -1503,6 +1509,20 @@ async fn channel_secret_entry(
 ) -> Option<String> {
     let channel = config.channels.get(channel_name)?;
     let configured = channel.extra.get(key)?.as_str()?;
+    if configured != format!("${{{}}}", env_key) {
+        return None;
+    }
+
+    config_secret_entry(config, env_key).await
+}
+
+async fn channel_credentials_entry(
+    config: &AppConfig,
+    channel_name: &str,
+    env_key: &str,
+) -> Option<String> {
+    let channel = config.channels.get(channel_name)?;
+    let configured = channel.credentials.as_deref()?;
     if configured != format!("${{{}}}", env_key) {
         return None;
     }
@@ -1834,6 +1854,39 @@ mod tests {
 
         let env = std::fs::read_to_string(&env_path).unwrap();
         assert!(env.contains("WEBHOOK_SECRET=hook-secret"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn generate_env_includes_telegram_token_from_secure_store() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_onboarding_telegram_env_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let mut config = AppConfig::default();
+        config.security.secrets_path = root.join("secrets.enc");
+        let telegram = config.channels.entry("telegram".to_string()).or_default();
+        telegram.enabled = true;
+        telegram.credentials = Some("${TELEGRAM_BOT_TOKEN}".to_string());
+
+        let env_path = root.join(".env");
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime
+            .block_on(store_provider_secret(
+                &config.security,
+                "TELEGRAM_BOT_TOKEN",
+                "tg-secret",
+            ))
+            .unwrap();
+        runtime
+            .block_on(generate_env_file(&config, &HashMap::new(), &env_path))
+            .unwrap();
+
+        let env = std::fs::read_to_string(&env_path).unwrap();
+        assert!(env.contains("TELEGRAM_BOT_TOKEN=tg-secret"));
 
         std::fs::remove_dir_all(root).unwrap();
     }
