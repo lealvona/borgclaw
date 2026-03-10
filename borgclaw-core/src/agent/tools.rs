@@ -303,6 +303,8 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "browser_wait_for" => browser_wait_for(&call.arguments, runtime).await,
         "browser_get_text" => browser_get_text(&call.arguments, runtime).await,
         "browser_get_html" => browser_get_html(&call.arguments, runtime).await,
+        "browser_get_url" => browser_get_url(runtime).await,
+        "browser_eval_js" => browser_eval_js(&call.arguments, runtime).await,
         "browser_screenshot" => browser_screenshot(&call.arguments, runtime).await,
         "stt_transcribe" => stt_transcribe(&call.arguments, runtime).await,
         "tts_speak" => tts_speak(&call.arguments, runtime).await,
@@ -1535,6 +1537,30 @@ async fn browser_get_html(
     .await
 }
 
+async fn browser_get_url(runtime: &ToolRuntime) -> ToolResult {
+    with_browser(runtime, |browser| async move {
+        let url = browser.get_url().await?;
+        Ok(ToolResult::ok(url))
+    })
+    .await
+}
+
+async fn browser_eval_js(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let script = match get_required_string(arguments, "script") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    with_browser(runtime, |browser| async move {
+        let value = browser.eval_js(&script).await?;
+        Ok(ToolResult::ok(value.to_string()))
+    })
+    .await
+}
+
 async fn browser_screenshot(
     arguments: &HashMap<String, serde_json::Value>,
     runtime: &ToolRuntime,
@@ -2529,6 +2555,8 @@ mod tests {
         assert!(names.iter().any(|name| name == "github_create_file"));
         assert!(names.iter().any(|name| name == "google_get_message"));
         assert!(names.iter().any(|name| name == "google_download_file"));
+        assert!(names.iter().any(|name| name == "browser_get_url"));
+        assert!(names.iter().any(|name| name == "browser_eval_js"));
     }
 
     #[tokio::test]
@@ -3127,6 +3155,15 @@ pub fn builtin_tools() -> Vec<Tool> {
             .with_schema(ToolSchema::object(
                 [("selector".to_string(), string_property("CSS selector"))].into(),
                 Vec::new(),
+            ))
+            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
+        Tool::new("browser_get_url", "Get the current browser URL")
+            .with_schema(ToolSchema::object(HashMap::new(), Vec::new()))
+            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
+        Tool::new("browser_eval_js", "Evaluate JavaScript in the current page")
+            .with_schema(ToolSchema::object(
+                [("script".to_string(), string_property("JavaScript source"))].into(),
+                vec!["script".to_string()],
             ))
             .with_tags(vec!["browser".to_string(), "integration".to_string()]),
         Tool::new("browser_screenshot", "Capture a screenshot from the current page")
