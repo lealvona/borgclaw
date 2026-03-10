@@ -46,6 +46,7 @@ Recent landed work in this phase:
 - Scheduler retry rescheduling and dead-letter handling for exhausted jobs.
 - Scheduled jobs can now dispatch built-in tool calls through the shared runtime, not just synthetic message actions.
 - Background scheduled and sub-agent tool selection now reject approval-gated tools when interactive approval is unavailable.
+- Tool execution now carries conversation context so memory tools respect `group_id`, and scheduled tool jobs inherit originating sender/session metadata.
 
 ## Phase 4: Skills and Integrations
 
