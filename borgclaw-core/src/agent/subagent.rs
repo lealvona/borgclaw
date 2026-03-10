@@ -393,16 +393,7 @@ impl SubAgentCoordinator {
             Some(self.mcp_config.clone()),
             Some(self.security_config.clone()),
         );
-        let tools = builtin_tools()
-            .into_iter()
-            .filter(|tool| {
-                task.tools_allowed.is_empty()
-                    || task
-                        .tools_allowed
-                        .iter()
-                        .any(|allowed| allowed == &tool.name)
-            })
-            .collect::<Vec<_>>();
+        let tools = allowed_builtin_tools(task);
         for tool in tools {
             agent.register_tool(tool);
         }
@@ -463,6 +454,30 @@ struct InnerTaskResult {
     output: String,
     tools_used: Vec<String>,
     memory_entries_created: usize,
+}
+
+fn allowed_builtin_tools(task: &SubAgentTask) -> Vec<crate::agent::Tool> {
+    builtin_tools()
+        .into_iter()
+        .filter(|tool| task_allows_tool(task, &tool.name))
+        .collect()
+}
+
+fn task_allows_tool(task: &SubAgentTask, tool_name: &str) -> bool {
+    if !task.tools_allowed.is_empty()
+        && !task
+            .tools_allowed
+            .iter()
+            .any(|allowed| allowed == tool_name)
+    {
+        return false;
+    }
+
+    match task.memory_access {
+        MemoryAccessType::None => !matches!(tool_name, "memory_store" | "memory_recall"),
+        MemoryAccessType::ReadOnly => tool_name != "memory_store",
+        MemoryAccessType::ReadWrite => true,
+    }
 }
 
 fn test_delay_ms(task: &SubAgentTask) -> Option<u64> {
@@ -569,6 +584,55 @@ impl SubAgentBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subagent_memory_access_filters_memory_tools() {
+        let none = SubAgentBuilder::new("none")
+            .memory_access(MemoryAccessType::None)
+            .build("hello");
+        let read_only = SubAgentBuilder::new("read_only")
+            .memory_access(MemoryAccessType::ReadOnly)
+            .build("hello");
+        let read_write = SubAgentBuilder::new("read_write")
+            .memory_access(MemoryAccessType::ReadWrite)
+            .build("hello");
+
+        let none_tools = allowed_builtin_tools(&none)
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+        let read_only_tools = allowed_builtin_tools(&read_only)
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+        let read_write_tools = allowed_builtin_tools(&read_write)
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+
+        assert!(!none_tools.iter().any(|name| name == "memory_store"));
+        assert!(!none_tools.iter().any(|name| name == "memory_recall"));
+        assert!(!read_only_tools.iter().any(|name| name == "memory_store"));
+        assert!(read_only_tools.iter().any(|name| name == "memory_recall"));
+        assert!(read_write_tools.iter().any(|name| name == "memory_store"));
+        assert!(read_write_tools.iter().any(|name| name == "memory_recall"));
+    }
+
+    #[test]
+    fn subagent_explicit_tool_allowlist_still_respects_memory_policy() {
+        let read_only = SubAgentBuilder::new("read_only")
+            .memory_access(MemoryAccessType::ReadOnly)
+            .allow_tools(vec!["memory_store".to_string(), "memory_recall".to_string()])
+            .build("hello");
+
+        let allowed = allowed_builtin_tools(&read_only)
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+
+        assert!(!allowed.iter().any(|name| name == "memory_store"));
+        assert!(allowed.iter().any(|name| name == "memory_recall"));
+    }
 
     #[tokio::test]
     async fn subagent_executes_agent_and_records_memory_when_allowed() {
