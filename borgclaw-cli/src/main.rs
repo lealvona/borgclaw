@@ -394,16 +394,8 @@ async fn status(config: AppConfig) {
         println!("  - {}", line);
     }
     println!("\nChannels:");
-    for (name, channel) in &config.channels {
-        println!(
-            "  - {}: {}",
-            name,
-            if channel.enabled {
-                "enabled"
-            } else {
-                "disabled"
-            }
-        );
+    for line in channel_status_lines(&config).await {
+        println!("  - {}", line);
     }
 }
 
@@ -481,6 +473,9 @@ async fn doctor(config: AppConfig) {
         None => println!("• Vault integration disabled"),
     }
     for line in integration_doctor_lines(&config).await {
+        println!("{}", line);
+    }
+    for line in channel_doctor_lines(&config).await {
         println!("{}", line);
     }
     println!("\nDiagnostics complete.");
@@ -649,6 +644,123 @@ async fn integration_doctor_lines(config: &AppConfig) -> Vec<String> {
     lines
 }
 
+async fn channel_status_lines(config: &AppConfig) -> Vec<String> {
+    let mut names = config.channels.keys().cloned().collect::<Vec<_>>();
+    names.sort();
+
+    let mut lines = Vec::new();
+    for name in names {
+        let Some(channel) = config.channels.get(&name) else {
+            continue;
+        };
+        if !channel.enabled {
+            lines.push(format!("{name}: disabled"));
+            continue;
+        }
+
+        let status = match name.as_str() {
+            "telegram" => {
+                if channel_credentials_available(config, channel).await {
+                    "ready"
+                } else {
+                    "missing token"
+                }
+            }
+            "signal" => {
+                if signal_channel_ready(channel) {
+                    "ready"
+                } else {
+                    "missing phone_number"
+                }
+            }
+            "webhook" => {
+                if webhook_channel_ready(config, channel).await {
+                    "ready"
+                } else {
+                    "missing secret"
+                }
+            }
+            "websocket" => "ready",
+            _ => "enabled",
+        };
+        lines.push(format!("{name}: enabled ({status})"));
+    }
+
+    lines
+}
+
+async fn channel_doctor_lines(config: &AppConfig) -> Vec<String> {
+    let mut names = config.channels.keys().cloned().collect::<Vec<_>>();
+    names.sort();
+
+    let mut lines = Vec::new();
+    for name in names {
+        let Some(channel) = config.channels.get(&name) else {
+            continue;
+        };
+        if !channel.enabled {
+            lines.push(format!("• Channel {name} disabled"));
+            continue;
+        }
+
+        let line = match name.as_str() {
+            "telegram" => format!(
+                "{} Telegram token {}",
+                marker(channel_credentials_available(config, channel).await),
+                if channel_credentials_available(config, channel).await {
+                    "present"
+                } else {
+                    "missing"
+                }
+            ),
+            "signal" => format!(
+                "{} Signal phone number {}",
+                marker(signal_channel_ready(channel)),
+                channel
+                    .extra
+                    .get("phone_number")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("missing")
+            ),
+            "webhook" => format!(
+                "{} Webhook secret {} on port {}",
+                marker(webhook_channel_ready(config, channel).await),
+                if webhook_channel_ready(config, channel).await {
+                    "configured"
+                } else {
+                    "missing"
+                },
+                channel
+                    .extra
+                    .get("port")
+                    .and_then(|value| value.as_integer())
+                    .unwrap_or(8080)
+            ),
+            "websocket" => format!(
+                "{} WebSocket port {} pairing={}",
+                marker(true),
+                channel
+                    .extra
+                    .get("port")
+                    .and_then(|value| value.as_integer())
+                    .unwrap_or(18789),
+                channel
+                    .extra
+                    .get("require_pairing")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(matches!(
+                        channel.dm_policy,
+                        borgclaw_core::config::DmPolicy::Pairing
+                    ))
+            ),
+            _ => format!("• Channel {name} enabled"),
+        };
+        lines.push(line);
+    }
+
+    lines
+}
+
 async fn stt_backend_status(config: &AppConfig) -> &'static str {
     if stt_backend_ready(config).await {
         "ready"
@@ -698,6 +810,35 @@ async fn url_shortener_ready(config: &AppConfig) -> bool {
                         .await))
         }
         _ => true,
+    }
+}
+
+async fn channel_credentials_available(
+    config: &AppConfig,
+    channel: &borgclaw_core::config::ChannelConfig,
+) -> bool {
+    match channel.credentials.as_deref() {
+        Some(value) => skill_secret_available(config, value).await,
+        None => false,
+    }
+}
+
+fn signal_channel_ready(channel: &borgclaw_core::config::ChannelConfig) -> bool {
+    channel
+        .extra
+        .get("phone_number")
+        .and_then(|value| value.as_str())
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
+async fn webhook_channel_ready(
+    config: &AppConfig,
+    channel: &borgclaw_core::config::ChannelConfig,
+) -> bool {
+    match channel.extra.get("secret").and_then(|value| value.as_str()) {
+        Some(secret) => skill_secret_available(config, secret).await,
+        None => false,
     }
 }
 
@@ -1163,6 +1304,41 @@ mod tests {
             .unwrap();
 
         assert!(runtime.block_on(url_shortener_ready(&config)));
+    }
+
+    #[test]
+    fn telegram_channel_status_uses_secure_store_placeholder() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut config = temp_config();
+        let telegram = config.channels.entry("telegram".to_string()).or_default();
+        telegram.enabled = true;
+        telegram.credentials = Some("${TELEGRAM_BOT_TOKEN}".to_string());
+
+        runtime
+            .block_on(
+                SecurityLayer::with_config(config.security.clone())
+                    .store_secret("TELEGRAM_BOT_TOKEN", "tg-secret"),
+            )
+            .unwrap();
+
+        let lines = runtime.block_on(channel_status_lines(&config));
+        assert!(lines.iter().any(|line| line == "telegram: enabled (ready)"));
+    }
+
+    #[test]
+    fn webhook_channel_doctor_reports_missing_secret() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut config = temp_config();
+        let webhook = config.channels.entry("webhook".to_string()).or_default();
+        webhook.enabled = true;
+        webhook
+            .extra
+            .insert("port".to_string(), toml::Value::Integer(8080));
+
+        let lines = runtime.block_on(channel_doctor_lines(&config));
+        assert!(lines
+            .iter()
+            .any(|line| line == "✗ Webhook secret missing on port 8080"));
     }
 }
 
