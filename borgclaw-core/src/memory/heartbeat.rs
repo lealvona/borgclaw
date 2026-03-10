@@ -374,6 +374,9 @@ impl HeartbeatEngine {
     pub async fn run_task_now(&self, id: &str) -> Option<HeartbeatResult> {
         let tasks = self.tasks.read().await;
         let task = tasks.get(id)?;
+        if !task.enabled {
+            return None;
+        }
         let task = task.clone();
         drop(tasks);
 
@@ -385,6 +388,7 @@ impl HeartbeatEngine {
                 t.last_run = Some(Utc::now());
                 t.run_count += 1;
                 t.last_result = Some(result.clone());
+                t.calculate_next_run();
             }
         }
 
@@ -532,5 +536,29 @@ mod tests {
 
         assert!(result.success);
         assert_eq!(result.message, "Task 'doc_task' executed");
+    }
+
+    #[tokio::test]
+    async fn heartbeat_run_task_now_honors_enabled_flag_and_updates_next_run() {
+        let engine = HeartbeatEngine::new();
+        let disabled = HeartbeatTask::new("disabled_task", "0 0 0 * * *").disabled();
+        let disabled_id = engine.add_task(disabled).await;
+
+        assert!(engine.run_task_now(&disabled_id).await.is_none());
+
+        let enabled_id = engine
+            .add_task(HeartbeatTask::new("enabled_task", "0 0 0 * * *"))
+            .await;
+        let before = engine.get(&enabled_id).await.unwrap().next_run;
+
+        let result = engine.run_task_now(&enabled_id).await.unwrap();
+        let after = engine.get(&enabled_id).await.unwrap();
+
+        assert!(result.success);
+        assert_eq!(after.run_count, 1);
+        assert!(after.last_run.is_some());
+        assert!(after.next_run.is_some());
+        assert!(after.last_result.is_some());
+        assert_eq!(before, after.next_run);
     }
 }
