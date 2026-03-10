@@ -6,6 +6,7 @@ use cron::Schedule;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 
@@ -14,6 +15,7 @@ pub struct HeartbeatEngine {
     handlers: Arc<RwLock<HashMap<String, Arc<dyn HeartbeatHandler>>>>,
     running: Arc<RwLock<bool>>,
     sender: mpsc::Sender<HeartbeatEvent>,
+    state_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -177,7 +179,15 @@ impl HeartbeatEngine {
             handlers: Arc::new(RwLock::new(HashMap::new())),
             running: Arc::new(RwLock::new(false)),
             sender,
+            state_path: None,
         }
+    }
+
+    pub fn with_state_path(mut self, path: impl Into<PathBuf>) -> Self {
+        let state_path = path.into();
+        self.tasks = Arc::new(RwLock::new(load_tasks(&state_path)));
+        self.state_path = Some(state_path);
+        self
     }
 
     pub fn with_event_channel(mut self, sender: mpsc::Sender<HeartbeatEvent>) -> Self {
@@ -192,6 +202,7 @@ impl HeartbeatEngine {
 
         let mut tasks = self.tasks.write().await;
         tasks.insert(id.clone(), task);
+        self.persist_state(&tasks);
 
         id
     }
@@ -213,7 +224,11 @@ impl HeartbeatEngine {
 
     pub async fn unregister(&self, id: &str) -> bool {
         let mut tasks = self.tasks.write().await;
-        tasks.remove(id).is_some()
+        let removed = tasks.remove(id).is_some();
+        if removed {
+            self.persist_state(&tasks);
+        }
+        removed
     }
 
     pub async fn enable(&self, id: &str) -> bool {
@@ -221,6 +236,7 @@ impl HeartbeatEngine {
         if let Some(task) = tasks.get_mut(id) {
             task.enabled = true;
             task.calculate_next_run();
+            self.persist_state(&tasks);
             true
         } else {
             false
@@ -232,6 +248,7 @@ impl HeartbeatEngine {
         if let Some(task) = tasks.get_mut(id) {
             task.enabled = false;
             task.next_run = None;
+            self.persist_state(&tasks);
             true
         } else {
             false
@@ -306,6 +323,7 @@ impl HeartbeatEngine {
                     t.last_result = Some(result.clone());
                     t.calculate_next_run();
                 }
+                self.persist_state(&tasks);
             }
 
             if result.success {
@@ -391,9 +409,28 @@ impl HeartbeatEngine {
                 t.last_result = Some(result.clone());
                 t.calculate_next_run();
             }
+            self.persist_state(&tasks);
         }
 
         Some(result)
+    }
+
+    fn persist_state(&self, tasks: &HashMap<String, HeartbeatTask>) {
+        let Some(path) = &self.state_path else {
+            return;
+        };
+
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        let Ok(serialized) = serde_json::to_string_pretty(tasks) else {
+            return;
+        };
+        let temp_path = path.with_extension("json.tmp");
+        if std::fs::write(&temp_path, serialized).is_ok() {
+            let _ = std::fs::rename(temp_path, path);
+        }
     }
 }
 
@@ -401,6 +438,14 @@ impl Default for HeartbeatEngine {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn load_tasks(path: &PathBuf) -> HashMap<String, HeartbeatTask> {
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return HashMap::new();
+    };
+
+    serde_json::from_str(&contents).unwrap_or_default()
 }
 
 #[async_trait]
@@ -609,5 +654,29 @@ mod tests {
         assert!(engine.stop().await.is_ok());
         let after_stop = engine.tick().await;
         assert!(after_stop.is_empty());
+    }
+
+    #[tokio::test]
+    async fn heartbeat_persists_tasks_across_reconstruction() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_heartbeat_persist_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let state_path = root.join("heartbeat.json");
+
+        let engine = HeartbeatEngine::new().with_state_path(state_path.clone());
+        let id = engine
+            .add_task(HeartbeatTask::new("persisted_task", "0 0 0 * * *"))
+            .await;
+        let _ = engine.run_task_now(&id).await.unwrap();
+
+        let reconstructed = HeartbeatEngine::new().with_state_path(state_path);
+        let task = reconstructed.get(&id).await.unwrap();
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(task.run_count, 1);
+        assert!(task.last_run.is_some());
+        assert!(task.last_result.is_some());
     }
 }
