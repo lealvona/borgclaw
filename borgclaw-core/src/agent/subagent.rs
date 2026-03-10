@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, RwLock, Semaphore};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,6 +127,7 @@ pub struct SubAgentCoordinator {
     tasks: Arc<RwLock<HashMap<String, SubAgentTask>>>,
     result_sender: mpsc::Sender<SubAgentResult>,
     max_concurrent: usize,
+    permits: Arc<Semaphore>,
 }
 
 impl SubAgentCoordinator {
@@ -158,11 +159,13 @@ impl SubAgentCoordinator {
             tasks: Arc::new(RwLock::new(HashMap::new())),
             result_sender,
             max_concurrent: 5,
+            permits: Arc::new(Semaphore::new(5)),
         }
     }
 
     pub fn with_max_concurrent(mut self, max: usize) -> Self {
-        self.max_concurrent = max;
+        self.max_concurrent = max.max(1);
+        self.permits = Arc::new(Semaphore::new(self.max_concurrent));
         self
     }
 
@@ -245,6 +248,13 @@ impl SubAgentCoordinator {
     }
 
     pub async fn execute(&self, task_id: &str) -> Result<SubAgentResult, SubAgentError> {
+        let _permit = self
+            .permits
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| SubAgentError::ExecutionFailed("Sub-agent limiter closed".to_string()))?;
+
         let task = {
             let mut tasks = self.tasks.write().await;
             let task = tasks
@@ -326,6 +336,10 @@ impl SubAgentCoordinator {
         &self,
         task: &SubAgentTask,
     ) -> Result<InnerTaskResult, SubAgentError> {
+        if let Some(delay_ms) = test_delay_ms(task) {
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        }
+
         let session_id = SessionId::new();
         let ctx = AgentContext {
             session_id: session_id.clone(),
@@ -415,6 +429,12 @@ struct InnerTaskResult {
     output: String,
     tools_used: Vec<String>,
     memory_entries_created: usize,
+}
+
+fn test_delay_ms(task: &SubAgentTask) -> Option<u64> {
+    task.description
+        .strip_prefix("__borgclaw_test_delay_ms=")
+        .and_then(|value| value.parse::<u64>().ok())
 }
 
 fn agent_response_from_task(task: &SubAgentTask) -> super::AgentResponse {
@@ -610,5 +630,69 @@ mod tests {
             }
             other => panic!("unexpected status: {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn subagent_enforces_max_concurrent_limit() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_subagent_limit_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let (sender, _receiver) = mpsc::channel(4);
+        let coordinator = SubAgentCoordinator::with_configs(
+            AgentConfig {
+                provider: "unsupported".to_string(),
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            SkillsConfig::default(),
+            McpConfig::default(),
+            SecurityConfig::default(),
+            sender,
+        )
+        .with_max_concurrent(1);
+
+        let first = coordinator
+            .submit(
+                SubAgentBuilder::new("slow")
+                    .description("__borgclaw_test_delay_ms=150")
+                    .build("first"),
+            )
+            .await;
+        let second = coordinator
+            .submit(SubAgentBuilder::new("fast").build("second"))
+            .await;
+
+        let first_task = {
+            let coordinator = coordinator.clone();
+            let first = first.clone();
+            tokio::spawn(async move { coordinator.execute(&first).await })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let second_task = {
+            let coordinator = coordinator.clone();
+            let second = second.clone();
+            tokio::spawn(async move { coordinator.execute(&second).await })
+        };
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(matches!(
+            coordinator.status(&first).await,
+            SubAgentStatus::Running
+        ));
+        assert!(matches!(
+            coordinator.status(&second).await,
+            SubAgentStatus::Pending
+        ));
+
+        let _ = first_task.await.unwrap().unwrap();
+        let _ = second_task.await.unwrap().unwrap();
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
