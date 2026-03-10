@@ -39,4 +39,4 @@ Last reviewed: March 10, 2026
 - Skill registry publishing/package workflow is still planned-only.
 - Remote skill installs currently persist manifest content, not companion assets.
 - Several skill families have library clients and config support before full agent-tool exposure.
-- Background execution now persists scheduler run history, heartbeat task state, and sub-agent task state locally, but retry/dead-letter semantics are still not implemented.
+- Background execution now persists scheduler run history, heartbeat task state, and sub-agent task state locally. Scheduler retry/dead-letter semantics are landed; heartbeat and sub-agent retry/dead-letter semantics are still not implemented.

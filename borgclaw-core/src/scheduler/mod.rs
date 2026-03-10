@@ -312,21 +312,35 @@ impl Scheduler {
                     if let Some(stored) = jobs.get_mut(&job.id) {
                         stored.last_run = Some(finished_at);
                         stored.run_count += 1;
-                        let (status, error) = match result.as_ref() {
+                        let (status, error, retry_scheduled) = match result.as_ref() {
                             Ok(()) => {
                                 stored.status = JobStatus::Completed;
+                                stored.retry_count = 0;
+                                stored.dead_lettered_at = None;
                                 stored.next_run = match stored.trigger {
                                     JobTrigger::OneShot(_) => None,
                                     _ => stored.trigger.next_run(),
                                 };
-                                (JobStatus::Completed, None)
+                                (JobStatus::Completed, None, None)
                             }
                             Err(err) => {
-                                stored.status = JobStatus::Failed;
-                                (
-                                    JobStatus::Failed,
-                                    Some(err.to_string()),
-                                )
+                                let error = Some(err.to_string());
+                                if stored.retry_count < stored.max_retries {
+                                    stored.retry_count += 1;
+                                    stored.status = JobStatus::Pending;
+                                    stored.next_run = Some(
+                                        finished_at
+                                            + chrono::Duration::seconds(
+                                                stored.retry_delay_seconds.max(1) as i64,
+                                            ),
+                                    );
+                                    (JobStatus::Failed, error, Some(stored.retry_count))
+                                } else {
+                                    stored.status = JobStatus::Failed;
+                                    stored.next_run = None;
+                                    stored.dead_lettered_at = Some(finished_at);
+                                    (JobStatus::Failed, error, None)
+                                }
                             }
                         };
                         stored.run_history.push(JobRun {
@@ -334,6 +348,7 @@ impl Scheduler {
                             finished_at,
                             status,
                             error,
+                            retry_scheduled,
                         });
                         if stored.run_history.len() > 20 {
                             let excess = stored.run_history.len() - 20;
@@ -385,9 +400,19 @@ pub fn new_job(name: impl Into<String>, trigger: JobTrigger, action: impl Into<S
         last_run: None,
         next_run,
         run_count: 0,
+        max_retries: 0,
+        retry_count: 0,
+        retry_delay_seconds: 60,
+        dead_lettered_at: None,
         run_history: Vec::new(),
         metadata: HashMap::new(),
     }
+}
+
+pub fn with_retry_policy(mut job: Job, max_retries: u32, retry_delay_seconds: u64) -> Job {
+    job.max_retries = max_retries;
+    job.retry_delay_seconds = retry_delay_seconds.max(1);
+    job
 }
 
 #[cfg(test)]
@@ -400,6 +425,10 @@ mod tests {
     fn new_job_initializes_next_run_from_trigger() {
         let job = new_job("interval", JobTrigger::Interval(30), "echo hi");
         assert!(job.next_run.is_some());
+        assert_eq!(job.max_retries, 0);
+        assert_eq!(job.retry_count, 0);
+        assert_eq!(job.retry_delay_seconds, 60);
+        assert!(job.dead_lettered_at.is_none());
     }
 
     #[tokio::test]
@@ -458,6 +487,7 @@ mod tests {
         assert_eq!(stored.run_history.len(), 1);
         assert_eq!(stored.run_history[0].status, JobStatus::Completed);
         assert!(stored.run_history[0].error.is_none());
+        assert!(stored.run_history[0].retry_scheduled.is_none());
     }
 
     #[tokio::test]
@@ -495,6 +525,78 @@ mod tests {
         assert_eq!(stored.run_history.len(), 1);
         assert_eq!(stored.run_history[0].status, JobStatus::Failed);
         assert_eq!(stored.run_history[0].error.as_deref(), Some("Job failed: boom"));
+        assert!(stored.run_history[0].retry_scheduled.is_none());
+    }
+
+    #[tokio::test]
+    async fn scheduler_run_due_reschedules_retryable_failures() {
+        let scheduler = Scheduler::new();
+        let mut job = with_retry_policy(
+            new_job(
+                "retry-once",
+                JobTrigger::OneShot(Utc::now() + Duration::seconds(5)),
+                "echo retry",
+            ),
+            2,
+            30,
+        );
+        job.next_run = Some(Utc::now() - Duration::seconds(1));
+        let id = scheduler.schedule(job).await.unwrap();
+
+        let results = scheduler
+            .run_due(|_| async { Err(SchedulerError::JobFailed("boom".to_string())) })
+            .await;
+
+        let stored = scheduler.get(&id).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_err());
+        assert_eq!(stored.status, JobStatus::Pending);
+        assert_eq!(stored.retry_count, 1);
+        assert!(stored.next_run.is_some());
+        assert!(stored.dead_lettered_at.is_none());
+        assert_eq!(stored.run_history.len(), 1);
+        assert_eq!(stored.run_history[0].retry_scheduled, Some(1));
+    }
+
+    #[tokio::test]
+    async fn scheduler_run_due_dead_letters_after_retries_exhausted() {
+        let scheduler = Scheduler::new();
+        let mut job = with_retry_policy(
+            new_job(
+                "retry-exhausted",
+                JobTrigger::OneShot(Utc::now() + Duration::seconds(5)),
+                "echo retry",
+            ),
+            1,
+            5,
+        );
+        job.next_run = Some(Utc::now() - Duration::seconds(1));
+        let id = scheduler.schedule(job).await.unwrap();
+
+        let _ = scheduler
+            .run_due(|_| async { Err(SchedulerError::JobFailed("boom".to_string())) })
+            .await;
+
+        {
+            let mut jobs = scheduler.jobs.write().await;
+            let stored = jobs.get_mut(&id).unwrap();
+            stored.next_run = Some(Utc::now() - Duration::seconds(1));
+        }
+
+        let results = scheduler
+            .run_due(|_| async { Err(SchedulerError::JobFailed("boom again".to_string())) })
+            .await;
+
+        let stored = scheduler.get(&id).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_err());
+        assert_eq!(stored.status, JobStatus::Failed);
+        assert_eq!(stored.retry_count, 1);
+        assert!(stored.next_run.is_none());
+        assert!(stored.dead_lettered_at.is_some());
+        assert_eq!(stored.run_history.len(), 2);
+        assert_eq!(stored.run_history[0].retry_scheduled, Some(1));
+        assert!(stored.run_history[1].retry_scheduled.is_none());
     }
 
     #[tokio::test]

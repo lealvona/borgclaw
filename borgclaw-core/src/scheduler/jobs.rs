@@ -28,6 +28,14 @@ pub struct Job {
     pub next_run: Option<DateTime<Utc>>,
     /// Number of times run
     pub run_count: u32,
+    /// Maximum retry attempts after a failed run
+    pub max_retries: u32,
+    /// Number of retries already scheduled
+    pub retry_count: u32,
+    /// Delay before a retry attempt, in seconds
+    pub retry_delay_seconds: u64,
+    /// Timestamp when the job exhausted retries and entered dead-letter state
+    pub dead_lettered_at: Option<DateTime<Utc>>,
     /// Recent execution history
     pub run_history: Vec<JobRun>,
     /// Additional metadata
@@ -45,6 +53,8 @@ pub struct JobRun {
     pub status: JobStatus,
     /// Failure detail when present
     pub error: Option<String>,
+    /// Retry number scheduled after this run when present
+    pub retry_scheduled: Option<u32>,
 }
 
 /// Job trigger types
