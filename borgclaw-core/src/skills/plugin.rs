@@ -28,7 +28,36 @@ pub struct PluginManifest {
 
 impl PluginManifest {
     pub fn from_toml(content: &str) -> Result<Self, PluginError> {
-        toml::from_str(content).map_err(|e| PluginError::ParseFailed(e.to_string()))
+        if let Ok(manifest) = toml::from_str::<PluginManifest>(content) {
+            return Ok(manifest);
+        }
+
+        let documented: DocumentedPluginManifest =
+            toml::from_str(content).map_err(|e| PluginError::ParseFailed(e.to_string()))?;
+
+        let entry_point = documented
+            .entry_point
+            .clone()
+            .unwrap_or_else(|| "invoke".to_string());
+        let mut exports = documented.exports.unwrap_or_default();
+        if exports.is_empty() {
+            exports.push(entry_point.clone());
+        } else if !exports.iter().any(|export| export == &entry_point) {
+            exports.push(entry_point.clone());
+        }
+
+        Ok(Self {
+            name: documented.name,
+            version: documented.version,
+            description: documented.description,
+            author: documented.author,
+            permissions: documented
+                .permissions
+                .map(DocumentedPermissions::into_permissions)
+                .unwrap_or_default(),
+            exports,
+            entry_point,
+        })
     }
 }
 
@@ -132,6 +161,14 @@ impl PluginRegistry {
         function: &str,
         input: &str,
     ) -> Result<(), PluginError> {
+        if !manifest.exports.is_empty() && !manifest.exports.iter().any(|export| export == function)
+        {
+            return Err(PluginError::PermissionDenied(format!(
+                "function '{}' is not exported by plugin '{}'",
+                function, manifest.name
+            )));
+        }
+
         for permission in &manifest.permissions {
             match permission {
                 WasmPermission::FileRead => {
@@ -236,4 +273,118 @@ pub enum PluginError {
 
     #[error("Permission denied: {0}")]
     PermissionDenied(String),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct DocumentedPluginManifest {
+    name: String,
+    version: String,
+    description: String,
+    author: Option<String>,
+    permissions: Option<DocumentedPermissions>,
+    exports: Option<Vec<String>>,
+    entry_point: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct DocumentedPermissions {
+    #[serde(default)]
+    file_read: Vec<PathBuf>,
+    #[serde(default)]
+    file_write: Vec<PathBuf>,
+    #[serde(default)]
+    network: Vec<String>,
+    #[serde(default)]
+    memory: bool,
+    #[serde(default)]
+    shell: bool,
+}
+
+impl DocumentedPermissions {
+    fn into_permissions(self) -> Vec<WasmPermission> {
+        let mut permissions = Vec::new();
+        if !self.file_read.is_empty() {
+            permissions.push(WasmPermission::FileRead);
+        }
+        permissions.extend(self.file_write.into_iter().map(WasmPermission::FileWrite));
+        if !self.network.is_empty() {
+            permissions.push(WasmPermission::Network(self.network));
+        }
+        if self.memory {
+            permissions.push(WasmPermission::Memory);
+        }
+        if self.shell {
+            permissions.push(WasmPermission::Shell);
+        }
+        permissions
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugin_manifest_parses_documented_permissions_table() {
+        let manifest = PluginManifest::from_toml(
+            r#"
+name = "my-plugin"
+version = "1.0.0"
+description = "My custom plugin"
+author = "Developer"
+entry_point = "main"
+
+[permissions]
+file_read = ["/workspace"]
+file_write = ["/tmp"]
+network = ["api.example.com"]
+memory = true
+shell = false
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(manifest.name, "my-plugin");
+        assert_eq!(manifest.entry_point, "main");
+        assert!(manifest.exports.iter().any(|export| export == "main"));
+        assert!(manifest
+            .permissions
+            .iter()
+            .any(|permission| matches!(permission, WasmPermission::FileRead)));
+        assert!(manifest.permissions.iter().any(
+            |permission| matches!(permission, WasmPermission::FileWrite(path) if path == &PathBuf::from("/tmp"))
+        ));
+        assert!(manifest.permissions.iter().any(
+            |permission| matches!(permission, WasmPermission::Network(hosts) if hosts == &vec!["api.example.com".to_string()])
+        ));
+        assert!(manifest
+            .permissions
+            .iter()
+            .any(|permission| matches!(permission, WasmPermission::Memory)));
+        assert!(!manifest
+            .permissions
+            .iter()
+            .any(|permission| matches!(permission, WasmPermission::Shell)));
+    }
+
+    #[test]
+    fn plugin_registry_rejects_unexported_function() {
+        let registry = PluginRegistry::new();
+        let manifest = PluginManifest {
+            name: "example".to_string(),
+            version: "1.0.0".to_string(),
+            description: "Example".to_string(),
+            author: None,
+            permissions: vec![],
+            exports: vec!["main".to_string()],
+            entry_point: "main".to_string(),
+        };
+
+        let err = registry
+            .validate_permissions(&manifest, "other", "{}")
+            .unwrap_err();
+
+        assert!(matches!(err, PluginError::PermissionDenied(_)));
+        assert!(err.to_string().contains("not exported"));
+    }
 }

@@ -55,6 +55,9 @@ Recent landed work in this phase:
 - Normalize skill execution results and error handling behind a shared runtime interface.
 - Route plugin and MCP capabilities into the same tool execution layer used by the agent.
 
+Recent landed work in this phase:
+- WASM plugin manifests now accept the documented TOML permission table shape, default invocations honor `entry_point`, and non-exported function calls are rejected.
+
 ## Phase 5: Hardening and UX
 
 - Make `SecurityLayer` authoritative for approvals, pairing, blocklists, prompt-injection defense, and secret scanning.
