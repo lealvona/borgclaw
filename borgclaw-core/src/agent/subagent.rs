@@ -16,6 +16,9 @@ pub struct SubAgentTask {
     pub name: String,
     pub description: String,
     pub input: String,
+    pub parent_session_id: Option<SessionId>,
+    pub parent_sender: Option<SenderInfo>,
+    pub parent_metadata: HashMap<String, String>,
     pub tools_allowed: Vec<String>,
     pub memory_access: MemoryAccessType,
     pub priority: TaskPriority,
@@ -32,6 +35,9 @@ impl SubAgentTask {
             name: name.into(),
             description: String::new(),
             input: input.into(),
+            parent_session_id: None,
+            parent_sender: None,
+            parent_metadata: HashMap::new(),
             tools_allowed: Vec::new(),
             memory_access: MemoryAccessType::ReadOnly,
             priority: TaskPriority::Normal,
@@ -49,6 +55,13 @@ impl SubAgentTask {
 
     pub fn with_tools(mut self, tools: Vec<String>) -> Self {
         self.tools_allowed = tools;
+        self
+    }
+
+    pub fn with_parent_context(mut self, ctx: &AgentContext) -> Self {
+        self.parent_session_id = Some(ctx.session_id.clone());
+        self.parent_sender = Some(ctx.sender.clone());
+        self.parent_metadata = ctx.metadata.clone();
         self
     }
 
@@ -182,7 +195,9 @@ impl SubAgentCoordinator {
         ctx: AgentContext,
         priority: TaskPriority,
     ) -> Result<String, SubAgentError> {
-        let task = SubAgentTask::new(name, ctx.message).with_priority(priority);
+        let task = SubAgentTask::new(name, ctx.message.clone())
+            .with_priority(priority)
+            .with_parent_context(&ctx);
         let task_id = self.submit(task).await;
         let coordinator = self.clone();
         let execute_id = task_id.clone();
@@ -374,16 +389,16 @@ impl SubAgentCoordinator {
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
         }
 
-        let session_id = SessionId::new();
+        let session_id = task.parent_session_id.clone().unwrap_or_default();
         let ctx = AgentContext {
-            session_id: session_id.clone(),
+            session_id,
             message: task.input.clone(),
-            sender: SenderInfo {
+            sender: task.parent_sender.clone().unwrap_or_else(|| SenderInfo {
                 id: format!("subagent:{}", task.id),
                 name: Some(task.name.clone()),
                 channel: "subagent".to_string(),
-            },
-            metadata: HashMap::from([("group_id".to_string(), format!("subagent:{}", task.id))]),
+            }),
+            metadata: task_metadata(task),
         };
 
         let mut agent = SimpleAgent::new(
@@ -416,7 +431,7 @@ impl SubAgentCoordinator {
                     .store(new_entry_for_group(
                         format!("subagent:{}", task.name),
                         response.text.clone(),
-                        format!("subagent:{}", task.id),
+                        task_group_id(task),
                     ))
                     .await
                     .map_err(|e| SubAgentError::ExecutionFailed(e.to_string()))?;
@@ -461,6 +476,27 @@ fn allowed_builtin_tools(task: &SubAgentTask) -> Vec<crate::agent::Tool> {
         .into_iter()
         .filter(|tool| task_allows_tool(task, &tool.name))
         .collect()
+}
+
+fn task_metadata(task: &SubAgentTask) -> HashMap<String, String> {
+    let mut metadata = task.parent_metadata.clone();
+    metadata
+        .entry("subagent_task_id".to_string())
+        .or_insert_with(|| task.id.clone());
+    metadata
+        .entry("subagent_task_name".to_string())
+        .or_insert_with(|| task.name.clone());
+    metadata
+        .entry("group_id".to_string())
+        .or_insert_with(|| task_group_id(task));
+    metadata
+}
+
+fn task_group_id(task: &SubAgentTask) -> String {
+    task.parent_metadata
+        .get("group_id")
+        .cloned()
+        .unwrap_or_else(|| format!("subagent:{}", task.id))
 }
 
 fn task_allows_tool(task: &SubAgentTask, tool_name: &str) -> bool {
@@ -570,6 +606,9 @@ impl SubAgentBuilder {
             name: self.name,
             description: self.description,
             input: input.into(),
+            parent_session_id: None,
+            parent_sender: None,
+            parent_metadata: HashMap::new(),
             tools_allowed: self.tools_allowed,
             memory_access: self.memory_access,
             priority: self.priority,
@@ -584,6 +623,7 @@ impl SubAgentBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::MemoryQuery;
 
     #[test]
     fn subagent_memory_access_filters_memory_tools() {
@@ -733,6 +773,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn subagent_spawn_inherits_parent_context() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_subagent_context_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let (sender, _receiver) = mpsc::channel(4);
+        let coordinator = SubAgentCoordinator::with_configs(
+            AgentConfig {
+                provider: "unsupported".to_string(),
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            SkillsConfig::default(),
+            McpConfig::default(),
+            SecurityConfig::default(),
+            sender,
+        );
+        let session_id = SessionId::new();
+        let task_id = coordinator
+            .spawn(
+                "background-summary",
+                AgentContext {
+                    session_id: session_id.clone(),
+                    message: "hello from docs".to_string(),
+                    sender: SenderInfo {
+                        id: "user-1".to_string(),
+                        name: Some("User".to_string()),
+                        channel: "cli".to_string(),
+                    },
+                    metadata: HashMap::from([
+                        ("group_id".to_string(), "parent-group".to_string()),
+                        ("source".to_string(), "cli".to_string()),
+                    ]),
+                },
+                TaskPriority::Low,
+            )
+            .await
+            .unwrap();
+
+        let task = coordinator.get_task(&task_id).await.unwrap();
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(task.parent_session_id, Some(session_id));
+        assert_eq!(task.parent_sender.unwrap().id, "user-1");
+        assert_eq!(
+            task.parent_metadata.get("group_id").map(String::as_str),
+            Some("parent-group")
+        );
+    }
+
+    #[tokio::test]
     async fn subagent_enforces_max_concurrent_limit() {
         let root = std::env::temp_dir().join(format!(
             "borgclaw_subagent_limit_test_{}",
@@ -850,5 +946,68 @@ mod tests {
             coordinator.status(&task_id).await,
             SubAgentStatus::Cancelled
         ));
+    }
+
+    #[tokio::test]
+    async fn subagent_readwrite_memory_uses_parent_group_id_when_present() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_subagent_parent_group_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let (sender, _receiver) = mpsc::channel(4);
+        let memory_path = root.join("memory");
+        let coordinator = SubAgentCoordinator::with_configs(
+            AgentConfig {
+                provider: "unsupported".to_string(),
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            MemoryConfig {
+                database_path: memory_path.clone(),
+                ..Default::default()
+            },
+            SkillsConfig::default(),
+            McpConfig::default(),
+            SecurityConfig::default(),
+            sender,
+        );
+        let task_id = coordinator
+            .submit(
+                SubAgentBuilder::new("analysis")
+                    .memory_access(MemoryAccessType::ReadWrite)
+                    .build("hello")
+                    .with_parent_context(&AgentContext {
+                        session_id: SessionId::new(),
+                        message: "hello".to_string(),
+                        sender: SenderInfo {
+                            id: "user-1".to_string(),
+                            name: Some("User".to_string()),
+                            channel: "cli".to_string(),
+                        },
+                        metadata: HashMap::from([(
+                            "group_id".to_string(),
+                            "parent-group".to_string(),
+                        )]),
+                    }),
+            )
+            .await;
+
+        let result = coordinator.execute(&task_id).await.unwrap();
+        let memory = SqliteMemory::new(memory_path);
+        memory.init().await.unwrap();
+        let recalled = memory
+            .recall(&MemoryQuery {
+                query: "Provider unsupported".to_string(),
+                group_id: Some("parent-group".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(result.success);
+        assert_eq!(result.memory_entries_created, 1);
+        assert_eq!(recalled.len(), 1);
     }
 }
