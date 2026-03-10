@@ -4,6 +4,7 @@ use crate::mcp::client::{McpClient, McpClientConfig};
 use crate::mcp::transport::{
     McpTransportConfig, SseTransportConfig, StdioTransportConfig, WebSocketTransportConfig,
 };
+use crate::memory::HeartbeatEngine;
 use crate::memory::{new_entry, new_entry_for_group, Memory, MemoryQuery, SqliteMemory};
 use crate::scheduler::{new_job, JobTrigger, Scheduler, SchedulerError, SchedulerTrait};
 use crate::security::{CommandCheck, SecurityLayer};
@@ -187,7 +188,9 @@ impl ToolResult {
 pub struct ToolRuntime {
     pub workspace_root: PathBuf,
     pub memory: Arc<SqliteMemory>,
+    pub heartbeat: Arc<HeartbeatEngine>,
     pub scheduler: Arc<Mutex<Scheduler>>,
+    pub heartbeat_config: crate::config::HeartbeatConfig,
     pub scheduler_config: crate::config::SchedulerConfig,
     pub plugins: Arc<PluginRegistry>,
     pub skills: crate::config::SkillsConfig,
@@ -207,6 +210,7 @@ impl ToolRuntime {
     pub async fn from_config(
         agent: &crate::config::AgentConfig,
         memory_config: &crate::config::MemoryConfig,
+        heartbeat_config: &crate::config::HeartbeatConfig,
         scheduler_config: &crate::config::SchedulerConfig,
         skills_config: &crate::config::SkillsConfig,
         mcp_config: &crate::config::McpConfig,
@@ -215,6 +219,13 @@ impl ToolRuntime {
         let workspace_root = canonical_or_current(&agent.workspace);
         let memory = Arc::new(SqliteMemory::new(memory_config.database_path.clone()));
         memory.init().await.map_err(|e| e.to_string())?;
+        let heartbeat = Arc::new(
+            HeartbeatEngine::new()
+                .with_state_path(agent.workspace.join("heartbeat.json"))
+                .with_poll_interval(std::time::Duration::from_secs(
+                    heartbeat_config.check_interval_seconds.max(1),
+                )),
+        );
         let plugins = Arc::new(PluginRegistry::new());
         plugins
             .load_from_dir(&skills_config.skills_path)
@@ -224,7 +235,9 @@ impl ToolRuntime {
         let runtime = Self {
             workspace_root,
             memory,
+            heartbeat,
             scheduler: Arc::new(Mutex::new(Scheduler::new())),
+            heartbeat_config: heartbeat_config.clone(),
             scheduler_config: scheduler_config.clone(),
             plugins,
             skills: skills_config.clone(),
@@ -232,6 +245,10 @@ impl ToolRuntime {
             security: Arc::new(SecurityLayer::with_config(security_config.clone())),
             invocation: None,
         };
+
+        if heartbeat_config.enabled {
+            runtime.start_heartbeat_loop().await?;
+        }
 
         if scheduler_config.enabled {
             runtime.start_scheduler_loop().await?;
@@ -281,6 +298,14 @@ impl ToolRuntime {
             metadata,
         }));
         runtime
+    }
+
+    async fn start_heartbeat_loop(&self) -> Result<(), String> {
+        self.heartbeat
+            .start_with_interval(std::time::Duration::from_secs(
+                self.heartbeat_config.check_interval_seconds.max(1),
+            ))
+            .await
     }
 
     async fn start_scheduler_loop(&self) -> Result<(), String> {
@@ -2435,8 +2460,8 @@ mod tests {
     use super::*;
     use crate::agent::{AgentContext, SenderInfo, SessionId};
     use crate::config::{
-        AgentConfig, ApprovalMode, McpConfig, McpServerConfig, MemoryConfig, SchedulerConfig,
-        SecurityConfig,
+        AgentConfig, ApprovalMode, HeartbeatConfig, McpConfig, McpServerConfig, MemoryConfig,
+        SchedulerConfig, SecurityConfig,
     };
     use crate::scheduler::JobStatus;
 
@@ -2479,6 +2504,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &HeartbeatConfig::default(),
             &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
@@ -2575,6 +2601,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &HeartbeatConfig::default(),
             &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
@@ -2610,6 +2637,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &HeartbeatConfig::default(),
             &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
@@ -2650,6 +2678,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &HeartbeatConfig::default(),
             &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
@@ -2699,6 +2728,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &HeartbeatConfig::default(),
             &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
@@ -2749,6 +2779,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &HeartbeatConfig::default(),
             &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
@@ -2799,6 +2830,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &HeartbeatConfig::default(),
             &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
@@ -2841,7 +2873,9 @@ mod tests {
             memory: Arc::new(SqliteMemory::new(
                 std::env::temp_dir().join("borgclaw_mcp_unknown_memory"),
             )),
+            heartbeat: Arc::new(HeartbeatEngine::new()),
             scheduler: Arc::new(Mutex::new(Scheduler::new())),
+            heartbeat_config: HeartbeatConfig::default(),
             scheduler_config: SchedulerConfig::default(),
             plugins: Arc::new(PluginRegistry::new()),
             skills: crate::config::SkillsConfig::default(),
@@ -2864,7 +2898,9 @@ mod tests {
             memory: Arc::new(SqliteMemory::new(
                 std::env::temp_dir().join("borgclaw_mcp_transport_memory"),
             )),
+            heartbeat: Arc::new(HeartbeatEngine::new()),
             scheduler: Arc::new(Mutex::new(Scheduler::new())),
+            heartbeat_config: HeartbeatConfig::default(),
             scheduler_config: SchedulerConfig::default(),
             plugins: Arc::new(PluginRegistry::new()),
             skills: crate::config::SkillsConfig::default(),
@@ -2903,6 +2939,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &HeartbeatConfig::default(),
             &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
@@ -2944,6 +2981,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &HeartbeatConfig::default(),
             &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
@@ -2981,6 +3019,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &HeartbeatConfig::default(),
             &SchedulerConfig {
                 enabled: false,
                 ..Default::default()
@@ -3000,6 +3039,87 @@ mod tests {
             assert!(!scheduler.is_running().await);
         }
 
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn runtime_starts_heartbeat_loop_when_enabled() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_heartbeat_runtime_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &HeartbeatConfig::default(),
+            &SchedulerConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        assert!(runtime.heartbeat.is_running().await);
+        assert!(runtime
+            .heartbeat
+            .stop()
+            .await
+            .is_ok());
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn runtime_leaves_heartbeat_stopped_when_disabled() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_heartbeat_disabled_runtime_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &HeartbeatConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            &SchedulerConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        assert!(!runtime.heartbeat.is_running().await);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -3044,6 +3164,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &HeartbeatConfig::default(),
             &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
@@ -3098,6 +3219,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &HeartbeatConfig::default(),
             &scheduler,
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
@@ -3192,6 +3314,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &HeartbeatConfig::default(),
             &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
@@ -3252,6 +3375,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &HeartbeatConfig::default(),
             &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
@@ -3336,6 +3460,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &HeartbeatConfig::default(),
             &scheduler,
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),
@@ -3437,6 +3562,7 @@ mod tests {
                 database_path: root.join("memory"),
                 ..Default::default()
             },
+            &HeartbeatConfig::default(),
             &SchedulerConfig::default(),
             &crate::config::SkillsConfig {
                 skills_path: root.join("skills"),

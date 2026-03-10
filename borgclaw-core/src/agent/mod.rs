@@ -147,6 +147,7 @@ pub struct ToolRequest {
 pub struct SimpleAgent {
     config: super::config::AgentConfig,
     memory_config: super::config::MemoryConfig,
+    heartbeat_config: super::config::HeartbeatConfig,
     scheduler_config: super::config::SchedulerConfig,
     skills_config: super::config::SkillsConfig,
     mcp_config: super::config::McpConfig,
@@ -162,6 +163,7 @@ impl SimpleAgent {
     pub fn new(
         config: super::config::AgentConfig,
         memory_config: Option<super::config::MemoryConfig>,
+        heartbeat_config: Option<super::config::HeartbeatConfig>,
         scheduler_config: Option<super::config::SchedulerConfig>,
         skills_config: Option<super::config::SkillsConfig>,
         mcp_config: Option<super::config::McpConfig>,
@@ -170,6 +172,7 @@ impl SimpleAgent {
         Self {
             config,
             memory_config: memory_config.unwrap_or_default(),
+            heartbeat_config: heartbeat_config.unwrap_or_default(),
             scheduler_config: scheduler_config.unwrap_or_default(),
             skills_config: skills_config.unwrap_or_default(),
             mcp_config: mcp_config.unwrap_or_default(),
@@ -204,6 +207,7 @@ impl SimpleAgent {
             let runtime = ToolRuntime::from_config(
                 &self.config,
                 &self.memory_config,
+                &self.heartbeat_config,
                 &self.scheduler_config,
                 &self.skills_config,
                 &self.mcp_config,
@@ -494,6 +498,7 @@ mod tests {
         let mut agent = SimpleAgent::new(
             crate::config::AgentConfig::default(),
             Some(MemoryConfig::default()),
+            None,
             Some(crate::config::SchedulerConfig::default()),
             Some(SkillsConfig::default()),
             Some(McpConfig::default()),
