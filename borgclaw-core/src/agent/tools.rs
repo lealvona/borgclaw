@@ -275,6 +275,10 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "plugin_list" => plugin_list(runtime).await,
         "plugin_invoke" => plugin_invoke(&call.arguments, runtime).await,
         "github_list_repos" => github_list_repos(&call.arguments, runtime).await,
+        "github_get_repo" => github_get_repo(&call.arguments, runtime).await,
+        "github_list_branches" => github_list_branches(&call.arguments, runtime).await,
+        "github_create_branch" => github_create_branch(&call.arguments, runtime).await,
+        "github_list_prs" => github_list_prs(&call.arguments, runtime).await,
         "github_create_pr" => github_create_pr(&call.arguments, runtime).await,
         "github_prepare_delete_branch" => github_prepare_delete_branch(&call.arguments, runtime).await,
         "github_delete_branch" => github_delete_branch(&call.arguments, runtime).await,
@@ -727,6 +731,130 @@ async fn github_list_repos(
         Ok(repos) => ToolResult::ok(
             repos.into_iter()
                 .map(|repo| format!("{} ({})", repo.full_name, repo.default_branch))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn github_get_repo(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = match github_client(runtime) {
+        Ok(client) => client,
+        Err(err) => return ToolResult::err(err),
+    };
+    let owner = match get_required_string(arguments, "owner") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let repo = match get_required_string(arguments, "repo") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    match client.get_repo(&owner, &repo).await {
+        Ok(repo) => ToolResult::ok(format!(
+            "{} | default={} | private={}",
+            repo.full_name, repo.default_branch, repo.private
+        )),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn github_list_branches(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = match github_client(runtime) {
+        Ok(client) => client,
+        Err(err) => return ToolResult::err(err),
+    };
+    let owner = match get_required_string(arguments, "owner") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let repo = match get_required_string(arguments, "repo") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    match client.list_branches(&owner, &repo).await {
+        Ok(branches) if branches.is_empty() => ToolResult::ok("no branches"),
+        Ok(branches) => ToolResult::ok(
+            branches
+                .into_iter()
+                .map(|branch| {
+                    format!(
+                        "{} | {} | protected={}",
+                        branch.name, branch.sha, branch.protected
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn github_create_branch(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = match github_client(runtime) {
+        Ok(client) => client,
+        Err(err) => return ToolResult::err(err),
+    };
+    let owner = match get_required_string(arguments, "owner") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let repo = match get_required_string(arguments, "repo") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let branch = match get_required_string(arguments, "branch") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let from_sha = match get_required_string(arguments, "from_sha") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    match client.create_branch(&owner, &repo, &branch, &from_sha).await {
+        Ok(created) => ToolResult::ok(format!("{} | {}", created.name, created.sha))
+            .with_metadata("owner", owner)
+            .with_metadata("repo", repo),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn github_list_prs(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = match github_client(runtime) {
+        Ok(client) => client,
+        Err(err) => return ToolResult::err(err),
+    };
+    let owner = match get_required_string(arguments, "owner") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let repo = match get_required_string(arguments, "repo") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let state = arguments.get("state").and_then(|value| value.as_str());
+
+    match client.list_prs(&owner, &repo, state).await {
+        Ok(prs) if prs.is_empty() => ToolResult::ok("no pull requests"),
+        Ok(prs) => ToolResult::ok(
+            prs.into_iter()
+                .map(|pr| format!("{} #{} [{}]", pr.title, pr.number, pr.state))
                 .collect::<Vec<_>>()
                 .join("\n"),
         ),
@@ -2348,6 +2476,10 @@ mod tests {
             .map(|tool| tool.name)
             .collect::<Vec<_>>();
 
+        assert!(names.iter().any(|name| name == "github_get_repo"));
+        assert!(names.iter().any(|name| name == "github_list_branches"));
+        assert!(names.iter().any(|name| name == "github_create_branch"));
+        assert!(names.iter().any(|name| name == "github_list_prs"));
         assert!(names.iter().any(|name| name == "github_list_issues"));
         assert!(names.iter().any(|name| name == "github_create_issue"));
         assert!(names.iter().any(|name| name == "github_list_releases"));
@@ -2619,6 +2751,54 @@ pub fn builtin_tools() -> Vec<Tool> {
                 )]
                 .into(),
                 Vec::new(),
+            ))
+            .with_tags(vec!["github".to_string(), "integration".to_string()]),
+        Tool::new("github_get_repo", "Get GitHub repository details")
+            .with_schema(ToolSchema::object(
+                [
+                    ("owner".to_string(), string_property("Repository owner")),
+                    ("repo".to_string(), string_property("Repository name")),
+                ]
+                .into(),
+                vec!["owner".to_string(), "repo".to_string()],
+            ))
+            .with_tags(vec!["github".to_string(), "integration".to_string()]),
+        Tool::new("github_list_branches", "List GitHub repository branches")
+            .with_schema(ToolSchema::object(
+                [
+                    ("owner".to_string(), string_property("Repository owner")),
+                    ("repo".to_string(), string_property("Repository name")),
+                ]
+                .into(),
+                vec!["owner".to_string(), "repo".to_string()],
+            ))
+            .with_tags(vec!["github".to_string(), "integration".to_string()]),
+        Tool::new("github_create_branch", "Create a GitHub branch")
+            .with_schema(ToolSchema::object(
+                [
+                    ("owner".to_string(), string_property("Repository owner")),
+                    ("repo".to_string(), string_property("Repository name")),
+                    ("branch".to_string(), string_property("Branch name")),
+                    ("from_sha".to_string(), string_property("Source commit SHA")),
+                ]
+                .into(),
+                vec![
+                    "owner".to_string(),
+                    "repo".to_string(),
+                    "branch".to_string(),
+                    "from_sha".to_string(),
+                ],
+            ))
+            .with_tags(vec!["github".to_string(), "integration".to_string()]),
+        Tool::new("github_list_prs", "List GitHub pull requests")
+            .with_schema(ToolSchema::object(
+                [
+                    ("owner".to_string(), string_property("Repository owner")),
+                    ("repo".to_string(), string_property("Repository name")),
+                    ("state".to_string(), string_property("Optional pull request state filter")),
+                ]
+                .into(),
+                vec!["owner".to_string(), "repo".to_string()],
             ))
             .with_tags(vec!["github".to_string(), "integration".to_string()]),
         Tool::new("github_create_pr", "Create a GitHub pull request")
