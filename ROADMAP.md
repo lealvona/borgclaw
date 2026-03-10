@@ -42,6 +42,7 @@ Recent landed work in this phase:
 - Scheduler job initialization with stable `next_run` state for cron, interval, and one-shot jobs.
 - Scheduler loop startup, concurrency limits, timeout enforcement, due-job execution, and bounded run history.
 - Scheduler retry rescheduling and dead-letter handling for exhausted jobs.
+- Scheduled jobs can now dispatch built-in tool calls through the shared runtime, not just synthetic message actions.
 
 ## Phase 4: Skills and Integrations
 
