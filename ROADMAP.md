@@ -40,6 +40,7 @@ Recent landed work in this phase:
 - Heartbeat task persistence across engine reconstruction.
 - Heartbeat retry rescheduling and dead-letter handling for exhausted tasks.
 - Sub-agent concurrency limits, cancellation precedence, memory tool policy enforcement, parent-context inheritance, and persisted task state.
+- Sub-agent retry rescheduling, retry-backoff visibility, and dead-letter handling for exhausted tasks.
 - Scheduler job initialization with stable `next_run` state for cron, interval, and one-shot jobs.
 - Scheduler loop startup, concurrency limits, timeout enforcement, due-job execution, and bounded run history.
 - Scheduler retry rescheduling and dead-letter handling for exhausted jobs.

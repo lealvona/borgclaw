@@ -16,7 +16,7 @@ Last reviewed: March 10, 2026
 | SQLite memory + group isolation | `complete` | Metadata round-trip, isolation, recall, and compaction are implemented. |
 | Solution memory | `complete` | Documented public structs and search helpers are aligned. |
 | Heartbeat engine | `partial` | Documented task/handler surface exists. Engine state gating, background loop startup, enable/disable consistency, manual-run state updates, persisted task snapshots, and retry/dead-letter behavior are landed; richer operator ergonomics remain. |
-| Sub-agent coordinator | `partial` | Spawn/status/result flow exists. Concurrency limits, cancellation precedence, memory policy enforcement, parent-context inheritance, and persisted task snapshots are landed; retry/dead-letter behavior and deeper execution policy inheritance remain. |
+| Sub-agent coordinator | `partial` | Spawn/status/result flow exists. Concurrency limits, cancellation precedence, memory policy enforcement, parent-context inheritance, persisted task snapshots, and retry/dead-letter behavior are landed; deeper execution policy inheritance remains. |
 | Security config contract | `complete` | Documented TOML shape parses and core enforcement exists. |
 | Secret storage + vault | `partial` | Encrypted secrets and vault clients exist; onboarding/auth UX is still mixed. |
 | Skill registry lifecycle | `partial` | Local install, remote `SKILL.md`, and GitHub-backed listing exist; packaging/publishing remain planned. |
@@ -39,4 +39,4 @@ Last reviewed: March 10, 2026
 - Skill registry publishing/package workflow is still planned-only.
 - Remote skill installs currently persist manifest content, not companion assets.
 - Several skill families have library clients and config support before full agent-tool exposure.
-- Background execution now persists scheduler run history, heartbeat task state, and sub-agent task state locally. Scheduler and heartbeat retry/dead-letter semantics are landed; sub-agent retry/dead-letter semantics are still not implemented.
+- Background execution now persists scheduler run history, heartbeat task state, and sub-agent task state locally. Scheduler, heartbeat, and sub-agent retry/dead-letter semantics are landed.

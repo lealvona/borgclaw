@@ -26,6 +26,11 @@ pub struct SubAgentTask {
     pub memory_access: MemoryAccessType,
     pub priority: TaskPriority,
     pub timeout_seconds: u64,
+    pub max_retries: u32,
+    pub retry_count: u32,
+    pub retry_delay_seconds: u64,
+    pub next_retry_at: Option<DateTime<Utc>>,
+    pub dead_lettered_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub status: TaskStatus,
     pub result: Option<SubAgentResult>,
@@ -45,6 +50,11 @@ impl SubAgentTask {
             memory_access: MemoryAccessType::ReadOnly,
             priority: TaskPriority::Normal,
             timeout_seconds: 300,
+            max_retries: 0,
+            retry_count: 0,
+            retry_delay_seconds: 0,
+            next_retry_at: None,
+            dead_lettered_at: None,
             created_at: Utc::now(),
             status: TaskStatus::Pending,
             result: None,
@@ -80,6 +90,12 @@ impl SubAgentTask {
 
     pub fn with_timeout(mut self, seconds: u64) -> Self {
         self.timeout_seconds = seconds;
+        self
+    }
+
+    pub fn with_retry_policy(mut self, max_retries: u32, retry_delay_seconds: u64) -> Self {
+        self.max_retries = max_retries;
+        self.retry_delay_seconds = retry_delay_seconds;
         self
     }
 }
@@ -282,37 +298,38 @@ impl SubAgentCoordinator {
             .await
             .map_err(|_| SubAgentError::ExecutionFailed("Sub-agent limiter closed".to_string()))?;
 
-        let task = {
-            let mut tasks = self.tasks.write().await;
-            let task = tasks
-                .get_mut(task_id)
-                .ok_or_else(|| SubAgentError::NotFound(task_id.to_string()))?;
+        loop {
+            let task = {
+                let mut tasks = self.tasks.write().await;
+                let task = tasks
+                    .get_mut(task_id)
+                    .ok_or_else(|| SubAgentError::NotFound(task_id.to_string()))?;
 
-            if task.status == TaskStatus::Cancelled {
-                return Err(SubAgentError::Cancelled);
-            }
+                if task.status == TaskStatus::Cancelled {
+                    return Err(SubAgentError::Cancelled);
+                }
 
-            if task.status != TaskStatus::Pending {
-                return Err(SubAgentError::InvalidState(task.status));
-            }
+                if task.status != TaskStatus::Pending {
+                    return Err(SubAgentError::InvalidState(task.status));
+                }
 
-            task.status = TaskStatus::Running;
-            task.clone()
-        };
-        self.persist_state().await;
+                task.status = TaskStatus::Running;
+                task.next_retry_at = None;
+                task.clone()
+            };
+            self.persist_state().await;
 
-        let start = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(task.timeout_seconds);
+            let start = std::time::Instant::now();
+            let timeout = std::time::Duration::from_secs(task.timeout_seconds);
 
-        let result = tokio::time::timeout(timeout, self.execute_task_inner(&task))
-            .await
-            .unwrap_or_else(|_| Err(SubAgentError::Timeout(task.timeout_seconds)));
+            let result = tokio::time::timeout(timeout, self.execute_task_inner(&task))
+                .await
+                .unwrap_or_else(|_| Err(SubAgentError::Timeout(task.timeout_seconds)));
 
-        let duration_ms = start.elapsed().as_millis() as u64;
+            let duration_ms = start.elapsed().as_millis() as u64;
 
-        let (sub_result, status) = match result {
-            Ok(output) => (
-                SubAgentResult {
+            let attempt_outcome = match result {
+                Ok(output) => AttemptOutcome::Success(SubAgentResult {
                     task_id: task_id.to_string(),
                     success: true,
                     output: output.output,
@@ -320,78 +337,47 @@ impl SubAgentCoordinator {
                     duration_ms,
                     memory_entries_created: output.memory_entries_created,
                     error: None,
-                },
-                TaskStatus::Completed,
-            ),
-            Err(e) => {
-                let status = match e {
-                    SubAgentError::Timeout(_) => TaskStatus::Timeout,
-                    _ => TaskStatus::Failed,
-                };
-                (
-                    SubAgentResult {
-                        task_id: task_id.to_string(),
-                        success: false,
-                        output: String::new(),
-                        tools_used: vec![],
-                        duration_ms,
-                        memory_entries_created: 0,
-                        error: Some(e.to_string()),
-                    },
-                    status,
-                )
-            }
-        };
-
-        let was_cancelled = {
-            let mut tasks = self.tasks.write().await;
-            if let Some(t) = tasks.get_mut(task_id) {
-                if t.status == TaskStatus::Cancelled {
-                    t.result = Some(SubAgentResult {
-                        task_id: task_id.to_string(),
-                        success: false,
-                        output: String::new(),
-                        tools_used: vec![],
-                        duration_ms,
-                        memory_entries_created: 0,
-                        error: Some("Task cancelled".to_string()),
-                    });
-                    true
-                } else {
-                    t.status = status;
-                    t.result = Some(sub_result.clone());
-                    false
+                }),
+                Err(e) => {
+                    let error_text = e.to_string();
+                    AttemptOutcome::Failure {
+                        error: e,
+                        result: SubAgentResult {
+                            task_id: task_id.to_string(),
+                            success: false,
+                            output: String::new(),
+                            tools_used: vec![],
+                            duration_ms,
+                            memory_entries_created: 0,
+                            error: Some(error_text),
+                        },
+                    }
                 }
-            } else {
-                false
-            }
-        };
-        self.persist_state().await;
-
-        if was_cancelled {
-            let cancelled = SubAgentResult {
-                task_id: task_id.to_string(),
-                success: false,
-                output: String::new(),
-                tools_used: vec![],
-                duration_ms,
-                memory_entries_created: 0,
-                error: Some("Task cancelled".to_string()),
             };
-            let _ = self.result_sender.send(cancelled).await;
-            return Err(SubAgentError::Cancelled);
-        }
 
-        let _ = self.result_sender.send(sub_result.clone()).await;
-
-        if sub_result.success {
-            Ok(sub_result)
-        } else {
-            Err(SubAgentError::ExecutionFailed(
-                sub_result
-                    .error
-                    .unwrap_or_else(|| "Unknown error".to_string()),
-            ))
+            match self
+                .apply_attempt_outcome(task_id, attempt_outcome)
+                .await
+            {
+                RetryAction::Complete(result) => {
+                    let _ = self.result_sender.send(result.clone()).await;
+                    return Ok(result);
+                }
+                RetryAction::Retry(delay) => {
+                    if !delay.is_zero() {
+                        tokio::time::sleep(delay).await;
+                    }
+                    continue;
+                }
+                RetryAction::Cancelled(result) => {
+                    let _ = self.result_sender.send(result).await;
+                    return Err(SubAgentError::Cancelled);
+                }
+                RetryAction::TerminalError { result, error } => {
+                    let _ = self.result_sender.send(result).await;
+                    return Err(error);
+                }
+            }
         }
     }
 
@@ -483,12 +469,104 @@ impl SubAgentCoordinator {
         let tasks = self.tasks.read().await;
         persist_tasks(&self.state_path, &tasks);
     }
+
+    async fn apply_attempt_outcome(
+        &self,
+        task_id: &str,
+        outcome: AttemptOutcome,
+    ) -> RetryAction {
+        let mut tasks = self.tasks.write().await;
+        let Some(task) = tasks.get_mut(task_id) else {
+            return RetryAction::TerminalError {
+                result: SubAgentResult {
+                    task_id: task_id.to_string(),
+                    success: false,
+                    output: String::new(),
+                    tools_used: vec![],
+                    duration_ms: 0,
+                    memory_entries_created: 0,
+                    error: Some("Task not found".to_string()),
+                },
+                error: SubAgentError::NotFound(task_id.to_string()),
+            };
+        };
+
+        if task.status == TaskStatus::Cancelled {
+            let cancelled = SubAgentResult {
+                task_id: task_id.to_string(),
+                success: false,
+                output: String::new(),
+                tools_used: vec![],
+                duration_ms: 0,
+                memory_entries_created: 0,
+                error: Some("Task cancelled".to_string()),
+            };
+            task.result = Some(cancelled.clone());
+            persist_tasks(&self.state_path, &tasks);
+            return RetryAction::Cancelled(cancelled);
+        }
+
+        let action = match outcome {
+            AttemptOutcome::Success(result) => {
+                task.status = TaskStatus::Completed;
+                task.retry_count = 0;
+                task.next_retry_at = None;
+                task.dead_lettered_at = None;
+                task.result = Some(result.clone());
+                RetryAction::Complete(result)
+            }
+            AttemptOutcome::Failure { error, result } => {
+                let terminal_status = match error {
+                    SubAgentError::Timeout(_) => TaskStatus::Timeout,
+                    _ => TaskStatus::Failed,
+                };
+
+                if task.retry_count < task.max_retries {
+                    task.retry_count += 1;
+                    task.status = TaskStatus::Pending;
+                    task.result = Some(result);
+                    task.dead_lettered_at = None;
+                    task.next_retry_at = Some(
+                        Utc::now() + chrono::Duration::seconds(task.retry_delay_seconds as i64),
+                    );
+                    RetryAction::Retry(std::time::Duration::from_secs(task.retry_delay_seconds))
+                } else {
+                    task.status = terminal_status;
+                    task.result = Some(result.clone());
+                    task.next_retry_at = None;
+                    task.dead_lettered_at = Some(Utc::now());
+                    RetryAction::TerminalError { result, error }
+                }
+            }
+        };
+
+        persist_tasks(&self.state_path, &tasks);
+        action
+    }
 }
 
 struct InnerTaskResult {
     output: String,
     tools_used: Vec<String>,
     memory_entries_created: usize,
+}
+
+enum AttemptOutcome {
+    Success(SubAgentResult),
+    Failure {
+        error: SubAgentError,
+        result: SubAgentResult,
+    },
+}
+
+enum RetryAction {
+    Complete(SubAgentResult),
+    Retry(std::time::Duration),
+    Cancelled(SubAgentResult),
+    TerminalError {
+        result: SubAgentResult,
+        error: SubAgentError,
+    },
 }
 
 fn allowed_builtin_tools(task: &SubAgentTask) -> Vec<crate::agent::Tool> {
@@ -598,6 +676,8 @@ pub struct SubAgentBuilder {
     memory_access: MemoryAccessType,
     priority: TaskPriority,
     timeout_seconds: u64,
+    max_retries: u32,
+    retry_delay_seconds: u64,
 }
 
 impl SubAgentBuilder {
@@ -609,6 +689,8 @@ impl SubAgentBuilder {
             memory_access: MemoryAccessType::ReadOnly,
             priority: TaskPriority::Normal,
             timeout_seconds: 300,
+            max_retries: 0,
+            retry_delay_seconds: 0,
         }
     }
 
@@ -642,6 +724,12 @@ impl SubAgentBuilder {
         self
     }
 
+    pub fn retry_policy(mut self, max_retries: u32, retry_delay_seconds: u64) -> Self {
+        self.max_retries = max_retries;
+        self.retry_delay_seconds = retry_delay_seconds;
+        self
+    }
+
     pub fn build(self, input: impl Into<String>) -> SubAgentTask {
         SubAgentTask {
             id: Uuid::new_v4().to_string(),
@@ -655,6 +743,11 @@ impl SubAgentBuilder {
             memory_access: self.memory_access,
             priority: self.priority,
             timeout_seconds: self.timeout_seconds,
+            max_retries: self.max_retries,
+            retry_count: 0,
+            retry_delay_seconds: self.retry_delay_seconds,
+            next_retry_at: None,
+            dead_lettered_at: None,
             created_at: Utc::now(),
             status: TaskStatus::Pending,
             result: None,
@@ -993,6 +1086,113 @@ mod tests {
             coordinator.status(&task_id).await,
             SubAgentStatus::Cancelled
         ));
+    }
+
+    #[tokio::test]
+    async fn subagent_retries_enter_pending_backoff_and_can_be_cancelled() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_subagent_retry_pending_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let (sender, _receiver) = mpsc::channel(4);
+        let coordinator = SubAgentCoordinator::with_configs(
+            AgentConfig {
+                provider: "unsupported".to_string(),
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            crate::config::SchedulerConfig::default(),
+            SkillsConfig::default(),
+            McpConfig::default(),
+            SecurityConfig::default(),
+            sender,
+        );
+
+        let task_id = coordinator
+            .submit(
+                SubAgentBuilder::new("retrying")
+                    .description("__borgclaw_test_delay_ms=10")
+                    .timeout(0)
+                    .retry_policy(1, 1)
+                    .build("hello"),
+            )
+            .await;
+
+        let handle = {
+            let coordinator = coordinator.clone();
+            let task_id = task_id.clone();
+            tokio::spawn(async move { coordinator.execute(&task_id).await })
+        };
+
+        loop {
+            let task = coordinator.get_task(&task_id).await.unwrap();
+            if task.status == TaskStatus::Pending && task.retry_count == 1 {
+                assert!(task.next_retry_at.is_some());
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        assert!(coordinator.cancel(&task_id).await);
+        let result = handle.await.unwrap();
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(matches!(result, Err(SubAgentError::Cancelled)));
+        assert!(matches!(
+            coordinator.status(&task_id).await,
+            SubAgentStatus::Cancelled
+        ));
+    }
+
+    #[tokio::test]
+    async fn subagent_dead_letters_after_retry_exhaustion() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_subagent_retry_dead_letter_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let (sender, _receiver) = mpsc::channel(4);
+        let coordinator = SubAgentCoordinator::with_configs(
+            AgentConfig {
+                provider: "unsupported".to_string(),
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            crate::config::SchedulerConfig::default(),
+            SkillsConfig::default(),
+            McpConfig::default(),
+            SecurityConfig::default(),
+            sender,
+        );
+
+        let task_id = coordinator
+            .submit(
+                SubAgentBuilder::new("timeout")
+                    .description("__borgclaw_test_delay_ms=10")
+                    .timeout(0)
+                    .retry_policy(1, 0)
+                    .build("hello"),
+            )
+            .await;
+
+        let result = coordinator.execute(&task_id).await;
+        let task = coordinator.get_task(&task_id).await.unwrap();
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(matches!(result, Err(SubAgentError::Timeout(0))));
+        assert_eq!(task.status, TaskStatus::Timeout);
+        assert_eq!(task.retry_count, 1);
+        assert!(task.next_retry_at.is_none());
+        assert!(task.dead_lettered_at.is_some());
     }
 
     #[tokio::test]
