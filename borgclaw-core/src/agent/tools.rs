@@ -1052,11 +1052,17 @@ async fn plugin_invoke(
         Ok(value) => value,
         Err(err) => return ToolResult::err(err),
     };
-    let function = arguments
-        .get("function")
-        .and_then(|value| value.as_str())
-        .unwrap_or("invoke")
-        .to_string();
+    let function = if let Some(function) = arguments.get("function").and_then(|value| value.as_str())
+    {
+        function.to_string()
+    } else {
+        runtime
+            .plugins
+            .get(&plugin)
+            .await
+            .map(|manifest| manifest.entry_point)
+            .unwrap_or_else(|| "invoke".to_string())
+    };
     let input = arguments
         .get("input")
         .cloned()
