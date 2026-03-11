@@ -2722,6 +2722,55 @@ mod tests {
         assert_eq!(second.output, "ok");
     }
 
+    #[tokio::test]
+    async fn command_allowlist_blocks_execute_command_when_unmatched() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_command_allowlist_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &HeartbeatConfig::default(),
+            &SchedulerConfig::default(),
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig {
+                allowed_commands: vec!["^git status$".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let result = execute_tool(
+            &ToolCall::new(
+                "execute_command",
+                HashMap::from([("command".to_string(), serde_json::json!("printf nope"))]),
+            ),
+            &runtime,
+        )
+        .await;
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(!result.success);
+        assert_eq!(
+            result.output,
+            "blocked command by policy: not allowed by command allowlist"
+        );
+    }
+
     #[test]
     fn parses_duckduckgo_results() {
         let html = r#"
@@ -3234,6 +3283,42 @@ mod tests {
             Err(err) => err,
         };
         assert!(err.contains("blocked MCP command by policy"));
+    }
+
+    #[test]
+    fn mcp_client_respects_command_allowlist() {
+        let runtime = ToolRuntime {
+            workspace_root: PathBuf::from("."),
+            workspace_policy: crate::config::WorkspacePolicyConfig::default(),
+            memory: Arc::new(SqliteMemory::new(
+                std::env::temp_dir().join("borgclaw_mcp_allowlist_memory"),
+            )),
+            heartbeat: Arc::new(HeartbeatEngine::new()),
+            scheduler: Arc::new(Mutex::new(Scheduler::new())),
+            heartbeat_config: HeartbeatConfig::default(),
+            scheduler_config: SchedulerConfig::default(),
+            plugins: Arc::new(PluginRegistry::new()),
+            skills: crate::config::SkillsConfig::default(),
+            mcp_servers: HashMap::from([(
+                "blocked".to_string(),
+                McpServerConfig {
+                    transport: "stdio".to_string(),
+                    command: Some("python tool.py".to_string()),
+                    ..Default::default()
+                },
+            )]),
+            security: Arc::new(SecurityLayer::with_config(SecurityConfig {
+                allowed_commands: vec!["^git status$".to_string()],
+                ..Default::default()
+            })),
+            invocation: None,
+        };
+
+        let err = match mcp_client_for_server(&runtime, "blocked") {
+            Ok(_) => panic!("expected allowlist rejection"),
+            Err(err) => err,
+        };
+        assert!(err.contains("not allowed by command allowlist"));
     }
 
     #[tokio::test]

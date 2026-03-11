@@ -167,6 +167,7 @@ impl Default for LeakDetector {
 /// Security layer - combines all security features
 pub struct SecurityLayer {
     config: SecurityConfig,
+    command_allowlist: Vec<Regex>,
     command_blocklist: Vec<Regex>,
     pairing: Arc<RwLock<PairingManager>>,
     secrets: Arc<RwLock<SecretStore>>,
@@ -188,6 +189,7 @@ impl SecurityLayer {
 
         Self {
             config: config.clone(),
+            command_allowlist: compile_allowlist(&config),
             command_blocklist: compile_blocklist(&config),
             pairing: Arc::new(RwLock::new(PairingManager::new(
                 config.pairing.code_length,
@@ -207,6 +209,7 @@ impl SecurityLayer {
     pub fn with_config(config: SecurityConfig) -> Self {
         Self {
             config: config.clone(),
+            command_allowlist: compile_allowlist(&config),
             command_blocklist: compile_blocklist(&config),
             pairing: Arc::new(RwLock::new(PairingManager::new(
                 config.pairing.code_length,
@@ -225,6 +228,14 @@ impl SecurityLayer {
 
     /// Check if command is allowed
     pub fn check_command(&self, command: &str) -> CommandCheck {
+        if !self.command_allowlist.is_empty()
+            && !self
+                .command_allowlist
+                .iter()
+                .any(|pattern| pattern.is_match(command))
+        {
+            return CommandCheck::Blocked("not allowed by command allowlist".to_string());
+        }
         for pattern in &self.command_blocklist {
             if pattern.is_match(command) {
                 return CommandCheck::Blocked(pattern.to_string());
@@ -489,6 +500,14 @@ fn compile_blocklist(config: &SecurityConfig) -> Vec<Regex> {
         .collect()
 }
 
+fn compile_allowlist(config: &SecurityConfig) -> Vec<Regex> {
+    config
+        .allowed_commands
+        .iter()
+        .filter_map(|pattern| Regex::new(pattern).ok())
+        .collect()
+}
+
 fn secret_store_config(config: &SecurityConfig) -> SecretStoreConfig {
     SecretStoreConfig {
         encryption_enabled: config.secrets_encryption,
@@ -616,6 +635,23 @@ mod tests {
         assert!(matches!(
             security.check_command("rm -rf /"),
             CommandCheck::Blocked(_)
+        ));
+    }
+
+    #[test]
+    fn command_allowlist_blocks_unmatched_commands_when_configured() {
+        let security = SecurityLayer::with_config(SecurityConfig {
+            allowed_commands: vec!["^git status$".to_string()],
+            ..Default::default()
+        });
+
+        assert!(matches!(
+            security.check_command("ls -la"),
+            CommandCheck::Blocked(pattern) if pattern == "not allowed by command allowlist"
+        ));
+        assert!(matches!(
+            security.check_command("git status"),
+            CommandCheck::Allowed
         ));
     }
 

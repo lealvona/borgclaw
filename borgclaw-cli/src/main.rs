@@ -547,7 +547,7 @@ fn cli_path_available(binary: &std::path::Path) -> bool {
 
 fn security_policy_status(config: &AppConfig) -> String {
     format!(
-        "pairing={}({} digits/{}s), prompt_injection={}({:?}), leak_detection={}({:?}), blocklist={}+{}, wasm_instances={}",
+        "pairing={}({} digits/{}s), prompt_injection={}({:?}), leak_detection={}({:?}), blocklist={}+{}, allowlist={}, wasm_instances={}",
         enabled_disabled(config.security.pairing.enabled),
         config.security.pairing.code_length,
         config.security.pairing.expiry_seconds,
@@ -557,6 +557,7 @@ fn security_policy_status(config: &AppConfig) -> String {
         config.security.leak_action,
         enabled_disabled(config.security.command_blocklist),
         config.security.extra_blocked.len(),
+        config.security.allowed_commands.len(),
         config.security.wasm_max_instances
     )
 }
@@ -598,6 +599,16 @@ fn security_doctor_lines(config: &AppConfig) -> Vec<String> {
             marker(config.security.command_blocklist),
             enabled_disabled(config.security.command_blocklist),
             config.security.extra_blocked.len()
+        ),
+        format!(
+            "{} Command allowlist {} (patterns={})",
+            marker(true),
+            if config.security.allowed_commands.is_empty() {
+                "disabled"
+            } else {
+                "enabled"
+            },
+            config.security.allowed_commands.len()
         ),
     ]
 }
@@ -1672,6 +1683,7 @@ mod tests {
         config.security.prompt_injection_defense = true;
         config.security.secret_leak_detection = true;
         config.security.extra_blocked = vec!["^danger$".to_string(), "^rm ".to_string()];
+        config.security.allowed_commands = vec!["^git status$".to_string()];
         config.security.wasm_max_instances = 16;
 
         let line = security_policy_status(&config);
@@ -1680,6 +1692,7 @@ mod tests {
         assert!(line.contains("prompt_injection=enabled(Block)"));
         assert!(line.contains("leak_detection=enabled(Redact)"));
         assert!(line.contains("blocklist=enabled+2"));
+        assert!(line.contains("allowlist=1"));
         assert!(line.contains("wasm_instances=16"));
     }
 
@@ -1709,6 +1722,9 @@ mod tests {
         assert!(lines
             .iter()
             .any(|line| line == "✗ Command blocklist disabled (extra_patterns=0)"));
+        assert!(lines
+            .iter()
+            .any(|line| line == "✓ Command allowlist disabled (patterns=0)"));
     }
 }
 
