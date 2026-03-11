@@ -172,6 +172,8 @@ pub struct SecurityConfig {
     pub secrets_path: PathBuf,
     /// Optional vault integration
     pub vault: VaultConfig,
+    /// Workspace file/path policy
+    pub workspace: WorkspacePolicyConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -240,6 +242,28 @@ impl Default for SecurityConfig {
             secrets_encryption: true,
             secrets_path: PathBuf::from(".borgclaw/secrets.enc"),
             vault: VaultConfig::default(),
+            workspace: WorkspacePolicyConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkspacePolicyConfig {
+    /// Restrict file tools to the agent workspace only
+    pub workspace_only: bool,
+    /// Additional allowed roots when workspace_only is disabled
+    pub allowed_roots: Vec<PathBuf>,
+    /// Forbidden paths relative to the workspace or as absolute paths
+    pub forbidden_paths: Vec<PathBuf>,
+}
+
+impl Default for WorkspacePolicyConfig {
+    fn default() -> Self {
+        Self {
+            workspace_only: true,
+            allowed_roots: Vec::new(),
+            forbidden_paths: Vec::new(),
         }
     }
 }
@@ -789,6 +813,29 @@ mod tests {
         assert!(config.security.pairing.enabled);
         assert_eq!(config.security.pairing.code_length, 6);
         assert_eq!(config.security.pairing.expiry_seconds, 300);
+    }
+
+    #[test]
+    fn security_workspace_policy_parses_additive_contract_shape() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [security.workspace]
+            workspace_only = false
+            allowed_roots = ["/tmp", "/var/tmp"]
+            forbidden_paths = ["secrets", "/etc"]
+            "#,
+        )
+        .unwrap();
+
+        assert!(!config.security.workspace.workspace_only);
+        assert_eq!(
+            config.security.workspace.allowed_roots,
+            vec![PathBuf::from("/tmp"), PathBuf::from("/var/tmp")]
+        );
+        assert_eq!(
+            config.security.workspace.forbidden_paths,
+            vec![PathBuf::from("secrets"), PathBuf::from("/etc")]
+        );
     }
 
     #[test]

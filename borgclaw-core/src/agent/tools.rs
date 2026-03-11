@@ -187,6 +187,7 @@ impl ToolResult {
 #[derive(Clone)]
 pub struct ToolRuntime {
     pub workspace_root: PathBuf,
+    pub workspace_policy: crate::config::WorkspacePolicyConfig,
     pub memory: Arc<SqliteMemory>,
     pub heartbeat: Arc<HeartbeatEngine>,
     pub scheduler: Arc<Mutex<Scheduler>>,
@@ -234,6 +235,7 @@ impl ToolRuntime {
 
         let runtime = Self {
             workspace_root,
+            workspace_policy: security_config.workspace.clone(),
             memory,
             heartbeat,
             scheduler: Arc::new(Mutex::new(Scheduler::new())),
@@ -651,10 +653,11 @@ async fn read_file(
     let offset = get_u64(arguments, "offset").unwrap_or(0) as usize;
     let limit = get_u64(arguments, "limit").unwrap_or(100) as usize;
 
-    let resolved = match resolve_workspace_path(&runtime.workspace_root, &path) {
-        Ok(path) => path,
-        Err(err) => return ToolResult::err(err),
-    };
+    let resolved =
+        match resolve_workspace_path(&runtime.workspace_root, &runtime.workspace_policy, &path) {
+            Ok(path) => path,
+            Err(err) => return ToolResult::err(err),
+        };
 
     let content = match std::fs::read_to_string(&resolved) {
         Ok(content) => content,
@@ -682,10 +685,11 @@ async fn list_directory(
         .and_then(|value| value.as_str())
         .unwrap_or(".");
 
-    let resolved = match resolve_workspace_path(&runtime.workspace_root, path) {
-        Ok(path) => path,
-        Err(err) => return ToolResult::err(err),
-    };
+    let resolved =
+        match resolve_workspace_path(&runtime.workspace_root, &runtime.workspace_policy, path) {
+            Ok(path) => path,
+            Err(err) => return ToolResult::err(err),
+        };
 
     let entries = match std::fs::read_dir(&resolved) {
         Ok(entries) => entries,
@@ -1747,10 +1751,11 @@ async fn google_upload_file(
         .unwrap_or("application/octet-stream")
         .to_string();
     let folder_id = arguments.get("folder_id").and_then(|value| value.as_str());
-    let resolved = match resolve_workspace_path(&runtime.workspace_root, &path) {
-        Ok(path) => path,
-        Err(err) => return ToolResult::err(err),
-    };
+    let resolved =
+        match resolve_workspace_path(&runtime.workspace_root, &runtime.workspace_policy, &path) {
+            Ok(path) => path,
+            Err(err) => return ToolResult::err(err),
+        };
     let bytes = match std::fs::read(&resolved) {
         Ok(bytes) => bytes,
         Err(err) => return ToolResult::err(err.to_string()),
@@ -1982,10 +1987,11 @@ async fn stt_transcribe(
         Ok(format) => format,
         Err(err) => return ToolResult::err(err),
     };
-    let resolved = match resolve_workspace_path(&runtime.workspace_root, &path) {
-        Ok(path) => path,
-        Err(err) => return ToolResult::err(err),
-    };
+    let resolved =
+        match resolve_workspace_path(&runtime.workspace_root, &runtime.workspace_policy, &path) {
+            Ok(path) => path,
+            Err(err) => return ToolResult::err(err),
+        };
     let audio = match std::fs::read(&resolved) {
         Ok(audio) => audio,
         Err(err) => return ToolResult::err(err.to_string()),
@@ -2403,7 +2409,11 @@ fn get_u64(arguments: &HashMap<String, serde_json::Value>, key: &str) -> Option<
     arguments.get(key).and_then(|value| value.as_u64())
 }
 
-fn resolve_workspace_path(workspace_root: &Path, requested: &str) -> Result<PathBuf, String> {
+fn resolve_workspace_path(
+    workspace_root: &Path,
+    policy: &crate::config::WorkspacePolicyConfig,
+    requested: &str,
+) -> Result<PathBuf, String> {
     let candidate = if Path::new(requested).is_absolute() {
         PathBuf::from(requested)
     } else {
@@ -2424,11 +2434,55 @@ fn resolve_workspace_path(workspace_root: &Path, requested: &str) -> Result<Path
         })
         .map_err(|e| e.to_string())?;
 
-    if normalized.starts_with(workspace_root) {
-        Ok(normalized)
-    } else {
-        Err("path escapes workspace root".to_string())
+    let mut allowed_roots = vec![workspace_root.to_path_buf()];
+    if !policy.workspace_only {
+        for root in &policy.allowed_roots {
+            if let Ok(resolved) = resolve_policy_path(workspace_root, root) {
+                allowed_roots.push(resolved);
+            }
+        }
     }
+
+    if !allowed_roots
+        .iter()
+        .any(|root| normalized.starts_with(root))
+    {
+        return Err("path escapes allowed workspace roots".to_string());
+    }
+
+    for forbidden in &policy.forbidden_paths {
+        let resolved = resolve_policy_path(workspace_root, forbidden)?;
+        if normalized.starts_with(&resolved) {
+            return Err(format!(
+                "path blocked by workspace policy: {}",
+                forbidden.display()
+            ));
+        }
+    }
+
+    Ok(normalized)
+}
+
+fn resolve_policy_path(workspace_root: &Path, path: &Path) -> Result<PathBuf, String> {
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        workspace_root.join(path)
+    };
+
+    std::fs::canonicalize(&candidate)
+        .or_else(|_| {
+            candidate
+                .parent()
+                .ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::NotFound, "path has no parent")
+                })
+                .and_then(|parent| {
+                    std::fs::canonicalize(parent)
+                        .map(|canon| canon.join(candidate.file_name().unwrap_or_default()))
+                })
+        })
+        .map_err(|e| e.to_string())
 }
 
 fn truncate_output(output: &str) -> String {
@@ -2536,9 +2590,61 @@ mod tests {
         let workspace =
             std::env::temp_dir().join(format!("borgclaw_tools_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&workspace).unwrap();
-        let escaped = resolve_workspace_path(&workspace, "../outside.txt");
+        let escaped = resolve_workspace_path(
+            &workspace,
+            &crate::config::WorkspacePolicyConfig::default(),
+            "../outside.txt",
+        );
         std::fs::remove_dir_all(&workspace).unwrap();
         assert!(escaped.is_err());
+    }
+
+    #[test]
+    fn blocks_forbidden_workspace_path() {
+        let workspace = std::env::temp_dir().join(format!(
+            "borgclaw_tools_forbidden_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let forbidden_dir = workspace.join("secrets");
+        std::fs::create_dir_all(&forbidden_dir).unwrap();
+        std::fs::write(forbidden_dir.join("token.txt"), "secret").unwrap();
+
+        let policy = crate::config::WorkspacePolicyConfig {
+            forbidden_paths: vec![PathBuf::from("secrets")],
+            ..Default::default()
+        };
+        let blocked = resolve_workspace_path(&workspace, &policy, "secrets/token.txt");
+
+        std::fs::remove_dir_all(&workspace).unwrap();
+        assert_eq!(
+            blocked.unwrap_err(),
+            "path blocked by workspace policy: secrets"
+        );
+    }
+
+    #[test]
+    fn allows_additional_root_when_workspace_only_disabled() {
+        let workspace = std::env::temp_dir().join(format!(
+            "borgclaw_tools_allowed_root_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let extra_root = workspace.join("shared-root");
+        std::fs::create_dir_all(&extra_root).unwrap();
+        std::fs::write(extra_root.join("shared.txt"), "shared").unwrap();
+
+        let policy = crate::config::WorkspacePolicyConfig {
+            workspace_only: false,
+            allowed_roots: vec![extra_root.clone()],
+            ..Default::default()
+        };
+        let allowed = resolve_workspace_path(
+            &workspace,
+            &policy,
+            extra_root.join("shared.txt").to_string_lossy().as_ref(),
+        );
+
+        std::fs::remove_dir_all(&workspace).unwrap();
+        assert!(allowed.is_ok());
     }
 
     #[tokio::test]
@@ -3043,6 +3149,7 @@ mod tests {
     fn mcp_client_requires_known_server() {
         let runtime = ToolRuntime {
             workspace_root: PathBuf::from("."),
+            workspace_policy: crate::config::WorkspacePolicyConfig::default(),
             memory: Arc::new(SqliteMemory::new(
                 std::env::temp_dir().join("borgclaw_mcp_unknown_memory"),
             )),
@@ -3068,6 +3175,7 @@ mod tests {
     fn mcp_client_rejects_unsupported_transport() {
         let runtime = ToolRuntime {
             workspace_root: PathBuf::from("."),
+            workspace_policy: crate::config::WorkspacePolicyConfig::default(),
             memory: Arc::new(SqliteMemory::new(
                 std::env::temp_dir().join("borgclaw_mcp_transport_memory"),
             )),
@@ -3099,6 +3207,7 @@ mod tests {
     fn mcp_client_blocks_stdio_command_by_policy() {
         let runtime = ToolRuntime {
             workspace_root: PathBuf::from("."),
+            workspace_policy: crate::config::WorkspacePolicyConfig::default(),
             memory: Arc::new(SqliteMemory::new(
                 std::env::temp_dir().join("borgclaw_mcp_blocked_memory"),
             )),
@@ -3765,6 +3874,94 @@ mod tests {
         assert!(result.success);
         assert_eq!(grouped.len(), 1);
         assert!(global.is_empty());
+    }
+
+    #[tokio::test]
+    async fn scheduled_tool_calls_inherit_workspace_policy() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_scheduled_workspace_policy_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let blocked_dir = root.join("blocked");
+        std::fs::create_dir_all(&blocked_dir).unwrap();
+        std::fs::write(blocked_dir.join("secret.txt"), "top secret").unwrap();
+
+        let scheduler = SchedulerConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &HeartbeatConfig::default(),
+            &scheduler,
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig {
+                workspace: crate::config::WorkspacePolicyConfig {
+                    forbidden_paths: vec![PathBuf::from("blocked")],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let schedule = execute_tool(
+            &ToolCall::new(
+                "schedule_task",
+                HashMap::from([
+                    ("tool".to_string(), serde_json::json!("read_file")),
+                    (
+                        "arguments".to_string(),
+                        serde_json::json!({
+                            "path": "blocked/secret.txt"
+                        }),
+                    ),
+                ]),
+            ),
+            &runtime,
+        )
+        .await;
+        assert!(schedule.success);
+
+        {
+            let scheduler = runtime.scheduler.lock().await;
+            let jobs = scheduler.list().await;
+            let id = jobs[0].id.clone();
+            drop(jobs);
+            let mut stored = scheduler.get(&id).await.unwrap();
+            stored.next_run = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+            scheduler.unschedule(&id).await.unwrap();
+            scheduler.schedule(stored).await.unwrap();
+        }
+
+        let result = execute_tool(
+            &ToolCall::new("run_scheduled_tasks", HashMap::new()),
+            &runtime,
+        )
+        .await;
+        let jobs = runtime.scheduler.lock().await.list().await;
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(result.success);
+        assert_eq!(jobs[0].status, JobStatus::Failed);
+        assert!(jobs[0]
+            .run_history
+            .last()
+            .and_then(|run| run.error.as_deref())
+            .unwrap_or_default()
+            .contains("path blocked by workspace policy: blocked"));
     }
 
     #[tokio::test]
