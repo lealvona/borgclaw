@@ -2244,7 +2244,7 @@ async fn mcp_list_tools(
         Ok(value) => value,
         Err(err) => return ToolResult::err(err),
     };
-    let mut client = match mcp_client_for_server(runtime, &server) {
+    let mut client = match mcp_client_for_server(runtime, &server).await {
         Ok(client) => client,
         Err(err) => return ToolResult::err(err),
     };
@@ -2288,7 +2288,7 @@ async fn mcp_call_tool(
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
 
-    let mut client = match mcp_client_for_server(runtime, &server) {
+    let mut client = match mcp_client_for_server(runtime, &server).await {
         Ok(client) => client,
         Err(err) => return ToolResult::err(err),
     };
@@ -2326,12 +2326,25 @@ async fn mcp_call_tool(
     }
 }
 
-fn mcp_client_for_server(runtime: &ToolRuntime, server: &str) -> Result<McpClient, String> {
+async fn mcp_client_for_server(runtime: &ToolRuntime, server: &str) -> Result<McpClient, String> {
+    let transport_config = mcp_transport_config_for_server(runtime, server).await?;
+
+    Ok(McpClient::new(McpClientConfig {
+        name: "borgclaw".to_string(),
+        transport_config,
+        protocol_version: "2024-11-05".to_string(),
+    }))
+}
+
+async fn mcp_transport_config_for_server(
+    runtime: &ToolRuntime,
+    server: &str,
+) -> Result<McpTransportConfig, String> {
     let config = runtime
         .mcp_servers
         .get(server)
         .ok_or_else(|| format!("unknown mcp server '{}'", server))?;
-    let transport_config = match config.transport.as_str() {
+    Ok(match config.transport.as_str() {
         "stdio" => {
             let command = config
                 .command
@@ -2343,10 +2356,17 @@ fn mcp_client_for_server(runtime: &ToolRuntime, server: &str) -> Result<McpClien
                 }
                 CommandCheck::Allowed => {}
             }
+            let mut env = runtime.security.secret_env().await;
+            for (key, value) in &config.env {
+                env.insert(
+                    key.clone(),
+                    resolve_secret_or_env_reference(value, &runtime.security).await,
+                );
+            }
             McpTransportConfig::Stdio(StdioTransportConfig {
                 command,
                 args: config.args.clone(),
-                env: config.env.clone(),
+                env,
             })
         }
         "sse" => McpTransportConfig::Sse(SseTransportConfig {
@@ -2363,13 +2383,17 @@ fn mcp_client_for_server(runtime: &ToolRuntime, server: &str) -> Result<McpClien
                 .ok_or_else(|| "missing MCP url".to_string())?,
         }),
         other => return Err(format!("unsupported MCP transport '{}'", other)),
-    };
+    })
+}
 
-    Ok(McpClient::new(McpClientConfig {
-        name: "borgclaw".to_string(),
-        transport_config,
-        protocol_version: "2024-11-05".to_string(),
-    }))
+async fn resolve_secret_or_env_reference(value: &str, security: &SecurityLayer) -> String {
+    if let Some(var) = value.strip_prefix("${").and_then(|v| v.strip_suffix('}')) {
+        if let Some(secret) = security.get_secret(var).await {
+            return secret;
+        }
+        return std::env::var(var).unwrap_or_default();
+    }
+    value.to_string()
 }
 
 async fn approve_tool(
@@ -3194,8 +3218,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn mcp_client_requires_known_server() {
+    #[tokio::test]
+    async fn mcp_client_requires_known_server() {
         let runtime = ToolRuntime {
             workspace_root: PathBuf::from("."),
             workspace_policy: crate::config::WorkspacePolicyConfig::default(),
@@ -3213,15 +3237,15 @@ mod tests {
             invocation: None,
         };
 
-        let err = match mcp_client_for_server(&runtime, "missing") {
+        let err = match mcp_client_for_server(&runtime, "missing").await {
             Ok(_) => panic!("expected unknown server error"),
             Err(err) => err,
         };
         assert!(err.contains("unknown mcp server"));
     }
 
-    #[test]
-    fn mcp_client_rejects_unsupported_transport() {
+    #[tokio::test]
+    async fn mcp_client_rejects_unsupported_transport() {
         let runtime = ToolRuntime {
             workspace_root: PathBuf::from("."),
             workspace_policy: crate::config::WorkspacePolicyConfig::default(),
@@ -3245,15 +3269,15 @@ mod tests {
             invocation: None,
         };
 
-        let err = match mcp_client_for_server(&runtime, "bad") {
+        let err = match mcp_client_for_server(&runtime, "bad").await {
             Ok(_) => panic!("expected unsupported transport error"),
             Err(err) => err,
         };
         assert!(err.contains("unsupported MCP transport"));
     }
 
-    #[test]
-    fn mcp_client_blocks_stdio_command_by_policy() {
+    #[tokio::test]
+    async fn mcp_client_blocks_stdio_command_by_policy() {
         let runtime = ToolRuntime {
             workspace_root: PathBuf::from("."),
             workspace_policy: crate::config::WorkspacePolicyConfig::default(),
@@ -3278,15 +3302,15 @@ mod tests {
             invocation: None,
         };
 
-        let err = match mcp_client_for_server(&runtime, "blocked") {
+        let err = match mcp_client_for_server(&runtime, "blocked").await {
             Ok(_) => panic!("expected blocked MCP command error"),
             Err(err) => err,
         };
         assert!(err.contains("blocked MCP command by policy"));
     }
 
-    #[test]
-    fn mcp_client_respects_command_allowlist() {
+    #[tokio::test]
+    async fn mcp_client_respects_command_allowlist() {
         let runtime = ToolRuntime {
             workspace_root: PathBuf::from("."),
             workspace_policy: crate::config::WorkspacePolicyConfig::default(),
@@ -3314,11 +3338,68 @@ mod tests {
             invocation: None,
         };
 
-        let err = match mcp_client_for_server(&runtime, "blocked") {
+        let err = match mcp_client_for_server(&runtime, "blocked").await {
             Ok(_) => panic!("expected allowlist rejection"),
             Err(err) => err,
         };
         assert!(err.contains("not allowed by command allowlist"));
+    }
+
+    #[tokio::test]
+    async fn mcp_client_stdio_env_includes_security_secrets_and_resolved_placeholders() {
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_mcp_env_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let security = Arc::new(SecurityLayer::with_config(SecurityConfig::default()));
+        security
+            .store_secret("MCP_API_KEY", "secret-value")
+            .await
+            .unwrap();
+
+        let runtime = ToolRuntime {
+            workspace_root: PathBuf::from("."),
+            workspace_policy: crate::config::WorkspacePolicyConfig::default(),
+            memory: Arc::new(SqliteMemory::new(root.join("memory"))),
+            heartbeat: Arc::new(HeartbeatEngine::new()),
+            scheduler: Arc::new(Mutex::new(Scheduler::new())),
+            heartbeat_config: HeartbeatConfig::default(),
+            scheduler_config: SchedulerConfig::default(),
+            plugins: Arc::new(PluginRegistry::new()),
+            skills: crate::config::SkillsConfig::default(),
+            mcp_servers: HashMap::from([(
+                "server".to_string(),
+                McpServerConfig {
+                    transport: "stdio".to_string(),
+                    command: Some("echo".to_string()),
+                    env: HashMap::from([("API_KEY".to_string(), "${MCP_API_KEY}".to_string())]),
+                    ..Default::default()
+                },
+            )]),
+            security,
+            invocation: None,
+        };
+
+        let transport = match mcp_transport_config_for_server(&runtime, "server")
+            .await
+            .unwrap()
+        {
+            McpTransportConfig::Stdio(config) => config,
+            _ => panic!("expected stdio transport"),
+        };
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(
+            transport.env.get("API_KEY").map(String::as_str),
+            Some("secret-value")
+        );
+        assert_eq!(
+            transport
+                .env
+                .get("BC_SECRET_MCP_API_KEY")
+                .map(String::as_str),
+            Some("secret-value")
+        );
     }
 
     #[tokio::test]
