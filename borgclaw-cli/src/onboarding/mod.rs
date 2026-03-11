@@ -1949,10 +1949,7 @@ mod tests {
                 body.len(),
                 body
             );
-            socket
-                .write_all(response.as_bytes())
-                .await
-                .unwrap();
+            socket.write_all(response.as_bytes()).await.unwrap();
         });
 
         std::fs::write(

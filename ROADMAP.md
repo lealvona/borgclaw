@@ -58,6 +58,7 @@ Recent landed work in this phase:
 Recent landed work in this phase:
 - WASM plugin manifests now accept the documented TOML permission table shape, default invocations honor `entry_point`, and non-exported function calls are rejected.
 - MCP stdio server commands now pass through the shared command policy instead of bypassing the blocklist.
+- Shared runtime coverage now includes local happy-path tests for QR URL encoding and URL shortening via a configured YOURLS-compatible provider.
 
 ## Phase 5: Hardening and UX
 
