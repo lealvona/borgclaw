@@ -291,12 +291,10 @@ impl SubAgentCoordinator {
     }
 
     pub async fn execute(&self, task_id: &str) -> Result<SubAgentResult, SubAgentError> {
-        let _permit = self
-            .permits
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| SubAgentError::ExecutionFailed("Sub-agent limiter closed".to_string()))?;
+        let _permit =
+            self.permits.clone().acquire_owned().await.map_err(|_| {
+                SubAgentError::ExecutionFailed("Sub-agent limiter closed".to_string())
+            })?;
 
         loop {
             let task = {
@@ -355,10 +353,7 @@ impl SubAgentCoordinator {
                 }
             };
 
-            match self
-                .apply_attempt_outcome(task_id, attempt_outcome)
-                .await
-            {
+            match self.apply_attempt_outcome(task_id, attempt_outcome).await {
                 RetryAction::Complete(result) => {
                     let _ = self.result_sender.send(result.clone()).await;
                     return Ok(result);
@@ -471,11 +466,7 @@ impl SubAgentCoordinator {
         persist_tasks(&self.state_path, &tasks);
     }
 
-    async fn apply_attempt_outcome(
-        &self,
-        task_id: &str,
-        outcome: AttemptOutcome,
-    ) -> RetryAction {
+    async fn apply_attempt_outcome(&self, task_id: &str, outcome: AttemptOutcome) -> RetryAction {
         let mut tasks = self.tasks.write().await;
         let Some(task) = tasks.get_mut(task_id) else {
             return RetryAction::TerminalError {
@@ -805,7 +796,10 @@ mod tests {
     fn subagent_explicit_tool_allowlist_still_respects_memory_policy() {
         let read_only = SubAgentBuilder::new("read_only")
             .memory_access(MemoryAccessType::ReadOnly)
-            .allow_tools(vec!["memory_store".to_string(), "memory_recall".to_string()])
+            .allow_tools(vec![
+                "memory_store".to_string(),
+                "memory_recall".to_string(),
+            ])
             .build("hello");
 
         let allowed = allowed_builtin_tools(&read_only, &SecurityConfig::default())

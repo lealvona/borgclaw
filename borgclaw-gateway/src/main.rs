@@ -860,9 +860,9 @@ mod tests {
         let webhook = configured_webhook_channel(&config).await.unwrap();
         let triggers = webhook.list_triggers().await;
 
-        assert!(triggers.iter().all(|trigger| {
-            trigger.secret.as_deref() == Some("hook-secret")
-        }));
+        assert!(triggers
+            .iter()
+            .all(|trigger| { trigger.secret.as_deref() == Some("hook-secret") }));
 
         std::fs::remove_dir_all(root).unwrap();
     }

@@ -327,8 +327,11 @@ impl GitHubClient {
         number: u32,
     ) -> Result<PendingConfirmation, GitHubError> {
         self.check_repo_access(owner, repo).await?;
-        self.begin_destructive_op(OperationType::MergePR, format!("{}/{}#{}", owner, repo, number))
-            .await
+        self.begin_destructive_op(
+            OperationType::MergePR,
+            format!("{}/{}#{}", owner, repo, number),
+        )
+        .await
     }
 
     pub async fn confirm_destructive_op(

@@ -4,13 +4,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::skills::{
-    BrowserConfig, ElevenLabsConfig, GitHubConfig, GitHubSafety, GoogleOAuthConfig,
-    ImageBackend, OperationType, RepoAccess, SttBackend, UrlShortenerProvider,
-};
 use crate::skills::image::{SdApiType, SdConfig};
 use crate::skills::stt::{OpenAiConfig, OpenWebUiConfig, WhisperCppConfig};
 use crate::skills::url_shortener::YourlsConfig;
+use crate::skills::{
+    BrowserConfig, ElevenLabsConfig, GitHubConfig, GitHubSafety, GoogleOAuthConfig, ImageBackend,
+    OperationType, RepoAccess, SttBackend, UrlShortenerProvider,
+};
 
 /// Main application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1001,7 +1001,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.skills.github.user_agent, "BorgClaw/1.0");
-        assert_eq!(config.skills.google.redirect_uri, "http://localhost:8080/callback");
+        assert_eq!(
+            config.skills.google.redirect_uri,
+            "http://localhost:8080/callback"
+        );
         assert_eq!(
             config.skills.browser.browser,
             crate::skills::browser::BrowserType::Chromium

@@ -58,7 +58,8 @@ impl Scheduler {
         poll_interval: Duration,
         handler: ScheduledJobHandler,
     ) -> Result<(), SchedulerError> {
-        self.start_with_policy(poll_interval, 1, None, handler).await
+        self.start_with_policy(poll_interval, 1, None, handler)
+            .await
     }
 
     pub async fn start_with_limit(
@@ -88,7 +89,9 @@ impl Scheduler {
         let mut running = self.running.write().await;
         if let Some(handle) = running.get(SCHEDULER_LOOP_ID) {
             if !handle.is_finished() {
-                return Err(SchedulerError::Error("scheduler already running".to_string()));
+                return Err(SchedulerError::Error(
+                    "scheduler already running".to_string(),
+                ));
             }
         }
         running.remove(SCHEDULER_LOOP_ID);
@@ -291,14 +294,15 @@ impl Scheduler {
             let batch_results = join_all(batch.iter().cloned().map(|job| async {
                 let started_at = Utc::now();
                 let result = match job_timeout {
-                    Some(timeout) => match tokio::time::timeout(timeout, handler(job.clone())).await
-                    {
-                        Ok(result) => result,
-                        Err(_) => Err(SchedulerError::JobFailed(format!(
-                            "job timed out after {} seconds",
-                            timeout.as_secs()
-                        ))),
-                    },
+                    Some(timeout) => {
+                        match tokio::time::timeout(timeout, handler(job.clone())).await {
+                            Ok(result) => result,
+                            Err(_) => Err(SchedulerError::JobFailed(format!(
+                                "job timed out after {} seconds",
+                                timeout.as_secs()
+                            ))),
+                        }
+                    }
                     None => handler(job.clone()).await,
                 };
                 (job, started_at, result)
@@ -434,7 +438,11 @@ mod tests {
     #[tokio::test]
     async fn scheduler_schedule_populates_missing_next_run() {
         let scheduler = Scheduler::new();
-        let mut job = new_job("oneshot", JobTrigger::OneShot(Utc::now() + Duration::seconds(5)), "echo hi");
+        let mut job = new_job(
+            "oneshot",
+            JobTrigger::OneShot(Utc::now() + Duration::seconds(5)),
+            "echo hi",
+        );
         job.next_run = None;
         let id = scheduler.schedule(job).await.unwrap();
 
@@ -446,7 +454,11 @@ mod tests {
     async fn scheduler_next_runs_includes_non_cron_jobs() {
         let scheduler = Scheduler::new();
         let interval_id = scheduler
-            .schedule(new_job("interval", JobTrigger::Interval(30), "echo interval"))
+            .schedule(new_job(
+                "interval",
+                JobTrigger::Interval(30),
+                "echo interval",
+            ))
             .await
             .unwrap();
         let oneshot_id = scheduler
@@ -466,7 +478,11 @@ mod tests {
     #[tokio::test]
     async fn scheduler_run_due_executes_due_jobs_and_updates_state() {
         let scheduler = Scheduler::new();
-        let mut job = new_job("oneshot", JobTrigger::OneShot(Utc::now() + Duration::seconds(5)), "echo hi");
+        let mut job = new_job(
+            "oneshot",
+            JobTrigger::OneShot(Utc::now() + Duration::seconds(5)),
+            "echo hi",
+        );
         job.next_run = Some(Utc::now() - Duration::seconds(1));
         let id = scheduler.schedule(job).await.unwrap();
 
@@ -508,7 +524,11 @@ mod tests {
     #[tokio::test]
     async fn scheduler_run_due_marks_failures() {
         let scheduler = Scheduler::new();
-        let mut job = new_job("oneshot", JobTrigger::OneShot(Utc::now() + Duration::seconds(5)), "echo hi");
+        let mut job = new_job(
+            "oneshot",
+            JobTrigger::OneShot(Utc::now() + Duration::seconds(5)),
+            "echo hi",
+        );
         job.next_run = Some(Utc::now() - Duration::seconds(1));
         let id = scheduler.schedule(job).await.unwrap();
 
@@ -524,7 +544,10 @@ mod tests {
         assert!(stored.last_run.is_some());
         assert_eq!(stored.run_history.len(), 1);
         assert_eq!(stored.run_history[0].status, JobStatus::Failed);
-        assert_eq!(stored.run_history[0].error.as_deref(), Some("Job failed: boom"));
+        assert_eq!(
+            stored.run_history[0].error.as_deref(),
+            Some("Job failed: boom")
+        );
         assert!(stored.run_history[0].retry_scheduled.is_none());
     }
 
@@ -602,7 +625,11 @@ mod tests {
     #[tokio::test]
     async fn scheduler_start_executes_due_jobs() {
         let scheduler = Scheduler::new();
-        let mut job = new_job("oneshot", JobTrigger::OneShot(Utc::now() + Duration::seconds(5)), "echo hi");
+        let mut job = new_job(
+            "oneshot",
+            JobTrigger::OneShot(Utc::now() + Duration::seconds(5)),
+            "echo hi",
+        );
         job.next_run = Some(Utc::now() - Duration::seconds(1));
         let id = scheduler.schedule(job).await.unwrap();
         let runs = Arc::new(AtomicUsize::new(0));
