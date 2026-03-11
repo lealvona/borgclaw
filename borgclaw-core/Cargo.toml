@@ -37,3 +37,6 @@ tokio-tungstenite.workspace = true
 [features]
 default = []
 sqlite = ["sqlx/default"]
+
+[dev-dependencies]
+wat = "1"

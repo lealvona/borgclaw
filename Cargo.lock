@@ -340,6 +340,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "wasmtime",
+ "wat",
 ]
 
 [[package]]
