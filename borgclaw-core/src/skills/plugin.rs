@@ -2,13 +2,13 @@
 
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Deserialize)]
 pub enum WasmPermission {
-    FileRead,
+    FileRead(Vec<PathBuf>),
     FileWrite(PathBuf),
     Network(Vec<String>),
     Memory,
@@ -99,6 +99,8 @@ impl WasmPlugin {
 pub struct PluginRegistry {
     plugins: Arc<RwLock<HashMap<String, WasmPlugin>>>,
     sandbox: crate::security::WasmSandbox,
+    workspace_root: PathBuf,
+    workspace_policy: crate::config::WorkspacePolicyConfig,
 }
 
 impl PluginRegistry {
@@ -106,7 +108,19 @@ impl PluginRegistry {
         Self {
             plugins: Arc::new(RwLock::new(HashMap::new())),
             sandbox: crate::security::WasmSandbox::new(10),
+            workspace_root: PathBuf::from("."),
+            workspace_policy: crate::config::WorkspacePolicyConfig::default(),
         }
+    }
+
+    pub fn with_workspace_policy(
+        mut self,
+        workspace_root: PathBuf,
+        workspace_policy: crate::config::WorkspacePolicyConfig,
+    ) -> Self {
+        self.workspace_root = workspace_root;
+        self.workspace_policy = workspace_policy;
+        self
     }
 
     pub async fn load_from_dir(&self, dir: &PathBuf) -> Result<(), PluginError> {
@@ -171,12 +185,21 @@ impl PluginRegistry {
 
         for permission in &manifest.permissions {
             match permission {
-                WasmPermission::FileRead => {
+                WasmPermission::FileRead(paths) => {
                     tracing::debug!(
                         plugin = %manifest.name,
                         permission = "FileRead",
+                        paths = ?paths,
                         "Plugin requesting file read access"
                     );
+                    if paths.is_empty() {
+                        return Err(PluginError::PermissionDenied(
+                            "FileRead permission requires at least one allowed path".to_string(),
+                        ));
+                    }
+                    for path in paths {
+                        self.validate_workspace_path(path)?;
+                    }
                 }
                 WasmPermission::FileWrite(path) => {
                     tracing::info!(
@@ -185,13 +208,7 @@ impl PluginRegistry {
                         path = %path.display(),
                         "Plugin requesting file write access"
                     );
-                    if path.exists() && !path.starts_with(std::env::temp_dir()) {
-                        tracing::warn!(
-                            plugin = %manifest.name,
-                            path = %path.display(),
-                            "Plugin attempting to write outside temp directory"
-                        );
-                    }
+                    self.validate_workspace_path(path)?;
                 }
                 WasmPermission::Network(hosts) => {
                     tracing::info!(
@@ -203,6 +220,15 @@ impl PluginRegistry {
                     if hosts.is_empty() {
                         return Err(PluginError::PermissionDenied(
                             "Network permission requires at least one allowed host".to_string(),
+                        ));
+                    }
+                    if hosts
+                        .iter()
+                        .any(|host| host.trim().is_empty() || host.contains("://"))
+                    {
+                        return Err(PluginError::PermissionDenied(
+                            "Network permission entries must be bare host[:port] values"
+                                .to_string(),
                         ));
                     }
                 }
@@ -227,6 +253,41 @@ impl PluginRegistry {
                         ));
                     }
                 }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_workspace_path(&self, path: &Path) -> Result<(), PluginError> {
+        let resolved = resolve_policy_path(&self.workspace_root, path).map_err(|err| {
+            PluginError::PermissionDenied(format!("invalid plugin path permission: {}", err))
+        })?;
+
+        let mut allowed_roots = vec![self.workspace_root.clone(), std::env::temp_dir()];
+        if !self.workspace_policy.workspace_only {
+            for root in &self.workspace_policy.allowed_roots {
+                if let Ok(resolved_root) = resolve_policy_path(&self.workspace_root, root) {
+                    allowed_roots.push(resolved_root);
+                }
+            }
+        }
+
+        if !allowed_roots.iter().any(|root| resolved.starts_with(root)) {
+            return Err(PluginError::PermissionDenied(format!(
+                "plugin path permission escapes allowed roots: {}",
+                path.display()
+            )));
+        }
+
+        for forbidden in &self.workspace_policy.forbidden_paths {
+            let resolved_forbidden = resolve_policy_path(&self.workspace_root, forbidden)
+                .map_err(|err| PluginError::PermissionDenied(err.to_string()))?;
+            if resolved.starts_with(&resolved_forbidden) {
+                return Err(PluginError::PermissionDenied(format!(
+                    "plugin path permission blocked by workspace policy: {}",
+                    forbidden.display()
+                )));
             }
         }
 
@@ -304,7 +365,7 @@ impl DocumentedPermissions {
     fn into_permissions(self) -> Vec<WasmPermission> {
         let mut permissions = Vec::new();
         if !self.file_read.is_empty() {
-            permissions.push(WasmPermission::FileRead);
+            permissions.push(WasmPermission::FileRead(self.file_read));
         }
         permissions.extend(self.file_write.into_iter().map(WasmPermission::FileWrite));
         if !self.network.is_empty() {
@@ -318,6 +379,28 @@ impl DocumentedPermissions {
         }
         permissions
     }
+}
+
+fn resolve_policy_path(workspace_root: &Path, path: &Path) -> Result<PathBuf, String> {
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        workspace_root.join(path)
+    };
+
+    std::fs::canonicalize(&candidate)
+        .or_else(|_| {
+            candidate
+                .parent()
+                .ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::NotFound, "path has no parent")
+                })
+                .and_then(|parent| {
+                    std::fs::canonicalize(parent)
+                        .map(|canon| canon.join(candidate.file_name().unwrap_or_default()))
+                })
+        })
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -350,7 +433,7 @@ shell = false
         assert!(manifest
             .permissions
             .iter()
-            .any(|permission| matches!(permission, WasmPermission::FileRead)));
+            .any(|permission| matches!(permission, WasmPermission::FileRead(paths) if paths == &vec![PathBuf::from("/workspace")])));
         assert!(manifest.permissions.iter().any(
             |permission| matches!(permission, WasmPermission::FileWrite(path) if path == &PathBuf::from("/tmp"))
         ));
@@ -386,5 +469,59 @@ shell = false
 
         assert!(matches!(err, PluginError::PermissionDenied(_)));
         assert!(err.to_string().contains("not exported"));
+    }
+
+    #[test]
+    fn plugin_registry_rejects_file_write_outside_workspace_policy() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_plugin_policy_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let registry = PluginRegistry::new().with_workspace_policy(
+            root.clone(),
+            crate::config::WorkspacePolicyConfig::default(),
+        );
+        let manifest = PluginManifest {
+            name: "example".to_string(),
+            version: "1.0.0".to_string(),
+            description: "Example".to_string(),
+            author: None,
+            permissions: vec![WasmPermission::FileWrite(PathBuf::from("/etc"))],
+            exports: vec!["main".to_string()],
+            entry_point: "main".to_string(),
+        };
+
+        let err = registry
+            .validate_permissions(&manifest, "main", "{}")
+            .unwrap_err();
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(matches!(err, PluginError::PermissionDenied(_)));
+        assert!(err.to_string().contains("escapes allowed roots"));
+    }
+
+    #[test]
+    fn plugin_registry_rejects_network_entries_with_scheme() {
+        let registry = PluginRegistry::new();
+        let manifest = PluginManifest {
+            name: "example".to_string(),
+            version: "1.0.0".to_string(),
+            description: "Example".to_string(),
+            author: None,
+            permissions: vec![WasmPermission::Network(vec![
+                "https://api.example.com".to_string()
+            ])],
+            exports: vec!["main".to_string()],
+            entry_point: "main".to_string(),
+        };
+
+        let err = registry
+            .validate_permissions(&manifest, "main", "{}")
+            .unwrap_err();
+
+        assert!(matches!(err, PluginError::PermissionDenied(_)));
+        assert!(err.to_string().contains("bare host[:port]"));
     }
 }
