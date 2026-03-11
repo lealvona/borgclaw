@@ -72,4 +72,4 @@ Recent landed work in this phase:
 - Shared command policy now supports an additive allowlist, and that policy is enforced consistently for foreground command execution, scheduled command execution, and MCP stdio server commands.
 - MCP stdio transport setup now inherits injected secret environment and resolves `${VAR}` placeholders through the security layer instead of relying on raw configured env only.
 - Plugin manifest file read/write permissions now preserve declared paths and are enforced against the shared workspace policy instead of being treated as mostly informational.
-- Gateway coverage now includes a black-box WebSocket protocol test for the documented welcome, pairing, auth-required, ping/pong, and structured error event flow.
+- Gateway coverage now includes black-box WebSocket and webhook tests for the documented welcome/pairing/auth event flow plus webhook health, secret enforcement, and rate-limiting behavior.
