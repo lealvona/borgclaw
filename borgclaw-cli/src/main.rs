@@ -350,6 +350,7 @@ async fn status(config: AppConfig) {
         "Security: wasm={}, docker={}, approval={:?}",
         config.security.wasm_sandbox, config.security.docker_sandbox, config.security.approval_mode
     );
+    println!("Security policy: {}", security_policy_status(&config));
     println!(
         "Vault: {}",
         config
@@ -472,6 +473,9 @@ async fn doctor(config: AppConfig) {
         Some(other) => println!("✗ Unsupported vault provider '{}'", other),
         None => println!("• Vault integration disabled"),
     }
+    for line in security_doctor_lines(&config) {
+        println!("{}", line);
+    }
     for line in integration_doctor_lines(&config).await {
         println!("{}", line);
     }
@@ -533,6 +537,63 @@ fn cli_path_available(binary: &std::path::Path) -> bool {
             })
         })
         .unwrap_or(false)
+}
+
+fn security_policy_status(config: &AppConfig) -> String {
+    format!(
+        "pairing={}({} digits/{}s), prompt_injection={}({:?}), leak_detection={}({:?}), blocklist={}+{}, wasm_instances={}",
+        enabled_disabled(config.security.pairing.enabled),
+        config.security.pairing.code_length,
+        config.security.pairing.expiry_seconds,
+        enabled_disabled(config.security.prompt_injection_defense),
+        config.security.injection_action,
+        enabled_disabled(config.security.secret_leak_detection),
+        config.security.leak_action,
+        enabled_disabled(config.security.command_blocklist),
+        config.security.extra_blocked.len(),
+        config.security.wasm_max_instances
+    )
+}
+
+fn security_doctor_lines(config: &AppConfig) -> Vec<String> {
+    vec![
+        format!(
+            "{} Approval mode {:?}",
+            marker(true),
+            config.security.approval_mode
+        ),
+        format!(
+            "{} Pairing {} ({} digits, {}s expiry)",
+            marker(config.security.pairing.enabled),
+            enabled_disabled(config.security.pairing.enabled),
+            config.security.pairing.code_length,
+            config.security.pairing.expiry_seconds
+        ),
+        format!(
+            "{} Prompt injection defense {} ({:?})",
+            marker(config.security.prompt_injection_defense),
+            enabled_disabled(config.security.prompt_injection_defense),
+            config.security.injection_action
+        ),
+        format!(
+            "{} Secret leak detection {} ({:?})",
+            marker(config.security.secret_leak_detection),
+            enabled_disabled(config.security.secret_leak_detection),
+            config.security.leak_action
+        ),
+        format!(
+            "{} WASM sandbox {} (max_instances={})",
+            marker(config.security.wasm_sandbox),
+            enabled_disabled(config.security.wasm_sandbox),
+            config.security.wasm_max_instances
+        ),
+        format!(
+            "{} Command blocklist {} (extra_patterns={})",
+            marker(config.security.command_blocklist),
+            enabled_disabled(config.security.command_blocklist),
+            config.security.extra_blocked.len()
+        ),
+    ]
 }
 
 async fn integration_status_lines(config: &AppConfig) -> Vec<String> {
@@ -907,6 +968,14 @@ fn marker(ok: bool) -> &'static str {
         "✓"
     } else {
         "✗"
+    }
+}
+
+fn enabled_disabled(value: bool) -> &'static str {
+    if value {
+        "enabled"
+    } else {
+        "disabled"
     }
 }
 
@@ -1378,6 +1447,54 @@ mod tests {
         assert!(lines
             .iter()
             .any(|line| line == "signal: enabled (missing signal-cli)"));
+    }
+
+    #[test]
+    fn security_policy_status_reports_effective_settings() {
+        let mut config = temp_config();
+        config.security.pairing.enabled = true;
+        config.security.pairing.code_length = 8;
+        config.security.pairing.expiry_seconds = 600;
+        config.security.prompt_injection_defense = true;
+        config.security.secret_leak_detection = true;
+        config.security.extra_blocked = vec!["^danger$".to_string(), "^rm ".to_string()];
+        config.security.wasm_max_instances = 16;
+
+        let line = security_policy_status(&config);
+
+        assert!(line.contains("pairing=enabled(8 digits/600s)"));
+        assert!(line.contains("prompt_injection=enabled(Block)"));
+        assert!(line.contains("leak_detection=enabled(Redact)"));
+        assert!(line.contains("blocklist=enabled+2"));
+        assert!(line.contains("wasm_instances=16"));
+    }
+
+    #[test]
+    fn security_doctor_lines_report_disabled_controls() {
+        let mut config = temp_config();
+        config.security.pairing.enabled = false;
+        config.security.prompt_injection_defense = false;
+        config.security.secret_leak_detection = false;
+        config.security.wasm_sandbox = false;
+        config.security.command_blocklist = false;
+
+        let lines = security_doctor_lines(&config);
+
+        assert!(lines
+            .iter()
+            .any(|line| line == "✗ Pairing disabled (6 digits, 300s expiry)"));
+        assert!(lines
+            .iter()
+            .any(|line| line == "✗ Prompt injection defense disabled (Block)"));
+        assert!(lines
+            .iter()
+            .any(|line| line == "✗ Secret leak detection disabled (Redact)"));
+        assert!(lines
+            .iter()
+            .any(|line| line == "✗ WASM sandbox disabled (max_instances=10)"));
+        assert!(lines
+            .iter()
+            .any(|line| line == "✗ Command blocklist disabled (extra_patterns=0)"));
     }
 }
 
