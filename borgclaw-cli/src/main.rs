@@ -6,6 +6,12 @@ use crate::onboarding::{run_init, InitArgs, StartTarget};
 use borgclaw_core::{
     channel::{ChannelType, InboundMessage, MessagePayload, MessageRouter, Sender},
     config::{load_config, save_config, AppConfig},
+    mcp::{
+        client::{McpClient, McpClientConfig},
+        transport::{
+            McpTransportConfig, SseTransportConfig, StdioTransportConfig, WebSocketTransportConfig,
+        },
+    },
     security::SecurityLayer,
     skills::SkillsRegistry,
 };
@@ -643,6 +649,30 @@ async fn integration_status_lines(config: &AppConfig) -> Vec<String> {
         "URL shortener: provider={}",
         config.skills.url_shortener.provider
     ));
+    let mut server_names = config.mcp.servers.keys().cloned().collect::<Vec<_>>();
+    server_names.sort();
+    if server_names.is_empty() {
+        lines.push("MCP: none configured".to_string());
+    } else {
+        let servers = server_names
+            .into_iter()
+            .map(|name| {
+                let transport = config
+                    .mcp
+                    .servers
+                    .get(&name)
+                    .map(mcp_transport_label)
+                    .unwrap_or("unknown");
+                format!("{name}:{transport}")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!(
+            "MCP: {} configured ({})",
+            config.mcp.servers.len(),
+            servers
+        ));
+    }
     lines
 }
 
@@ -704,6 +734,7 @@ async fn integration_doctor_lines(config: &AppConfig) -> Vec<String> {
         marker(url_shortener_ready(config).await),
         config.skills.url_shortener.provider
     ));
+    lines.extend(mcp_doctor_lines(config).await);
     lines
 }
 
@@ -840,6 +871,111 @@ async fn image_provider_status(config: &AppConfig) -> &'static str {
         "ready"
     } else {
         "missing config"
+    }
+}
+
+fn mcp_transport_label(server: &borgclaw_core::config::McpServerConfig) -> &'static str {
+    match server.transport.as_str() {
+        "stdio" => "stdio",
+        "sse" => "sse",
+        "websocket" => "websocket",
+        _ => "unknown",
+    }
+}
+
+async fn mcp_doctor_lines(config: &AppConfig) -> Vec<String> {
+    let mut server_names = config.mcp.servers.keys().cloned().collect::<Vec<_>>();
+    server_names.sort();
+
+    if server_names.is_empty() {
+        return vec!["• MCP servers not configured".to_string()];
+    }
+
+    let security = SecurityLayer::with_config(config.security.clone());
+    let mut lines = Vec::new();
+
+    for name in server_names {
+        let Some(server) = config.mcp.servers.get(&name) else {
+            continue;
+        };
+        let (ok, detail) = probe_mcp_server(&security, &name, server).await;
+        lines.push(format!(
+            "{} MCP {} ({}) {}",
+            marker(ok),
+            name,
+            mcp_transport_label(server),
+            detail
+        ));
+    }
+
+    lines
+}
+
+async fn probe_mcp_server(
+    security: &SecurityLayer,
+    name: &str,
+    server: &borgclaw_core::config::McpServerConfig,
+) -> (bool, String) {
+    let transport_config = match mcp_transport_config(security, server) {
+        Ok(config) => config,
+        Err(err) => return (false, err),
+    };
+
+    let mut client = McpClient::new(McpClientConfig {
+        name: "borgclaw-doctor".to_string(),
+        transport_config,
+        protocol_version: "2024-11-05".to_string(),
+    });
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(2), client.initialize()).await;
+    let _ = client.disconnect().await;
+
+    match result {
+        Ok(Ok(())) => (true, "reachable".to_string()),
+        Ok(Err(err)) => (false, err.to_string()),
+        Err(_) => (false, format!("timeout connecting to {}", name)),
+    }
+}
+
+fn mcp_transport_config(
+    security: &SecurityLayer,
+    server: &borgclaw_core::config::McpServerConfig,
+) -> Result<McpTransportConfig, String> {
+    match server.transport.as_str() {
+        "stdio" => {
+            let command = server
+                .command
+                .clone()
+                .ok_or_else(|| "missing command".to_string())?;
+            match security.check_command(&command) {
+                borgclaw_core::security::CommandCheck::Blocked(pattern) => {
+                    return Err(format!("blocked by policy: {}", pattern));
+                }
+                borgclaw_core::security::CommandCheck::Allowed => {}
+            }
+            if !cli_path_available(std::path::Path::new(&command)) {
+                return Err(format!("missing binary: {}", command));
+            }
+            Ok(McpTransportConfig::Stdio(StdioTransportConfig {
+                command,
+                args: server.args.clone(),
+                env: server.env.clone(),
+            }))
+        }
+        "sse" => Ok(McpTransportConfig::Sse(SseTransportConfig {
+            url: server
+                .url
+                .clone()
+                .ok_or_else(|| "missing url".to_string())?,
+            headers: server.headers.clone(),
+        })),
+        "websocket" => Ok(McpTransportConfig::WebSocket(WebSocketTransportConfig {
+            url: server
+                .url
+                .clone()
+                .ok_or_else(|| "missing url".to_string())?,
+        })),
+        other => Err(format!("unsupported transport: {}", other)),
     }
 }
 
@@ -1198,6 +1334,7 @@ mod tests {
     use super::*;
     use borgclaw_core::config::AppConfig;
     use borgclaw_core::security::SecurityLayer;
+    use std::collections::HashMap;
 
     fn temp_config() -> AppConfig {
         let mut config = AppConfig::default();
@@ -1447,6 +1584,83 @@ mod tests {
         assert!(lines
             .iter()
             .any(|line| line == "signal: enabled (missing signal-cli)"));
+    }
+
+    #[test]
+    fn integration_status_lists_configured_mcp_servers() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut config = temp_config();
+        config.mcp.servers.insert(
+            "filesystem".to_string(),
+            borgclaw_core::config::McpServerConfig {
+                transport: "stdio".to_string(),
+                command: Some("mcp-filesystem".to_string()),
+                args: Vec::new(),
+                env: HashMap::new(),
+                url: None,
+                headers: HashMap::new(),
+            },
+        );
+        config.mcp.servers.insert(
+            "github".to_string(),
+            borgclaw_core::config::McpServerConfig {
+                transport: "sse".to_string(),
+                command: None,
+                args: Vec::new(),
+                env: HashMap::new(),
+                url: Some("https://example.com/sse".to_string()),
+                headers: HashMap::new(),
+            },
+        );
+
+        let lines = runtime.block_on(integration_status_lines(&config));
+        assert!(lines
+            .iter()
+            .any(|line| line == "MCP: 2 configured (filesystem:stdio, github:sse)"));
+    }
+
+    #[test]
+    fn mcp_doctor_reports_blocked_stdio_server() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut config = temp_config();
+        config.mcp.servers.insert(
+            "blocked".to_string(),
+            borgclaw_core::config::McpServerConfig {
+                transport: "stdio".to_string(),
+                command: Some("rm -rf /".to_string()),
+                args: Vec::new(),
+                env: HashMap::new(),
+                url: None,
+                headers: HashMap::new(),
+            },
+        );
+
+        let lines = runtime.block_on(mcp_doctor_lines(&config));
+        assert!(lines
+            .iter()
+            .any(|line| line.starts_with("✗ MCP blocked (stdio) blocked by policy:")));
+    }
+
+    #[test]
+    fn mcp_doctor_reports_missing_binary_for_stdio_server() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut config = temp_config();
+        config.mcp.servers.insert(
+            "missing".to_string(),
+            borgclaw_core::config::McpServerConfig {
+                transport: "stdio".to_string(),
+                command: Some("/definitely/not/a/real/mcp".to_string()),
+                args: Vec::new(),
+                env: HashMap::new(),
+                url: None,
+                headers: HashMap::new(),
+            },
+        );
+
+        let lines = runtime.block_on(mcp_doctor_lines(&config));
+        assert!(lines.iter().any(|line| {
+            line == "✗ MCP missing (stdio) missing binary: /definitely/not/a/real/mcp"
+        }));
     }
 
     #[test]
