@@ -708,6 +708,8 @@ async fn api_chat_get() -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 
     #[test]
     fn error_event_is_structured() {
@@ -865,5 +867,137 @@ mod tests {
             .all(|trigger| { trigger.secret.as_deref() == Some("hook-secret") }));
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn websocket_protocol_flow_matches_documented_events() {
+        let mut config = AppConfig::default();
+        let websocket = config.channels.entry("websocket".to_string()).or_default();
+        websocket.enabled = true;
+        websocket
+            .extra
+            .insert("require_pairing".to_string(), toml::Value::Boolean(true));
+
+        let state = GatewayState {
+            config: Arc::new(config.clone()),
+            router: Arc::new(MessageRouter::from_config(&config)),
+            webhook: None,
+        };
+
+        let app = Router::new()
+            .route("/ws", get(websocket_handler))
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let (mut socket, _) = connect_async(format!("ws://{addr}/ws")).await.unwrap();
+
+        let welcome = next_event_of_type(&mut socket, "welcome").await;
+        assert_eq!(welcome["type"], "welcome");
+        assert_eq!(welcome["auth_required"], true);
+        let client_id = welcome["client_id"].as_str().unwrap().to_string();
+
+        socket
+            .send(WsMessage::Text(
+                serde_json::json!({
+                    "type": "message",
+                    "content": "hello before auth"
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let auth_required = next_event_of_type(&mut socket, "auth_required").await;
+        assert_eq!(auth_required["type"], "auth_required");
+        assert_eq!(auth_required["client_id"], client_id);
+
+        socket
+            .send(WsMessage::Text(
+                serde_json::json!({
+                    "type": "request_pairing"
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let pairing = next_event_of_type(&mut socket, "pairing_code").await;
+        assert_eq!(pairing["type"], "pairing_code");
+        assert_eq!(pairing["client_id"], client_id);
+        let pairing_code = pairing["pairing_code"].as_str().unwrap().to_string();
+        assert_eq!(pairing_code.len(), 6);
+
+        socket
+            .send(WsMessage::Text(
+                serde_json::json!({
+                    "type": "auth",
+                    "pairing_code": pairing_code
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let authenticated = next_event_of_type(&mut socket, "authenticated").await;
+        assert_eq!(authenticated["type"], "authenticated");
+        assert_eq!(authenticated["client_id"], client_id);
+        assert_eq!(authenticated["approved_sender"], client_id);
+
+        socket
+            .send(WsMessage::Text(
+                serde_json::json!({
+                    "type": "ping"
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let pong = next_event_of_type(&mut socket, "pong").await;
+        assert_eq!(pong["type"], "pong");
+
+        socket
+            .send(WsMessage::Text(
+                serde_json::json!({
+                    "type": "unknown"
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let error = next_event_of_type(&mut socket, "error").await;
+        assert_eq!(error["type"], "error");
+        assert_eq!(error["message"], "Unknown message type");
+
+        socket.close(None).await.unwrap();
+        server.abort();
+    }
+
+    async fn next_text_message(
+        socket: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    ) -> serde_json::Value {
+        loop {
+            match socket.next().await.unwrap().unwrap() {
+                WsMessage::Text(text) => return serde_json::from_str(&text).unwrap(),
+                WsMessage::Ping(_) | WsMessage::Pong(_) => continue,
+                other => panic!("unexpected websocket message: {other:?}"),
+            }
+        }
+    }
+
+    async fn next_event_of_type(
+        socket: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        event_type: &str,
+    ) -> serde_json::Value {
+        loop {
+            let event = next_text_message(socket).await;
+            if event["type"] == event_type {
+                return event;
+            }
+        }
     }
 }
