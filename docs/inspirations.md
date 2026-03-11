@@ -42,7 +42,7 @@ Good examples:
 
 - The README pushes a terminal-first onboarding path via `openclaw onboard`, and explicitly says the wizard is the recommended setup path for gateway, workspace, channels, and skills. This is a good model for BorgClaw's onboarding promises in [docs/onboarding.md](onboarding.md).  
   Source: [OpenClaw README wizard section](https://github.com/openclaw/openclaw#readme)
-- OpenClaw exposes a clear gateway/control-plane surface with sessions, presence, config, cron, webhooks, and control UI. BorgClaw's gateway docs promise a similar role, but the roadmap still calls out shared routing and structured WebSocket events as explicit remaining work.  
+- OpenClaw exposes a clear gateway/control-plane surface with sessions, presence, config, cron, webhooks, and control UI. BorgClaw has landed shared routing and structured gateway events, but the broader control-plane/operator surface is still thinner.  
   Source: [OpenClaw README gateway/control-plane notes](https://github.com/openclaw/openclaw#readme)
 - The repo layout shows deliberate runtime segregation for sandboxing with `Dockerfile.sandbox`, `Dockerfile.sandbox-browser`, and `Dockerfile.sandbox-common`. That is stronger than a single toggle-based sandbox story.  
   Source: [OpenClaw repository root](https://github.com/openclaw/openclaw)
@@ -62,7 +62,7 @@ Best matches for current BorgClaw gaps:
 
 - `ROADMAP.md` Phase 2: shared routing, pairing consistency, structured gateway events.
 - `ROADMAP.md` Phase 5: onboarding, `status`, and `doctor` maturity.
-- `borgclaw-cli/src/main.rs`: local skill installs exist now, but remote/registry installs still do not.
+- `borgclaw-cli/src/main.rs`: remote `SKILL.md` installs and GitHub-backed registry listing now exist, but broader managed skill lifecycle remains thinner than OpenClaw.
 
 ## ZeroClaw
 
@@ -154,7 +154,7 @@ Good examples:
   Source: [PicoClaw command routing notes](https://github.com/sipeed/picoclaw#readme)
 - PicoClaw's `restrict_to_workspace` policy is detailed, tool-specific, and inherited across the main agent, subagents, and heartbeat tasks. That is a direct answer to “how do we avoid security bypasses through background paths?”  
   Source: [PicoClaw security sandbox](https://github.com/sipeed/picoclaw#readme)
-- It documents heartbeat tasks as a user-visible contract with config, cadence, and a clear handoff to subagents for long work. BorgClaw documents heartbeat and subagents, but parts of the runtime remain placeholder-heavy.  
+- It documents heartbeat tasks as a user-visible contract with config, cadence, and a clear handoff to subagents for long work. BorgClaw has landed heartbeat runtime ownership, persistence, retries, and subagent durability, but explicit workspace/security inheritance is still thinner.  
   Source: [PicoClaw heartbeat and subagent communication](https://github.com/sipeed/picoclaw#readme)
 - PicoClaw's provider config is model-centric, supports fallbacks, and keeps session/channel/provider settings in one coherent config story.  
   Source: [PicoClaw providers and config](https://github.com/sipeed/picoclaw#readme)
@@ -241,7 +241,7 @@ Best upstream references:
 
 Current BorgClaw signal:
 
-- `ROADMAP.md` Phase 3 still lists heartbeat scheduler execution and sub-agent status tracking as incomplete overall, but recent hardening landed engine-state gating, sub-agent concurrency/cancellation controls, parent-context inheritance, stable scheduler `next_run` state, scheduler timeout/concurrency policy, scheduler run history, and persisted heartbeat/sub-agent task state.
+- `ROADMAP.md` Phase 3 now has most runtime mechanics landed: engine-state gating, shared-runtime heartbeat startup, sub-agent concurrency/cancellation controls, parent-context inheritance, stable scheduler `next_run` state, scheduler timeout/concurrency policy, scheduler run history, and persisted heartbeat/sub-agent task state.
 - `docs/memory.md` documents both features as if they already exist as finished runtime contracts.
 
 Best upstream references:
@@ -254,8 +254,8 @@ Best upstream references:
 Current BorgClaw signal:
 
 - `ROADMAP.md` Phase 4 calls for operational paths, unified runtime results, and MCP/plugin routing.
-- `borgclaw-core/src/agent/tools.rs` now has a basic `web_search`, but the broader web/runtime integration is still much thinner than the other skill paths.
-- `borgclaw-cli/src/main.rs` now supports local `SKILL.md` installs, but remote URL and registry installs are still missing.
+- `borgclaw-core/src/agent/tools.rs` now has shared runtime coverage across GitHub, Google, browser, STT, TTS, image, QR, URL, MCP, and plugin paths, but deeper operational completeness and end-to-end coverage still remain.
+- `borgclaw-cli/src/main.rs` now supports local installs, remote `SKILL.md`, GitHub `owner/repo`, and GitHub-backed registry listing, but packaging/publishing and richer managed lifecycle remain open.
 
 Best upstream references:
 
