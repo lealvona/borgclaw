@@ -2951,6 +2951,128 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn plugin_invoke_executes_loaded_wasm_plugin() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_plugin_runtime_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let skills_dir = root.join("skills");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        write_test_plugin(
+            &skills_dir,
+            "echo_plugin",
+            r#"
+name = "echo_plugin"
+version = "1.0.0"
+description = "Test plugin"
+entry_point = "invoke"
+
+[permissions]
+file_read = ["."]
+"#,
+        );
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &HeartbeatConfig::default(),
+            &SchedulerConfig::default(),
+            &crate::config::SkillsConfig {
+                skills_path: skills_dir.clone(),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let result = execute_tool(
+            &ToolCall::new(
+                "plugin_invoke",
+                HashMap::from([("plugin".to_string(), serde_json::json!("echo_plugin"))]),
+            ),
+            &runtime,
+        )
+        .await;
+
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(result.success);
+        assert_eq!(result.output, "plugin ok");
+        assert_eq!(
+            result.metadata.get("plugin").map(String::as_str),
+            Some("echo_plugin")
+        );
+        assert_eq!(
+            result.metadata.get("function").map(String::as_str),
+            Some("invoke")
+        );
+    }
+
+    #[tokio::test]
+    async fn plugin_invoke_enforces_workspace_permissions_for_loaded_plugin() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_plugin_runtime_policy_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let skills_dir = root.join("skills");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        write_test_plugin(
+            &skills_dir,
+            "blocked_plugin",
+            r#"
+name = "blocked_plugin"
+version = "1.0.0"
+description = "Blocked plugin"
+entry_point = "invoke"
+
+[permissions]
+file_write = ["/etc"]
+"#,
+        );
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &HeartbeatConfig::default(),
+            &SchedulerConfig::default(),
+            &crate::config::SkillsConfig {
+                skills_path: skills_dir.clone(),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let result = execute_tool(
+            &ToolCall::new(
+                "plugin_invoke",
+                HashMap::from([("plugin".to_string(), serde_json::json!("blocked_plugin"))]),
+            ),
+            &runtime,
+        )
+        .await;
+
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(!result.success);
+        assert!(result.output.contains("escapes allowed roots"));
+    }
+
+    #[tokio::test]
     async fn supervised_mcp_call_requires_approval() {
         let root = std::env::temp_dir().join(format!(
             "borgclaw_mcp_approval_test_{}",
@@ -4205,6 +4327,24 @@ mod tests {
         assert!(result.success);
         assert_eq!(result.metadata.get("failed").map(String::as_str), Some("1"));
         assert_eq!(jobs[0].status, JobStatus::Failed);
+    }
+
+    fn write_test_plugin(skills_dir: &std::path::Path, name: &str, manifest: &str) {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (memory (export "memory") 1)
+              (data (i32.const 16) "plugin ok\00")
+              (func (export "alloc") (param i32) (result i32)
+                (i32.const 0))
+              (func (export "invoke") (param i32 i32) (result i32)
+                (i32.const 16)))
+        "#,
+        )
+        .unwrap();
+
+        std::fs::write(skills_dir.join(format!("{name}.wasm")), wasm).unwrap();
+        std::fs::write(skills_dir.join(format!("{name}.toml")), manifest.trim()).unwrap();
     }
 }
 
