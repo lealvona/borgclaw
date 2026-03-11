@@ -3073,6 +3073,107 @@ file_write = ["/etc"]
     }
 
     #[tokio::test]
+    async fn qr_encode_url_generates_bytes() {
+        let result = execute_tool(
+            &ToolCall::new(
+                "qr_encode_url",
+                HashMap::from([(
+                    "url".to_string(),
+                    serde_json::json!("https://example.com/docs"),
+                )]),
+            ),
+            &test_runtime().await,
+        )
+        .await;
+
+        assert!(result.success);
+        assert!(result.output.contains("generated"));
+        assert!(
+            result
+                .metadata
+                .get("bytes")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or_default()
+                > 0
+        );
+    }
+
+    #[tokio::test]
+    async fn url_shorten_uses_configured_yourls_provider() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_url_shorten_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 2048];
+            let read = socket.read(&mut buf).await.unwrap();
+            let request = String::from_utf8_lossy(&buf[..read]);
+            assert!(request.contains("action=shorturl"));
+            assert!(request.contains("signature=testsig"));
+            let body = r#"{"shorturl":"https://sho.rt/abc"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &HeartbeatConfig::default(),
+            &SchedulerConfig::default(),
+            &crate::config::SkillsConfig {
+                url_shortener: crate::config::UrlShortenerSkillConfig {
+                    provider: "yourls".to_string(),
+                    yourls: crate::config::DocumentedYourlsConfig {
+                        base_url: format!("http://{addr}/yourls-api.php"),
+                        signature: "testsig".to_string(),
+                        username: String::new(),
+                        password: String::new(),
+                    },
+                },
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let result = execute_tool(
+            &ToolCall::new(
+                "url_shorten",
+                HashMap::from([(
+                    "url".to_string(),
+                    serde_json::json!("https://example.com/very/long/path"),
+                )]),
+            ),
+            &runtime,
+        )
+        .await;
+
+        server.await.unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(result.success);
+        assert_eq!(result.output, "https://sho.rt/abc");
+    }
+
+    #[tokio::test]
     async fn supervised_mcp_call_requires_approval() {
         let root = std::env::temp_dir().join(format!(
             "borgclaw_mcp_approval_test_{}",
@@ -4345,6 +4446,33 @@ file_write = ["/etc"]
 
         std::fs::write(skills_dir.join(format!("{name}.wasm")), wasm).unwrap();
         std::fs::write(skills_dir.join(format!("{name}.toml")), manifest.trim()).unwrap();
+    }
+
+    async fn test_runtime() -> ToolRuntime {
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_tools_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &HeartbeatConfig::default(),
+            &SchedulerConfig::default(),
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap()
     }
 }
 
