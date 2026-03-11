@@ -447,7 +447,10 @@ impl SecurityLayer {
             ApprovalMode::ReadOnly => true,
             ApprovalMode::Supervised => {
                 // Only dangerous tools need approval
-                matches!(tool_name, "execute_command" | "write_file" | "delete")
+                matches!(
+                    tool_name,
+                    "execute_command" | "write_file" | "delete" | "plugin_invoke" | "mcp_call_tool"
+                )
             }
             ApprovalMode::Autonomous => false,
         }

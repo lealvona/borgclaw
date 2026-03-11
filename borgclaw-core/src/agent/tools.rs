@@ -473,6 +473,41 @@ fn sanitize_tool_result(mut result: ToolResult, runtime: &ToolRuntime) -> ToolRe
     result
 }
 
+async fn require_tool_approval(
+    tool_name: &str,
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> Option<ToolResult> {
+    if !runtime
+        .security
+        .needs_approval(tool_name, runtime.security.approval_mode())
+    {
+        return None;
+    }
+
+    let approval_token = arguments
+        .get("approval_token")
+        .and_then(|value| value.as_str());
+
+    if let Some(token) = approval_token {
+        if let Err(err) = runtime.security.consume_approval(tool_name, token).await {
+            return Some(ToolResult::err(err.to_string()));
+        }
+        return None;
+    }
+
+    let token = runtime.security.request_approval(tool_name).await;
+    Some(
+        ToolResult::ok(format!(
+            "approval required; rerun with /approve {{\"tool\":\"{}\",\"token\":\"{}\"}}",
+            tool_name, token
+        ))
+        .with_metadata("approval_required", "true")
+        .with_metadata("approval_tool", tool_name)
+        .with_metadata("approval_token", token),
+    )
+}
+
 async fn memory_store(
     arguments: &HashMap<String, serde_json::Value>,
     runtime: &ToolRuntime,
@@ -557,32 +592,8 @@ async fn execute_command(
         Err(err) => return ToolResult::err(err),
     };
     let timeout_secs = get_u64(arguments, "timeout").unwrap_or(60);
-    let approval_token = arguments
-        .get("approval_token")
-        .and_then(|value| value.as_str());
-
-    if runtime
-        .security
-        .needs_approval("execute_command", runtime.security.approval_mode())
-    {
-        if let Some(token) = approval_token {
-            if let Err(err) = runtime
-                .security
-                .consume_approval("execute_command", token)
-                .await
-            {
-                return ToolResult::err(err.to_string());
-            }
-        } else {
-            let token = runtime.security.request_approval("execute_command").await;
-            return ToolResult::ok(format!(
-                "approval required; rerun with /approve {{\"tool\":\"execute_command\",\"token\":\"{}\"}}",
-                token
-            ))
-            .with_metadata("approval_required", "true")
-            .with_metadata("approval_tool", "execute_command")
-            .with_metadata("approval_token", token);
-        }
+    if let Some(result) = require_tool_approval("execute_command", arguments, runtime).await {
+        return result;
     }
 
     match runtime.security.check_command(&command) {
@@ -1044,6 +1055,10 @@ async fn plugin_invoke(
     arguments: &HashMap<String, serde_json::Value>,
     runtime: &ToolRuntime,
 ) -> ToolResult {
+    if let Some(result) = require_tool_approval("plugin_invoke", arguments, runtime).await {
+        return result;
+    }
+
     let plugin = match get_required_string(arguments, "plugin") {
         Ok(value) => value,
         Err(err) => return ToolResult::err(err),
@@ -2250,6 +2265,10 @@ async fn mcp_call_tool(
     arguments: &HashMap<String, serde_json::Value>,
     runtime: &ToolRuntime,
 ) -> ToolResult {
+    if let Some(result) = require_tool_approval("mcp_call_tool", arguments, runtime).await {
+        return result;
+    }
+
     let server = match get_required_string(arguments, "server") {
         Ok(value) => value,
         Err(err) => return ToolResult::err(err),
@@ -2694,6 +2713,127 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
         assert!(!result.success);
         assert!(result.output.contains("Plugin not found"));
+    }
+
+    #[tokio::test]
+    async fn supervised_plugin_invoke_requires_approval() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_plugin_approval_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &HeartbeatConfig::default(),
+            &SchedulerConfig::default(),
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig {
+                approval_mode: ApprovalMode::Supervised,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let result = execute_tool(
+            &ToolCall::new(
+                "plugin_invoke",
+                HashMap::from([("plugin".to_string(), serde_json::json!("missing"))]),
+            ),
+            &runtime,
+        )
+        .await;
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(result.success);
+        assert_eq!(
+            result.metadata.get("approval_required").map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            result.metadata.get("approval_tool").map(String::as_str),
+            Some("plugin_invoke")
+        );
+    }
+
+    #[tokio::test]
+    async fn supervised_mcp_call_requires_approval() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_mcp_approval_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &HeartbeatConfig::default(),
+            &SchedulerConfig::default(),
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig {
+                servers: HashMap::from([(
+                    "demo".to_string(),
+                    crate::config::McpServerConfig {
+                        transport: "stdio".to_string(),
+                        command: Some("echo".to_string()),
+                        args: Vec::new(),
+                        env: HashMap::new(),
+                        url: None,
+                        headers: HashMap::new(),
+                    },
+                )]),
+            },
+            &SecurityConfig {
+                approval_mode: ApprovalMode::Supervised,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let result = execute_tool(
+            &ToolCall::new(
+                "mcp_call_tool",
+                HashMap::from([
+                    ("server".to_string(), serde_json::json!("demo")),
+                    ("tool".to_string(), serde_json::json!("noop")),
+                ]),
+            ),
+            &runtime,
+        )
+        .await;
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(result.success);
+        assert_eq!(
+            result.metadata.get("approval_required").map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            result.metadata.get("approval_tool").map(String::as_str),
+            Some("mcp_call_tool")
+        );
     }
 
     #[tokio::test]
@@ -3906,6 +4046,7 @@ pub fn builtin_tools() -> Vec<Tool> {
                 .into(),
                 vec!["plugin".to_string()],
             ))
+            .with_approval(true)
             .with_tags(vec!["plugin".to_string()]),
         Tool::new("github_list_repos", "List accessible GitHub repositories")
             .with_schema(ToolSchema::object(
@@ -4444,6 +4585,7 @@ pub fn builtin_tools() -> Vec<Tool> {
             .into(),
             vec!["server".to_string(), "tool".to_string()],
         ))
+        .with_approval(true)
         .with_tags(vec!["mcp".to_string(), "integration".to_string()]),
         Tool::new("fetch_url", "Fetch content from a URL")
             .with_schema(ToolSchema::object(

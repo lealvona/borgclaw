@@ -65,3 +65,6 @@ Recent landed work in this phase:
 - Finish secret storage and vault integration.
 - Expand onboarding, `status`, and `doctor` to reflect provider, channel, memory, and integration state.
 - Add focused unit and integration coverage for each completed phase.
+
+Recent landed work in this phase:
+- Plugin and MCP invocation now use the same approval flow as command execution in supervised mode, instead of bypassing approval semantics entirely.
