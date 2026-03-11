@@ -69,3 +69,4 @@ Recent landed work in this phase:
 Recent landed work in this phase:
 - Plugin and MCP invocation now use the same approval flow as command execution in supervised mode, instead of bypassing approval semantics entirely.
 - Shared file-path tools now honor a typed workspace policy with forbidden paths and additive allowed roots, and scheduled tool execution inherits that policy through the shared runtime path.
+- Shared command policy now supports an additive allowlist, and that policy is enforced consistently for foreground command execution, scheduled command execution, and MCP stdio server commands.

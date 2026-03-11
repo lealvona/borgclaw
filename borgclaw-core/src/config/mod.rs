@@ -153,6 +153,8 @@ pub struct SecurityConfig {
     pub command_blocklist: bool,
     /// Additional blocklist entries
     pub extra_blocked: Vec<String>,
+    /// Optional command allowlist; when non-empty, commands must match at least one pattern
+    pub allowed_commands: Vec<String>,
     /// Execution approval mode
     pub approval_mode: ApprovalMode,
     /// Pairing configuration
@@ -233,6 +235,7 @@ impl Default for SecurityConfig {
             docker_sandbox: false,
             command_blocklist: true,
             extra_blocked: Vec::new(),
+            allowed_commands: Vec::new(),
             approval_mode: ApprovalMode::Autonomous,
             pairing: PairingConfig::default(),
             prompt_injection_defense: true,
@@ -780,6 +783,7 @@ mod tests {
             wasm_max_instances = 10
             command_blocklist = true
             extra_blocked = ["^custom_dangerous_command"]
+            allowed_commands = ["^git status$", "^ls( .*)?$"]
             prompt_injection_defense = true
             injection_action = "sanitize"
             leak_detection = true
@@ -799,6 +803,10 @@ mod tests {
         assert_eq!(
             config.security.extra_blocked,
             vec!["^custom_dangerous_command"]
+        );
+        assert_eq!(
+            config.security.allowed_commands,
+            vec!["^git status$", "^ls( .*)?$"]
         );
         assert!(matches!(
             config.security.injection_action,
