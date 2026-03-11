@@ -4,12 +4,12 @@
 
 Implement the remaining documented BorgClaw feature set in a security-first sequence. The goal is to make the runtime match the README and `docs/` contract without breaking the existing config and crate layout.
 
-Status note as of March 10, 2026:
+Status note as of March 11, 2026:
 - Phase 1 is largely complete.
 - Phase 2 is largely complete.
-- Phase 3 is partially complete. Memory, session compaction, scheduler execution, sub-agent persistence, and heartbeat persistence are landed, but background execution policy inheritance and retry/dead-letter behavior are still behind the documented end state.
-- Phase 4 is partially complete, with several skill families implemented as clients but not fully exposed through the shared tool/runtime layer.
-- Phase 5 is partially complete, with security enforcement substantially improved but onboarding/auth/operator UX still behind the documented end state.
+- Phase 3 is largely complete. Memory, session compaction, scheduler execution, sub-agent persistence, heartbeat persistence, retry/dead-letter behavior, and background-context inheritance are landed; explicit workspace/security policy depth still remains.
+- Phase 4 is partially complete, with substantial shared tool/runtime coverage across documented skill families, but broader operational completeness still remains.
+- Phase 5 is partially complete, with security enforcement substantially improved but security-pipeline unification and operator UX still behind the documented end state.
 
 ## Phase 1: Core Runtime
 
