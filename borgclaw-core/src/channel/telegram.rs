@@ -54,8 +54,8 @@ impl Channel for TelegramChannel {
             .as_deref()
             .and_then(resolve_telegram_token)
             .ok_or_else(|| {
-            ChannelError::AuthFailed("Telegram bot token not provided".to_string())
-        })?;
+                ChannelError::AuthFailed("Telegram bot token not provided".to_string())
+            })?;
 
         let bot = Bot::new(token);
 

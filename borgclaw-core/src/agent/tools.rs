@@ -9,8 +9,8 @@ use crate::memory::{new_entry, new_entry_for_group, Memory, MemoryQuery, SqliteM
 use crate::scheduler::{new_job, JobTrigger, Scheduler, SchedulerError, SchedulerTrait};
 use crate::security::{CommandCheck, SecurityLayer};
 use crate::skills::{
-    BrowserSkill, CdpClient, GitHubClient, GoogleClient, ImageClient, ImageParams, PluginRegistry,
-    PlaywrightClient, QrFormat, QrSkill, SttClient, TtsClient, UrlShortener,
+    BrowserSkill, CdpClient, GitHubClient, GoogleClient, ImageClient, ImageParams,
+    PlaywrightClient, PluginRegistry, QrFormat, QrSkill, SttClient, TtsClient, UrlShortener,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -388,7 +388,9 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "github_create_branch" => github_create_branch(&call.arguments, runtime).await,
         "github_list_prs" => github_list_prs(&call.arguments, runtime).await,
         "github_create_pr" => github_create_pr(&call.arguments, runtime).await,
-        "github_prepare_delete_branch" => github_prepare_delete_branch(&call.arguments, runtime).await,
+        "github_prepare_delete_branch" => {
+            github_prepare_delete_branch(&call.arguments, runtime).await
+        }
         "github_delete_branch" => github_delete_branch(&call.arguments, runtime).await,
         "github_prepare_merge_pr" => github_prepare_merge_pr(&call.arguments, runtime).await,
         "github_merge_pr" => github_merge_pr(&call.arguments, runtime).await,
@@ -733,11 +735,7 @@ async fn schedule_task(
         None => JobTrigger::OneShot(chrono::Utc::now() + chrono::Duration::seconds(1)),
     };
 
-    let mut job = new_job(
-        scheduled.job_name(),
-        trigger,
-        scheduled.job_action(),
-    );
+    let mut job = new_job(scheduled.job_name(), trigger, scheduled.job_action());
     scheduled.apply_metadata(&mut job.metadata);
     apply_invocation_metadata(runtime, &mut job.metadata);
     let id = {
@@ -756,9 +754,7 @@ async fn run_scheduled_tasks(runtime: &ToolRuntime) -> ToolResult {
     let results = scheduler
         .run_due(|job| {
             let runtime = runtime.clone();
-            async move {
-                execute_scheduled_job(&job, &runtime).await
-            }
+            async move { execute_scheduled_job(&job, &runtime).await }
         })
         .await;
 
@@ -787,12 +783,11 @@ async fn execute_scheduled_job(
         Some("message") => {
             let result = message(&HashMap::from([(
                 "text".to_string(),
-                serde_json::json!(
-                    job.metadata
-                        .get("text")
-                        .cloned()
-                        .unwrap_or_else(|| job.action.clone())
-                ),
+                serde_json::json!(job
+                    .metadata
+                    .get("text")
+                    .cloned()
+                    .unwrap_or_else(|| job.action.clone())),
             )]));
             if result.success {
                 Ok(())
@@ -801,11 +796,9 @@ async fn execute_scheduled_job(
             }
         }
         Some("tool_call") => {
-            let tool_name = job
-                .metadata
-                .get("tool_name")
-                .cloned()
-                .ok_or_else(|| SchedulerError::Error("scheduled job missing tool_name".to_string()))?;
+            let tool_name = job.metadata.get("tool_name").cloned().ok_or_else(|| {
+                SchedulerError::Error("scheduled job missing tool_name".to_string())
+            })?;
             if matches!(tool_name.as_str(), "schedule_task" | "run_scheduled_tasks") {
                 return Err(SchedulerError::Error(format!(
                     "scheduled tool not allowed: {}",
@@ -829,8 +822,11 @@ async fn execute_scheduled_job(
                 .map_err(|err| SchedulerError::Error(err.to_string()))?
                 .unwrap_or_default();
             let scheduled_runtime = runtime.with_scheduled_job_context(job);
-            let result =
-                execute_tool(&ToolCall::new(tool_name.clone(), arguments), &scheduled_runtime).await;
+            let result = execute_tool(
+                &ToolCall::new(tool_name.clone(), arguments),
+                &scheduled_runtime,
+            )
+            .await;
             if result.success {
                 Ok(())
             } else {
@@ -1052,17 +1048,17 @@ async fn plugin_invoke(
         Ok(value) => value,
         Err(err) => return ToolResult::err(err),
     };
-    let function = if let Some(function) = arguments.get("function").and_then(|value| value.as_str())
-    {
-        function.to_string()
-    } else {
-        runtime
-            .plugins
-            .get(&plugin)
-            .await
-            .map(|manifest| manifest.entry_point)
-            .unwrap_or_else(|| "invoke".to_string())
-    };
+    let function =
+        if let Some(function) = arguments.get("function").and_then(|value| value.as_str()) {
+            function.to_string()
+        } else {
+            runtime
+                .plugins
+                .get(&plugin)
+                .await
+                .map(|manifest| manifest.entry_point)
+                .unwrap_or_else(|| "invoke".to_string())
+        };
     let input = arguments
         .get("input")
         .cloned()
@@ -1097,7 +1093,8 @@ async fn github_list_repos(
     match client.list_repos(visibility).await {
         Ok(repos) if repos.is_empty() => ToolResult::ok("no repositories"),
         Ok(repos) => ToolResult::ok(
-            repos.into_iter()
+            repos
+                .into_iter()
                 .map(|repo| format!("{} ({})", repo.full_name, repo.default_branch))
                 .collect::<Vec<_>>()
                 .join("\n"),
@@ -1192,7 +1189,10 @@ async fn github_create_branch(
         Err(err) => return ToolResult::err(err),
     };
 
-    match client.create_branch(&owner, &repo, &branch, &from_sha).await {
+    match client
+        .create_branch(&owner, &repo, &branch, &from_sha)
+        .await
+    {
         Ok(created) => ToolResult::ok(format!("{} | {}", created.name, created.sha))
             .with_metadata("owner", owner)
             .with_metadata("repo", repo),
@@ -1263,7 +1263,10 @@ async fn github_create_pr(
         .and_then(|value| value.as_str())
         .unwrap_or("");
 
-    match client.create_pr(&owner, &repo, &title, body, &head, &base).await {
+    match client
+        .create_pr(&owner, &repo, &title, body, &head, &base)
+        .await
+    {
         Ok(pr) => ToolResult::ok(format!("{} #{}", pr.html_url, pr.number))
             .with_metadata("owner", owner)
             .with_metadata("repo", repo),
@@ -1386,7 +1389,10 @@ async fn github_merge_pr(
         .get("confirmation_token")
         .and_then(|value| value.as_str());
 
-    match client.merge_pr(&owner, &repo, number, confirmation_token).await {
+    match client
+        .merge_pr(&owner, &repo, number, confirmation_token)
+        .await
+    {
         Ok(true) => ToolResult::ok(format!("merged pull request {}", number)),
         Ok(false) => ToolResult::err("merge request was not accepted"),
         Err(err) => ToolResult::err(err.to_string()),
@@ -1654,7 +1660,8 @@ async fn google_search_files(
     match client.search_files(&query).await {
         Ok(files) if files.is_empty() => ToolResult::ok("no files"),
         Ok(files) => ToolResult::ok(
-            files.into_iter()
+            files
+                .into_iter()
                 .map(|file| format!("{} | {} | {}", file.id, file.name, file.mime_type))
                 .collect::<Vec<_>>()
                 .join("\n"),
@@ -1675,8 +1682,9 @@ async fn google_download_file(
 
     let drive = crate::skills::DriveClient::new(client.auth());
     match drive.download_file(&id).await {
-        Ok(bytes) => ToolResult::ok(format!("downloaded {} bytes", bytes.len()))
-            .with_metadata("file_id", id),
+        Ok(bytes) => {
+            ToolResult::ok(format!("downloaded {} bytes", bytes.len())).with_metadata("file_id", id)
+        }
         Err(err) => ToolResult::err(err.to_string()),
     }
 }
@@ -1699,7 +1707,8 @@ async fn google_list_events(
     {
         Ok(events) if events.is_empty() => ToolResult::ok("no events"),
         Ok(events) => ToolResult::ok(
-            events.into_iter()
+            events
+                .into_iter()
                 .map(|event| format!("{} | {}", event.start.to_rfc3339(), event.summary))
                 .collect::<Vec<_>>()
                 .join("\n"),
@@ -2031,9 +2040,12 @@ async fn image_generate(
     match client.generate(&prompt, params).await {
         Ok(image) => {
             let byte_len = image.bytes.as_ref().map(|bytes| bytes.len()).unwrap_or(0);
-            let mut result = ToolResult::ok(format!("generated {:?} image ({}) bytes", image.format, byte_len))
-                .with_metadata("format", format!("{:?}", image.format).to_lowercase())
-                .with_metadata("bytes", byte_len.to_string());
+            let mut result = ToolResult::ok(format!(
+                "generated {:?} image ({}) bytes",
+                image.format, byte_len
+            ))
+            .with_metadata("format", format!("{:?}", image.format).to_lowercase())
+            .with_metadata("bytes", byte_len.to_string());
             if let Some(url) = image.url {
                 result = result.with_metadata("url", url);
             }
@@ -2183,8 +2195,14 @@ fn resolve_url_shortener_provider(
     if let crate::skills::UrlShortenerProvider::Yourls(config) = &mut provider {
         config.api_url = resolve_env_reference(&config.api_url);
         config.signature = resolve_env_reference(&config.signature);
-        config.username = config.username.as_ref().map(|value| resolve_env_reference(value));
-        config.password = config.password.as_ref().map(|value| resolve_env_reference(value));
+        config.username = config
+            .username
+            .as_ref()
+            .map(|value| resolve_env_reference(value));
+        config.password = config
+            .password
+            .as_ref()
+            .map(|value| resolve_env_reference(value));
     }
     provider
 }
@@ -3122,11 +3140,7 @@ mod tests {
         .unwrap();
 
         assert!(runtime.heartbeat.is_running().await);
-        assert!(runtime
-            .heartbeat
-            .stop()
-            .await
-            .is_ok());
+        assert!(runtime.heartbeat.stop().await.is_ok());
 
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -3394,12 +3408,19 @@ mod tests {
             scheduler.schedule(stored).await.unwrap();
         }
 
-        let result = execute_tool(&ToolCall::new("run_scheduled_tasks", HashMap::new()), &runtime).await;
+        let result = execute_tool(
+            &ToolCall::new("run_scheduled_tasks", HashMap::new()),
+            &runtime,
+        )
+        .await;
         let jobs = runtime.scheduler.lock().await.list().await;
 
         std::fs::remove_dir_all(&root).unwrap();
         assert!(result.success);
-        assert_eq!(result.metadata.get("executed").map(String::as_str), Some("1"));
+        assert_eq!(
+            result.metadata.get("executed").map(String::as_str),
+            Some("1")
+        );
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].status, JobStatus::Completed);
         assert_eq!(jobs[0].run_count, 1);
@@ -3464,8 +3485,11 @@ mod tests {
             scheduler.schedule(stored).await.unwrap();
         }
 
-        let result =
-            execute_tool(&ToolCall::new("run_scheduled_tasks", HashMap::new()), &runtime).await;
+        let result = execute_tool(
+            &ToolCall::new("run_scheduled_tasks", HashMap::new()),
+            &runtime,
+        )
+        .await;
         let jobs = runtime.scheduler.lock().await.list().await;
         let recalled = runtime
             .memory
@@ -3480,10 +3504,15 @@ mod tests {
 
         std::fs::remove_dir_all(&root).unwrap();
         assert!(result.success);
-        assert_eq!(result.metadata.get("executed").map(String::as_str), Some("1"));
+        assert_eq!(
+            result.metadata.get("executed").map(String::as_str),
+            Some("1")
+        );
         assert_eq!(jobs[0].status, JobStatus::Completed);
-        assert!(recalled.iter().any(|entry| entry.entry.key == "scheduledkey"
-            && entry.entry.content == "scheduled content"));
+        assert!(recalled
+            .iter()
+            .any(|entry| entry.entry.key == "scheduledkey"
+                && entry.entry.content == "scheduled content"));
     }
 
     #[tokio::test]
@@ -3555,7 +3584,10 @@ mod tests {
             drop(jobs);
             let mut stored = scheduler.get(&id).await.unwrap();
             assert_eq!(
-                stored.metadata.get("scheduled_meta_group_id").map(String::as_str),
+                stored
+                    .metadata
+                    .get("scheduled_meta_group_id")
+                    .map(String::as_str),
                 Some("group-scheduled")
             );
             stored.next_run = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
@@ -3563,8 +3595,11 @@ mod tests {
             scheduler.schedule(stored).await.unwrap();
         }
 
-        let result =
-            execute_tool(&ToolCall::new("run_scheduled_tasks", HashMap::new()), &runtime).await;
+        let result = execute_tool(
+            &ToolCall::new("run_scheduled_tasks", HashMap::new()),
+            &runtime,
+        )
+        .await;
         let grouped = runtime
             .memory
             .recall(&MemoryQuery {
@@ -3653,8 +3688,11 @@ mod tests {
             scheduler.schedule(stored).await.unwrap();
         }
 
-        let result =
-            execute_tool(&ToolCall::new("run_scheduled_tasks", HashMap::new()), &runtime).await;
+        let result = execute_tool(
+            &ToolCall::new("run_scheduled_tasks", HashMap::new()),
+            &runtime,
+        )
+        .await;
         let jobs = runtime.scheduler.lock().await.list().await;
 
         std::fs::remove_dir_all(&root).unwrap();
@@ -3926,7 +3964,10 @@ pub fn builtin_tools() -> Vec<Tool> {
                 [
                     ("owner".to_string(), string_property("Repository owner")),
                     ("repo".to_string(), string_property("Repository name")),
-                    ("state".to_string(), string_property("Optional pull request state filter")),
+                    (
+                        "state".to_string(),
+                        string_property("Optional pull request state filter"),
+                    ),
                 ]
                 .into(),
                 vec!["owner".to_string(), "repo".to_string()],
@@ -3963,7 +4004,11 @@ pub fn builtin_tools() -> Vec<Tool> {
                 ("branch".to_string(), string_property("Branch name")),
             ]
             .into(),
-            vec!["owner".to_string(), "repo".to_string(), "branch".to_string()],
+            vec![
+                "owner".to_string(),
+                "repo".to_string(),
+                "branch".to_string(),
+            ],
         ))
         .with_tags(vec!["github".to_string(), "security".to_string()]),
         Tool::new("github_delete_branch", "Delete a GitHub branch")
@@ -3978,7 +4023,11 @@ pub fn builtin_tools() -> Vec<Tool> {
                     ),
                 ]
                 .into(),
-                vec!["owner".to_string(), "repo".to_string(), "branch".to_string()],
+                vec![
+                    "owner".to_string(),
+                    "repo".to_string(),
+                    "branch".to_string(),
+                ],
             ))
             .with_tags(vec!["github".to_string(), "integration".to_string()]),
         Tool::new(
@@ -3995,7 +4044,11 @@ pub fn builtin_tools() -> Vec<Tool> {
                 ),
             ]
             .into(),
-            vec!["owner".to_string(), "repo".to_string(), "number".to_string()],
+            vec![
+                "owner".to_string(),
+                "repo".to_string(),
+                "number".to_string(),
+            ],
         ))
         .with_tags(vec!["github".to_string(), "security".to_string()]),
         Tool::new("github_merge_pr", "Merge a GitHub pull request")
@@ -4013,7 +4066,11 @@ pub fn builtin_tools() -> Vec<Tool> {
                     ),
                 ]
                 .into(),
-                vec!["owner".to_string(), "repo".to_string(), "number".to_string()],
+                vec![
+                    "owner".to_string(),
+                    "repo".to_string(),
+                    "number".to_string(),
+                ],
             ))
             .with_tags(vec!["github".to_string(), "integration".to_string()]),
         Tool::new("github_list_issues", "List GitHub issues")
@@ -4021,7 +4078,10 @@ pub fn builtin_tools() -> Vec<Tool> {
                 [
                     ("owner".to_string(), string_property("Repository owner")),
                     ("repo".to_string(), string_property("Repository name")),
-                    ("state".to_string(), string_property("Optional issue state filter")),
+                    (
+                        "state".to_string(),
+                        string_property("Optional issue state filter"),
+                    ),
                 ]
                 .into(),
                 vec!["owner".to_string(), "repo".to_string()],
@@ -4144,7 +4204,10 @@ pub fn builtin_tools() -> Vec<Tool> {
                 [
                     ("path".to_string(), string_property("Local file path")),
                     ("mime_type".to_string(), string_property("File MIME type")),
-                    ("folder_id".to_string(), string_property("Optional Drive folder id")),
+                    (
+                        "folder_id".to_string(),
+                        string_property("Optional Drive folder id"),
+                    ),
                 ]
                 .into(),
                 vec!["path".to_string()],
@@ -4158,14 +4221,15 @@ pub fn builtin_tools() -> Vec<Tool> {
                         "description".to_string(),
                         string_property("Optional event description"),
                     ),
-                    (
-                        "start".to_string(),
-                        string_property("RFC3339 start time"),
-                    ),
+                    ("start".to_string(), string_property("RFC3339 start time")),
                     ("end".to_string(), string_property("RFC3339 end time")),
                 ]
                 .into(),
-                vec!["summary".to_string(), "start".to_string(), "end".to_string()],
+                vec![
+                    "summary".to_string(),
+                    "start".to_string(),
+                    "end".to_string(),
+                ],
             ))
             .with_tags(vec!["google".to_string(), "integration".to_string()]),
         Tool::new("browser_navigate", "Navigate the browser to a URL")
@@ -4190,20 +4254,26 @@ pub fn builtin_tools() -> Vec<Tool> {
                 vec!["selector".to_string(), "value".to_string()],
             ))
             .with_tags(vec!["browser".to_string(), "integration".to_string()]),
-        Tool::new("browser_wait_for", "Wait for a selector or text on the current page")
-            .with_schema(ToolSchema::object(
-                [
-                    ("selector".to_string(), string_property("Optional CSS selector")),
-                    ("text".to_string(), string_property("Optional page text")),
-                    (
-                        "timeout_ms".to_string(),
-                        number_property("Timeout in milliseconds", serde_json::json!(5000)),
-                    ),
-                ]
-                .into(),
-                Vec::new(),
-            ))
-            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
+        Tool::new(
+            "browser_wait_for",
+            "Wait for a selector or text on the current page",
+        )
+        .with_schema(ToolSchema::object(
+            [
+                (
+                    "selector".to_string(),
+                    string_property("Optional CSS selector"),
+                ),
+                ("text".to_string(), string_property("Optional page text")),
+                (
+                    "timeout_ms".to_string(),
+                    number_property("Timeout in milliseconds", serde_json::json!(5000)),
+                ),
+            ]
+            .into(),
+            Vec::new(),
+        ))
+        .with_tags(vec!["browser".to_string(), "integration".to_string()]),
         Tool::new("browser_get_text", "Extract text from the current page")
             .with_schema(ToolSchema::object(
                 [("selector".to_string(), string_property("CSS selector"))].into(),
@@ -4225,21 +4295,24 @@ pub fn builtin_tools() -> Vec<Tool> {
                 vec!["script".to_string()],
             ))
             .with_tags(vec!["browser".to_string(), "integration".to_string()]),
-        Tool::new("browser_screenshot", "Capture a screenshot from the current page")
-            .with_schema(ToolSchema::object(
-                [(
-                    "full_page".to_string(),
-                    PropertySchema {
-                        prop_type: "boolean".to_string(),
-                        description: Some("Capture the full page".to_string()),
-                        default: Some(serde_json::json!(true)),
-                        enum_values: None,
-                    },
-                )]
-                .into(),
-                Vec::new(),
-            ))
-            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
+        Tool::new(
+            "browser_screenshot",
+            "Capture a screenshot from the current page",
+        )
+        .with_schema(ToolSchema::object(
+            [(
+                "full_page".to_string(),
+                PropertySchema {
+                    prop_type: "boolean".to_string(),
+                    description: Some("Capture the full page".to_string()),
+                    default: Some(serde_json::json!(true)),
+                    enum_values: None,
+                },
+            )]
+            .into(),
+            Vec::new(),
+        ))
+        .with_tags(vec!["browser".to_string(), "integration".to_string()]),
         Tool::new("stt_transcribe", "Transcribe audio to text")
             .with_schema(ToolSchema::object(
                 [
@@ -4280,7 +4353,10 @@ pub fn builtin_tools() -> Vec<Tool> {
             .with_schema(ToolSchema::object(
                 [
                     ("data".to_string(), string_property("Data to encode")),
-                    ("format".to_string(), string_property("png, svg, or terminal")),
+                    (
+                        "format".to_string(),
+                        string_property("png, svg, or terminal"),
+                    ),
                 ]
                 .into(),
                 vec!["data".to_string()],
@@ -4290,7 +4366,10 @@ pub fn builtin_tools() -> Vec<Tool> {
             .with_schema(ToolSchema::object(
                 [
                     ("url".to_string(), string_property("URL to encode")),
-                    ("format".to_string(), string_property("png, svg, or terminal")),
+                    (
+                        "format".to_string(),
+                        string_property("png, svg, or terminal"),
+                    ),
                 ]
                 .into(),
                 vec!["url".to_string()],

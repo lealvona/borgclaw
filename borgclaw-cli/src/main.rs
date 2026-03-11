@@ -614,7 +614,9 @@ async fn integration_doctor_lines(config: &AppConfig) -> Vec<String> {
     ));
     lines.push(format!(
         "{} Browser bridge path {}",
-        marker(path_exists_or_placeholder(&config.skills.browser.bridge_path)),
+        marker(path_exists_or_placeholder(
+            &config.skills.browser.bridge_path
+        )),
         config.skills.browser.bridge_path.display()
     ));
     lines.push(format!(
@@ -803,8 +805,11 @@ async fn url_shortener_ready(config: &AppConfig) -> bool {
         "yourls" => {
             !config.skills.url_shortener.yourls.base_url.is_empty()
                 && (!config.skills.url_shortener.yourls.signature.is_empty()
-                    || skill_secret_available(config, &config.skills.url_shortener.yourls.signature)
-                        .await
+                    || skill_secret_available(
+                        config,
+                        &config.skills.url_shortener.yourls.signature,
+                    )
+                    .await
                     || (!config.skills.url_shortener.yourls.username.is_empty()
                         && skill_secret_available(
                             config,
@@ -1275,10 +1280,7 @@ mod tests {
             )
             .unwrap();
 
-        assert!(runtime.block_on(skill_secret_available(
-            &config,
-            "${ELEVENLABS_API_KEY}"
-        )));
+        assert!(runtime.block_on(skill_secret_available(&config, "${ELEVENLABS_API_KEY}")));
     }
 
     #[test]

@@ -818,13 +818,8 @@ mod tests {
         let id = engine
             .add_task(HeartbeatTask::new("due_task", "0 0 0 * * *"))
             .await;
-        engine
-            .tasks
-            .write()
-            .await
-            .get_mut(&id)
-            .unwrap()
-            .next_run = Some(Utc::now() - chrono::Duration::seconds(1));
+        engine.tasks.write().await.get_mut(&id).unwrap().next_run =
+            Some(Utc::now() - chrono::Duration::seconds(1));
 
         let stopped = engine.tick().await;
         assert!(stopped.is_empty());

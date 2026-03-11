@@ -151,7 +151,14 @@ pub async fn run_init(
             .chapter
             .clone()
             .ok_or_else(|| "--chapter is required with --component".to_string())?;
-        apply_component_action(&mut config, title, &chapter, &args.action, &theme, &registry)?;
+        apply_component_action(
+            &mut config,
+            title,
+            &chapter,
+            &args.action,
+            &theme,
+            &registry,
+        )?;
         return Ok(InitOutcome {
             config,
             start: StartTarget::None,
@@ -998,14 +1005,30 @@ async fn configure_stt_skill(
         "whispercpp" => {
             let binary_path: String = Input::with_theme(theme)
                 .with_prompt("whisper.cpp binary path")
-                .default(config.skills.stt.whispercpp.binary_path.display().to_string())
+                .default(
+                    config
+                        .skills
+                        .stt
+                        .whispercpp
+                        .binary_path
+                        .display()
+                        .to_string(),
+                )
                 .interact_text()
                 .map_err(|e| e.to_string())?;
             config.skills.stt.whispercpp.binary_path = PathBuf::from(binary_path);
 
             let model_path: String = Input::with_theme(theme)
                 .with_prompt("whisper.cpp model path")
-                .default(config.skills.stt.whispercpp.model_path.display().to_string())
+                .default(
+                    config
+                        .skills
+                        .stt
+                        .whispercpp
+                        .model_path
+                        .display()
+                        .to_string(),
+                )
                 .interact_text()
                 .map_err(|e| e.to_string())?;
             config.skills.stt.whispercpp.model_path = PathBuf::from(model_path);
@@ -1493,8 +1516,7 @@ async fn channel_env_entries(config: &AppConfig) -> Vec<(String, String)> {
         entries.push(("TELEGRAM_BOT_TOKEN".to_string(), value));
     }
 
-    if let Some(value) = channel_secret_entry(config, "webhook", "secret", "WEBHOOK_SECRET").await
-    {
+    if let Some(value) = channel_secret_entry(config, "webhook", "secret", "WEBHOOK_SECRET").await {
         entries.push(("WEBHOOK_SECRET".to_string(), value));
     }
 
@@ -1815,11 +1837,9 @@ mod tests {
         .unwrap();
 
         assert!(!config.channels.contains_key("telegram"));
-        assert!(
-            config.registrar.chapters["channel"]
-                .iter()
-                .all(|chapter| chapter != "telegram")
-        );
+        assert!(config.registrar.chapters["channel"]
+            .iter()
+            .all(|chapter| chapter != "telegram"));
     }
 
     #[test]
