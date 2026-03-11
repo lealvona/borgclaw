@@ -256,3 +256,77 @@ pub enum McpError {
     #[error("Not initialized")]
     NotInitialized,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mcp::transport::{McpTransportConfig, StdioTransportConfig};
+    use std::collections::HashMap;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mcp_client_can_list_and_call_tools_against_stdio_stub() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!("borgclaw_mcp_stub_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let script_path = root.join("stub-mcp.sh");
+        std::fs::write(
+            &script_path,
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocol_version":"2024-11-05","capabilities":{"tools":{}},"server_info":{"name":"stub-mcp","version":"1.0.0"}}}'
+      ;;
+    *'"method":"tools/list"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":0,"result":{"tools":[{"name":"echo","description":"Echo input","input_schema":{"type":"object"}}]}}'
+      ;;
+    *'"method":"tools/call"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"Text","text":"stub response"}],"is_error":false}}'
+      ;;
+  esac
+done
+"#,
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&script_path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&script_path, permissions).unwrap();
+
+        let transport = McpTransportConfig::Stdio(StdioTransportConfig {
+            command: "sh".to_string(),
+            args: vec![script_path.to_string_lossy().to_string()],
+            env: HashMap::new(),
+        });
+
+        let mut client = McpClient::connect(transport).await.unwrap();
+        assert!(client.is_initialized().await);
+        assert_eq!(
+            client
+                .server_info()
+                .await
+                .as_ref()
+                .map(|info| info.name.as_str()),
+            Some("stub-mcp")
+        );
+
+        let tools = client.list_tools().await.unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "echo");
+
+        let result = client
+            .call_tool("echo", serde_json::json!({"message": "hello"}))
+            .await
+            .unwrap();
+        assert_eq!(result.is_error, Some(false));
+        assert_eq!(result.content.len(), 1);
+        assert!(matches!(
+            &result.content[0],
+            McpContent::Text { text } if text == "stub response"
+        ));
+
+        client.disconnect().await.unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
