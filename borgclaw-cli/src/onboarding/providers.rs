@@ -11,7 +11,13 @@ pub struct ProviderDef {
     pub api_base: String,
     #[serde(default)]
     pub models_endpoint: String,
-    #[serde(alias = "env_key", deserialize_with = "deserialize_env_key")]
+    #[serde(
+        default,
+        rename = "env_key",
+        alias = "api_key_env",
+        deserialize_with = "deserialize_env_key",
+        serialize_with = "serialize_env_key"
+    )]
     pub api_key_env: Option<String>,
     pub default_model: String,
     #[serde(default)]
@@ -203,6 +209,13 @@ where
     }))
 }
 
+fn serialize_env_key<S>(value: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(value.as_deref().unwrap_or(""))
+}
+
 fn default_models_endpoint(id: &str, api_base: &str) -> String {
     match id {
         "openai" => format!("{api_base}/models"),
@@ -289,5 +302,14 @@ mod tests {
             registry.providers["openai"].models_endpoint,
             "https://api.openai.com/v1/models"
         );
+    }
+
+    #[test]
+    fn provider_registry_serializes_documented_env_key_shape() {
+        let serialized = toml::to_string_pretty(&ProviderRegistry::default_registry()).unwrap();
+
+        assert!(serialized.contains("env_key = \"OPENAI_API_KEY\""));
+        assert!(serialized.contains("env_key = \"\""));
+        assert!(!serialized.contains("api_key_env"));
     }
 }
