@@ -1592,9 +1592,25 @@ async fn store_provider_secret(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn test_theme() -> ColorfulTheme {
         ColorfulTheme::default()
+    }
+
+    fn refresh_args() -> InitArgs {
+        InitArgs {
+            quick: false,
+            update: false,
+            reset: false,
+            list_providers: false,
+            refresh_models: true,
+            generate_env: false,
+            component: None,
+            chapter: None,
+            action: "add".to_string(),
+            start: "none".to_string(),
+        }
     }
 
     #[test]
@@ -1909,6 +1925,99 @@ mod tests {
         assert!(env.contains("TELEGRAM_BOT_TOKEN=tg-secret"));
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn refresh_models_updates_provider_registry_from_live_source() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_onboarding_refresh_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("config.toml");
+        let providers_path = root.join("providers.toml");
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 1024];
+            let _ = socket.read(&mut buf).await.unwrap();
+            let body = r#"{"data":[{"id":"model-a"},{"id":"model-b"}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .unwrap();
+        });
+
+        std::fs::write(
+            &providers_path,
+            format!(
+                r#"[custom]
+name = "Custom"
+api_base = "http://{addr}"
+models_endpoint = "http://{addr}/models"
+env_key = ""
+default_model = "custom-model"
+static_models = ["stale-model"]
+"#
+            ),
+        )
+        .unwrap();
+
+        let outcome = run_init(&config_path, AppConfig::default(), &refresh_args())
+            .await
+            .unwrap();
+        let registry = ProviderRegistry::load_or_create(&providers_path).unwrap();
+
+        server.await.unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(matches!(outcome.start, StartTarget::None));
+        assert_eq!(
+            registry.providers["custom"].static_models,
+            vec!["model-a".to_string(), "model-b".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_models_keeps_existing_static_models_when_live_fetch_fails() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_onboarding_refresh_fallback_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("config.toml");
+        let providers_path = root.join("providers.toml");
+
+        std::fs::write(
+            &providers_path,
+            r#"[custom]
+name = "Custom"
+api_base = "http://127.0.0.1:9"
+models_endpoint = "http://127.0.0.1:9/models"
+env_key = ""
+default_model = "custom-model"
+static_models = ["cached-model"]
+"#,
+        )
+        .unwrap();
+
+        let outcome = run_init(&config_path, AppConfig::default(), &refresh_args())
+            .await
+            .unwrap();
+        let registry = ProviderRegistry::load_or_create(&providers_path).unwrap();
+
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(matches!(outcome.start, StartTarget::None));
+        assert_eq!(
+            registry.providers["custom"].static_models,
+            vec!["cached-model".to_string()]
+        );
     }
 }
 

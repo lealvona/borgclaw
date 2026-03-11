@@ -74,4 +74,5 @@ Recent landed work in this phase:
 - MCP client coverage now includes a local stdio-stub flow for `initialize`, `tools/list`, and `tools/call`, matching the plan’s stub-server test requirement.
 - Plugin manifest file read/write permissions now preserve declared paths and are enforced against the shared workspace policy instead of being treated as mostly informational.
 - Plugin coverage now includes a real loaded-WASM runtime path through `plugin_invoke`, plus a permission-denial case that proves workspace policy is enforced before execution.
+- Onboarding coverage now includes a non-interactive `--refresh-models` path against a local HTTP stub plus a fallback case, and `providers.toml` now round-trips the documented `env_key` shape for both auth and no-auth providers.
 - Gateway coverage now includes black-box WebSocket and webhook tests for the documented welcome/pairing/auth event flow plus webhook health, secret enforcement, and rate-limiting behavior.
