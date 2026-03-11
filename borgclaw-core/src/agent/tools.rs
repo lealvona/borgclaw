@@ -227,7 +227,10 @@ impl ToolRuntime {
                     heartbeat_config.check_interval_seconds.max(1),
                 )),
         );
-        let plugins = Arc::new(PluginRegistry::new());
+        let plugins = Arc::new(
+            PluginRegistry::new()
+                .with_workspace_policy(workspace_root.clone(), security_config.workspace.clone()),
+        );
         plugins
             .load_from_dir(&skills_config.skills_path)
             .await
