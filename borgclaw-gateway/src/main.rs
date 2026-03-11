@@ -973,6 +973,92 @@ mod tests {
         server.abort();
     }
 
+    #[tokio::test]
+    async fn webhook_http_flow_matches_documented_health_secret_and_rate_limit_behavior() {
+        let mut config = AppConfig::default();
+        let webhook = config.channels.entry("webhook".to_string()).or_default();
+        webhook.enabled = true;
+        webhook.extra.insert(
+            "secret".to_string(),
+            toml::Value::String("test-secret".to_string()),
+        );
+        webhook
+            .extra
+            .insert("rate_limit_per_minute".to_string(), toml::Value::Integer(1));
+
+        let state = GatewayState {
+            config: Arc::new(config.clone()),
+            router: Arc::new(MessageRouter::from_config(&config)),
+            webhook: configured_webhook_channel(&config).await.map(Arc::new),
+        };
+
+        let app = Router::new()
+            .route("/webhook", post(webhook_handler))
+            .route("/webhook/health", get(webhook_health))
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client = reqwest::Client::new();
+
+        let health = client
+            .get(format!("http://{addr}/webhook/health"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(health.status(), StatusCode::OK);
+        let health_body: serde_json::Value = health.json().await.unwrap();
+        assert_eq!(health_body["status"], "ok");
+        assert_eq!(health_body["webhook_enabled"], true);
+
+        let unauthorized = client
+            .post(format!("http://{addr}/webhook"))
+            .header("content-type", "application/json")
+            .header("x-forwarded-for", "10.0.0.1")
+            .body(r#"{"content":"hello"}"#)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let first = client
+            .post(format!("http://{addr}/webhook"))
+            .header("content-type", "application/json")
+            .header("x-webhook-secret", "test-secret")
+            .header("x-forwarded-for", "10.0.0.1")
+            .body(r#"{"content":"hello"}"#)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::BAD_REQUEST);
+
+        let limited = client
+            .post(format!("http://{addr}/webhook"))
+            .header("content-type", "application/json")
+            .header("x-webhook-secret", "test-secret")
+            .header("x-forwarded-for", "10.0.0.1")
+            .body(r#"{"content":"hello again"}"#)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let other_requester = client
+            .post(format!("http://{addr}/webhook"))
+            .header("content-type", "application/json")
+            .header("x-webhook-secret", "test-secret")
+            .header("x-forwarded-for", "10.0.0.2")
+            .body(r#"{"content":"hello from elsewhere"}"#)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(other_requester.status(), StatusCode::BAD_REQUEST);
+
+        server.abort();
+    }
+
     async fn next_text_message(
         socket: &mut tokio_tungstenite::WebSocketStream<
             tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
