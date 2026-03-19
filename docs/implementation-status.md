@@ -4,7 +4,7 @@ This document tracks BorgClaw against the current README and `docs/` contract.
 
 It is additive status only. It does not narrow the documented feature set.
 
-Last reviewed: March 11, 2026
+Last reviewed: March 19, 2026
 
 ## Status Matrix
 
@@ -16,6 +16,7 @@ Last reviewed: March 11, 2026
 | SQLite memory + group isolation | `complete` | Metadata round-trip, isolation, recall, and compaction are implemented. |
 | Solution memory | `complete` | Documented public structs and search helpers are aligned. |
 | Heartbeat engine | `partial` | Documented task/handler surface exists. Engine state gating, background loop startup, shared-runtime ownership, enable/disable consistency, manual-run state updates, persisted task snapshots, and retry/dead-letter behavior are landed; richer operator ergonomics remain. |
+| Scheduler | `partial` | Execution loop, timeout/concurrency policy, retries/dead-letter behavior, persisted job state, and bounded run history are landed; richer catch-up/recovery semantics still remain. |
 | Sub-agent coordinator | `partial` | Spawn/status/result flow exists. Concurrency limits, cancellation precedence, memory policy enforcement, parent-context inheritance, persisted task snapshots, and retry/dead-letter behavior are landed; explicit workspace/security policy depth remains. |
 | Security config contract | `complete` | Documented TOML shape parses and core enforcement exists. |
 | Secret storage + vault | `partial` | Encrypted secrets and vault clients exist; onboarding/auth UX is still mixed. |
@@ -29,7 +30,7 @@ Last reviewed: March 11, 2026
 
 ## Current Priorities
 
-1. Harden restart-sensitive background execution: scheduler catch-up, polling-loop restart guards, and explicit health checks before restart.
+1. Harden restart-sensitive background execution: scheduler catch-up, broader restart recovery, and explicit health checks before restart.
 2. Unify security-pipeline behavior across built-in tools, MCP, plugins, deferred execution, and the remaining non-webhook ingress paths.
 3. Expand end-to-end coverage for gateway, onboarding, MCP, plugins, and remaining skill-family happy paths.
 4. Continue operator UX/status/doctor parity for recovery, backup, and transport health surfaces.
@@ -39,7 +40,7 @@ Last reviewed: March 11, 2026
 - Skill registry publishing/package workflow is still planned-only.
 - Remote skill installs currently persist manifest content, not companion assets.
 - Several skill families have meaningful shared tool exposure, but not full operational completeness.
-- Background execution now persists scheduler run history, heartbeat task state, and sub-agent task state locally. Scheduler, heartbeat, and sub-agent retry/dead-letter semantics are landed.
-- CLI `status`/`doctor` now report persisted heartbeat and sub-agent recovery-state files, including task and dead-letter counts when available.
+- Background execution now persists scheduler job state and run history, heartbeat task state, and sub-agent task state locally. Scheduler, heartbeat, and sub-agent retry/dead-letter semantics are landed.
+- CLI `status`/`doctor` now report persisted scheduler, heartbeat, and sub-agent recovery-state files, including task and dead-letter counts when available.
 - Signal polling now has duplicate-start rejection and tracked shutdown for its background receive loop, but broader restart recovery behavior across transports is still incomplete.
 - Telegram polling now has duplicate-start rejection and tracked shutdown for its background receive loop, but broader restart recovery behavior across transports is still incomplete.

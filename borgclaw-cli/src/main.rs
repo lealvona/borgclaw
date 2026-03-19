@@ -899,13 +899,18 @@ async fn image_provider_status(config: &AppConfig) -> &'static str {
 }
 
 fn background_state_status(workspace: &std::path::Path) -> String {
+    let scheduler = background_state_summary(&workspace.join("scheduler.json"));
     let heartbeat = background_state_summary(&workspace.join("heartbeat.json"));
     let subagents = background_state_summary(&workspace.join("subagents.json"));
-    format!("heartbeat={}, subagents={}", heartbeat, subagents)
+    format!(
+        "scheduler={}, heartbeat={}, subagents={}",
+        scheduler, heartbeat, subagents
+    )
 }
 
 fn background_state_doctor_lines(workspace: &std::path::Path) -> Vec<String> {
     vec![
+        background_state_doctor_line("Scheduler", &workspace.join("scheduler.json")),
         background_state_doctor_line("Heartbeat", &workspace.join("heartbeat.json")),
         background_state_doctor_line("Sub-agent", &workspace.join("subagents.json")),
     ]
@@ -1806,6 +1811,15 @@ mod tests {
         ));
         std::fs::create_dir_all(&workspace).unwrap();
         std::fs::write(
+            workspace.join("scheduler.json"),
+            r#"{
+              "job-1": {"dead_lettered_at": null},
+              "job-2": {"dead_lettered_at": null},
+              "job-3": {"dead_lettered_at": "2026-03-19T00:00:00Z"}
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(
             workspace.join("heartbeat.json"),
             r#"{
               "hb-1": {"dead_lettered_at": null},
@@ -1824,7 +1838,7 @@ mod tests {
         let line = background_state_status(&workspace);
         assert_eq!(
             line,
-            "heartbeat=2 tasks (dead-lettered=1), subagents=1 task (dead-lettered=0)"
+            "scheduler=3 tasks (dead-lettered=1), heartbeat=2 tasks (dead-lettered=1), subagents=1 task (dead-lettered=0)"
         );
     }
 
@@ -1844,6 +1858,9 @@ mod tests {
         .unwrap();
 
         let lines = background_state_doctor_lines(&workspace);
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("• Scheduler state not created yet")));
         assert!(lines
             .iter()
             .any(|line| line.contains("✓ Heartbeat state present (1 task, dead-lettered=0)")));

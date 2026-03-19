@@ -10,6 +10,7 @@ use cron::Schedule;
 use futures_util::future::join_all;
 use std::collections::HashMap;
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -43,6 +44,7 @@ pub trait SchedulerTrait: Send + Sync {
 pub struct Scheduler {
     jobs: Arc<RwLock<HashMap<String, Job>>>,
     running: Arc<RwLock<HashMap<String, tokio::task::JoinHandle<()>>>>,
+    state_path: Option<PathBuf>,
 }
 
 impl Scheduler {
@@ -50,7 +52,15 @@ impl Scheduler {
         Self {
             jobs: Arc::new(RwLock::new(HashMap::new())),
             running: Arc::new(RwLock::new(HashMap::new())),
+            state_path: None,
         }
+    }
+
+    pub fn with_state_path(mut self, path: impl Into<PathBuf>) -> Self {
+        let state_path = path.into();
+        self.jobs = Arc::new(RwLock::new(load_jobs(&state_path)));
+        self.state_path = Some(state_path);
+        self
     }
 
     pub async fn start(
@@ -162,6 +172,7 @@ impl SchedulerTrait for Scheduler {
 
         let mut jobs = self.jobs.write().await;
         jobs.insert(id.clone(), job);
+        self.persist_state(&jobs);
 
         Ok(id)
     }
@@ -177,6 +188,7 @@ impl SchedulerTrait for Scheduler {
         let mut jobs = self.jobs.write().await;
         jobs.remove(id)
             .ok_or_else(|| SchedulerError::JobNotFound(id.to_string()))?;
+        self.persist_state(&jobs);
 
         Ok(())
     }
@@ -214,6 +226,7 @@ impl Scheduler {
             .get_mut(id)
             .ok_or_else(|| SchedulerError::JobNotFound(id.to_string()))?;
         job.status = status;
+        self.persist_state(&jobs);
         Ok(())
     }
 
@@ -287,6 +300,7 @@ impl Scheduler {
                     stored.status = JobStatus::Running;
                 }
             }
+            self.persist_state(&jobs);
         }
 
         let mut results = Vec::with_capacity(due_jobs.len());
@@ -359,6 +373,7 @@ impl Scheduler {
                             stored.run_history.drain(0..excess);
                         }
                     }
+                    self.persist_state(&jobs);
                 }
 
                 results.push(result.map(|_| job.id));
@@ -366,6 +381,25 @@ impl Scheduler {
         }
 
         results
+    }
+
+    fn persist_state(&self, jobs: &HashMap<String, Job>) {
+        let Some(path) = &self.state_path else {
+            return;
+        };
+
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        let Ok(serialized) = serde_json::to_string_pretty(jobs) else {
+            return;
+        };
+
+        let temp_path = path.with_extension("json.tmp");
+        if std::fs::write(&temp_path, serialized).is_ok() {
+            let _ = std::fs::rename(temp_path, path);
+        }
     }
 }
 
@@ -417,6 +451,27 @@ pub fn with_retry_policy(mut job: Job, max_retries: u32, retry_delay_seconds: u6
     job.max_retries = max_retries;
     job.retry_delay_seconds = retry_delay_seconds.max(1);
     job
+}
+
+fn load_jobs(path: &PathBuf) -> HashMap<String, Job> {
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return HashMap::new();
+    };
+
+    let Ok(mut jobs) = serde_json::from_str::<HashMap<String, Job>>(&contents) else {
+        return HashMap::new();
+    };
+
+    for job in jobs.values_mut() {
+        if job.status == JobStatus::Running {
+            job.status = JobStatus::Pending;
+            if job.next_run.is_none() {
+                job.next_run = Some(Utc::now());
+            }
+        }
+    }
+
+    jobs
 }
 
 #[cfg(test)]
@@ -783,5 +838,96 @@ mod tests {
         assert!(results[0].is_err());
         assert_eq!(stored.status, JobStatus::Failed);
         assert_eq!(stored.run_count, 1);
+    }
+
+    #[tokio::test]
+    async fn scheduler_with_state_path_reloads_persisted_jobs() {
+        let state_path =
+            std::env::temp_dir().join(format!("borgclaw_scheduler_state_{}.json", Uuid::new_v4()));
+        let scheduler = Scheduler::new().with_state_path(state_path.clone());
+        let id = scheduler
+            .schedule(new_job(
+                "interval",
+                JobTrigger::Interval(30),
+                "echo persisted",
+            ))
+            .await
+            .unwrap();
+
+        let reloaded = Scheduler::new().with_state_path(state_path);
+        let stored = reloaded.get(&id).await.unwrap();
+        assert_eq!(stored.name, "interval");
+        assert_eq!(stored.action, "echo persisted");
+    }
+
+    #[tokio::test]
+    async fn scheduler_with_state_path_persists_run_history() {
+        let state_path =
+            std::env::temp_dir().join(format!("borgclaw_scheduler_runs_{}.json", Uuid::new_v4()));
+        let scheduler = Scheduler::new().with_state_path(state_path.clone());
+        let mut job = new_job(
+            "oneshot",
+            JobTrigger::OneShot(Utc::now() + Duration::seconds(5)),
+            "echo hi",
+        );
+        job.next_run = Some(Utc::now() - Duration::seconds(1));
+        let id = scheduler.schedule(job).await.unwrap();
+
+        let results = scheduler.run_due(|_| async { Ok(()) }).await;
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_ok());
+
+        let reloaded = Scheduler::new().with_state_path(state_path);
+        let stored = reloaded.get(&id).await.unwrap();
+        assert_eq!(stored.status, JobStatus::Completed);
+        assert_eq!(stored.run_count, 1);
+        assert_eq!(stored.run_history.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn scheduler_with_state_path_persists_unschedule() {
+        let state_path = std::env::temp_dir().join(format!(
+            "borgclaw_scheduler_unschedule_{}.json",
+            Uuid::new_v4()
+        ));
+        let scheduler = Scheduler::new().with_state_path(state_path.clone());
+        let id = scheduler
+            .schedule(new_job(
+                "oneshot",
+                JobTrigger::OneShot(Utc::now() + Duration::seconds(5)),
+                "echo hi",
+            ))
+            .await
+            .unwrap();
+
+        scheduler.unschedule(&id).await.unwrap();
+
+        let reloaded = Scheduler::new().with_state_path(state_path);
+        assert!(reloaded.get(&id).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn scheduler_with_state_path_recovers_running_jobs_as_pending() {
+        let state_path = std::env::temp_dir().join(format!(
+            "borgclaw_scheduler_recover_{}.json",
+            Uuid::new_v4()
+        ));
+        let scheduler = Scheduler::new().with_state_path(state_path.clone());
+        let mut job = new_job(
+            "recover-running",
+            JobTrigger::OneShot(Utc::now() + Duration::seconds(5)),
+            "echo recover",
+        );
+        job.next_run = Some(Utc::now() - Duration::seconds(1));
+        let id = scheduler.schedule(job).await.unwrap();
+        scheduler
+            .update_status(&id, JobStatus::Running)
+            .await
+            .unwrap();
+
+        let reloaded = Scheduler::new().with_state_path(state_path);
+        let stored = reloaded.get(&id).await.unwrap();
+        assert_eq!(stored.status, JobStatus::Pending);
+        assert!(stored.next_run.is_some());
     }
 }
