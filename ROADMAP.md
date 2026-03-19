@@ -46,12 +46,13 @@ Recent landed work in this phase:
 - Scheduler job initialization with stable `next_run` state for cron, interval, and one-shot jobs.
 - Scheduler loop startup, concurrency limits, timeout enforcement, due-job execution, and bounded run history.
 - Scheduler state persistence across reconstruction, including recovery of in-flight `Running` jobs back to runnable `Pending` state.
+- Shared-runtime restart recovery is now covered for persisted due scheduler jobs, including recovered `Running` jobs that execute after reconstruction.
 - Scheduler retry rescheduling and dead-letter handling for exhausted jobs.
 - Scheduled jobs can now dispatch built-in tool calls through the shared runtime, not just synthetic message actions.
 - Background scheduled and sub-agent tool selection now reject approval-gated tools when interactive approval is unavailable.
 - Tool execution now carries conversation context so memory tools respect `group_id`, and scheduled tool jobs inherit originating sender/session metadata.
 - CLI `status`/`doctor` now surface persisted scheduler, heartbeat, and sub-agent recovery state from the workspace, including task counts and dead-letter counts when state files exist.
-- The next remaining gaps in this phase are deeper restart-safe catch-up/recovery behavior and clearer operator visibility into recovered background state over time.
+- The next remaining gaps in this phase are deeper restart-safe catch-up/recovery behavior across more transports and clearer operator visibility into recovered background state over time.
 - Signal polling now rejects duplicate receiver starts, performs a health check before entering the receive loop, and tracks/aborts the background poll task on shutdown.
 - Telegram polling now rejects duplicate receiver starts and tracks/aborts the background receive task on shutdown.
 
