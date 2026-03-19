@@ -4,13 +4,13 @@
 
 Implement the remaining documented BorgClaw feature set in a security-first sequence. The goal is to make the runtime match the README and `docs/` contract without breaking the existing config and crate layout.
 
-Status note as of March 11, 2026:
+Status note as of March 19, 2026:
 - Phase 1 is largely complete.
 - Phase 2 is largely complete.
 - Phase 3 is largely complete. Memory, session compaction, scheduler execution, scheduler persistence, sub-agent persistence, heartbeat persistence, retry/dead-letter behavior, and background-context inheritance are landed; explicit workspace/security policy depth still remains.
 - Phase 4 is partially complete, with substantial shared tool/runtime coverage across documented skill families, but broader operational completeness still remains.
 - Phase 5 is partially complete, with security enforcement substantially improved but security-pipeline unification and operator UX still behind the documented end state.
-- Recent upstream follow-up tightened the remaining priorities further: restart-safe background behavior, webhook ingress hardening, MCP/runtime correctness polish, and backup/recovery workflows are now the clearest remaining deltas versus the inspiration set.
+- Recent upstream follow-up tightened the remaining priorities further: restart-safe background behavior, operator-visible recovery/schedule management, MCP/runtime correctness polish, transport-specific security hardening, and backup/recovery workflows are now the clearest remaining deltas versus the inspiration set.
 
 ## Phase 1: Core Runtime
 
@@ -52,7 +52,7 @@ Recent landed work in this phase:
 - Background scheduled and sub-agent tool selection now reject approval-gated tools when interactive approval is unavailable.
 - Tool execution now carries conversation context so memory tools respect `group_id`, and scheduled tool jobs inherit originating sender/session metadata.
 - CLI `status`/`doctor` now surface persisted scheduler, heartbeat, and sub-agent recovery state from the workspace, including task counts and dead-letter counts when state files exist.
-- The next remaining gaps in this phase are deeper restart-safe catch-up/recovery behavior across more transports and clearer operator visibility into recovered background state over time.
+- The next remaining gaps in this phase are deeper restart-safe catch-up/recovery behavior across more transports, clearer operator visibility into recovered background state over time, and more explicit schedule-management surfaces.
 - Signal polling now rejects duplicate receiver starts, performs a health check before entering the receive loop, and tracks/aborts the background poll task on shutdown.
 - Telegram polling now rejects duplicate receiver starts and tracks/aborts the background receive task on shutdown.
 
@@ -67,7 +67,7 @@ Recent landed work in this phase:
 - MCP stdio server commands now pass through the shared command policy instead of bypassing the blocklist.
 - Shared runtime GitHub happy-path coverage now exercises configured read operations against a local API stub, instead of relying only on client-level tests.
 - Shared runtime coverage now includes local happy-path tests for QR URL encoding and URL shortening via a configured YOURLS-compatible provider.
-- The next remaining gaps in this phase are broader happy-path coverage for the documented skill families and more operational completeness around managed skill lifecycle.
+- The next remaining gaps in this phase are broader happy-path coverage for the documented skill families, transport/control-plane introspection surfaces, and more operational completeness around managed skill lifecycle.
 
 ## Phase 5: Hardening and UX
 
@@ -87,4 +87,4 @@ Recent landed work in this phase:
 - Onboarding coverage now includes a non-interactive `--refresh-models` path against a local HTTP stub plus a fallback case, and `providers.toml` now round-trips the documented `env_key` shape for both auth and no-auth providers.
 - Gateway coverage now includes black-box WebSocket and webhook tests for the documented welcome/pairing/auth event flow plus webhook health, secret enforcement, and rate-limiting behavior.
 - Webhook ingress now has request-size enforcement and redacted external error responses, narrowing the remaining gap in this phase.
-- The next remaining gaps in this phase are backup/recovery workflows and deeper end-to-end security coverage across deferred/background execution paths.
+- The next remaining gaps in this phase are backup/recovery workflows, deeper end-to-end security coverage across deferred/background execution paths, stronger routing/ownership correctness coverage, and operator-facing health/self-test surfaces.

@@ -4,7 +4,7 @@ This document tracks BorgClaw against the current README and `docs/` contract.
 
 It is additive status only. It does not narrow the documented feature set.
 
-Last reviewed: March 19, 2026
+Last reviewed: March 19, 2026, with upstream inspiration follow-up through March 19, 2026
 
 ## Status Matrix
 
@@ -30,10 +30,10 @@ Last reviewed: March 19, 2026
 
 ## Current Priorities
 
-1. Harden restart-sensitive background execution: scheduler catch-up, broader restart recovery, and explicit health checks before restart.
+1. Harden restart-sensitive background execution: scheduler catch-up, broader restart recovery, explicit health checks before restart, and operator-visible recovery semantics.
 2. Unify security-pipeline behavior across built-in tools, MCP, plugins, deferred execution, and the remaining non-webhook ingress paths.
-3. Expand end-to-end coverage for gateway, onboarding, MCP, plugins, and remaining skill-family happy paths.
-4. Continue operator UX/status/doctor parity for recovery, backup, and transport health surfaces.
+3. Expand end-to-end coverage for gateway, onboarding, MCP, plugins, and remaining skill-family happy paths, especially Google/browser and transport restart flows.
+4. Continue operator UX/status/doctor parity for recovery, backup, schedule management, and transport health surfaces.
 
 ## Temporary Limitations That Must Stay Explicit
 
@@ -44,3 +44,5 @@ Last reviewed: March 19, 2026
 - CLI `status`/`doctor` now report persisted scheduler, heartbeat, and sub-agent recovery-state files, including task and dead-letter counts when available.
 - Signal polling now has duplicate-start rejection and tracked shutdown for its background receive loop, but broader restart recovery behavior across transports is still incomplete.
 - Telegram polling now has duplicate-start rejection and tracked shutdown for its background receive loop, but broader restart recovery behavior across transports is still incomplete.
+- GitHub shared-runtime happy-path coverage now exists against a local API stub, but equivalent Google/browser operational coverage is still thinner.
+- Managed schedule/backup/recovery operator workflows remain incomplete even though core persisted scheduler state is now landed.
