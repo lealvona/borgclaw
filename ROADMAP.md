@@ -52,6 +52,7 @@ Recent landed work in this phase:
 - The next remaining gaps in this phase are restart-safe catch-up/recovery behavior and clearer operator visibility into recovered background state.
 - Signal polling now rejects duplicate receiver starts, performs a health check before entering the receive loop, and tracks/aborts the background poll task on shutdown.
 - Telegram polling now rejects duplicate receiver starts and tracks/aborts the background receive task on shutdown.
+- CLI `status`/`doctor` now surface persisted heartbeat and sub-agent recovery state from the workspace, including task counts and dead-letter counts when state files exist.
 
 ## Phase 4: Skills and Integrations
 

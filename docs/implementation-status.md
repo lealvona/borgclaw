@@ -40,5 +40,6 @@ Last reviewed: March 11, 2026
 - Remote skill installs currently persist manifest content, not companion assets.
 - Several skill families have meaningful shared tool exposure, but not full operational completeness.
 - Background execution now persists scheduler run history, heartbeat task state, and sub-agent task state locally. Scheduler, heartbeat, and sub-agent retry/dead-letter semantics are landed.
+- CLI `status`/`doctor` now report persisted heartbeat and sub-agent recovery-state files, including task and dead-letter counts when available.
 - Signal polling now has duplicate-start rejection and tracked shutdown for its background receive loop, but broader restart recovery behavior across transports is still incomplete.
 - Telegram polling now has duplicate-start rejection and tracked shutdown for its background receive loop, but broader restart recovery behavior across transports is still incomplete.
