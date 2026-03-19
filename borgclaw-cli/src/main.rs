@@ -55,6 +55,8 @@ enum Commands {
     Status,
     /// Run health check
     Doctor,
+    /// Run self-test with exit status
+    SelfTest,
 }
 
 #[derive(Subcommand)]
@@ -129,6 +131,10 @@ async fn main() {
         Commands::Skills { action } => skills_action(&config, action).await,
         Commands::Status => status(config).await,
         Commands::Doctor => doctor(config).await,
+        Commands::SelfTest => {
+            let ok = self_test(config).await;
+            std::process::exit(if ok { 0 } else { 1 });
+        }
     }
 }
 
@@ -348,6 +354,7 @@ async fn status(config: AppConfig) {
         match provider_credential_status(&config).await {
             ProviderCredentialStatus::Env(_) => "configured via env",
             ProviderCredentialStatus::SecureStore(_) => "configured via secure store",
+            ProviderCredentialStatus::NotRequired => "not required",
             ProviderCredentialStatus::Missing(_) => "missing",
             ProviderCredentialStatus::UnknownProvider => "unknown",
         }
@@ -440,6 +447,12 @@ async fn doctor(config: AppConfig) {
         ProviderCredentialStatus::SecureStore(env_key) => {
             println!("✓ Provider credential stored securely ({})", env_key)
         }
+        ProviderCredentialStatus::NotRequired => {
+            println!(
+                "✓ Provider credential not required ({})",
+                config.agent.provider
+            )
+        }
         ProviderCredentialStatus::Missing(env_key) => {
             println!("✗ Provider credential missing ({})", env_key)
         }
@@ -504,6 +517,115 @@ async fn doctor(config: AppConfig) {
     println!("\nDiagnostics complete.");
 }
 
+async fn self_test(config: AppConfig) -> bool {
+    let failures = self_test_failures(&config).await;
+
+    println!("BorgClaw self-test");
+    println!("==================");
+
+    if failures.is_empty() {
+        println!("✓ PASS");
+        return true;
+    }
+
+    println!("✗ FAIL ({})", pluralize(failures.len(), "issue"));
+    for failure in failures {
+        println!("  - {}", failure);
+    }
+    false
+}
+
+async fn self_test_failures(config: &AppConfig) -> Vec<String> {
+    let mut failures = Vec::new();
+
+    if !config.agent.workspace.exists() {
+        failures.push(format!(
+            "workspace missing: {}",
+            config.agent.workspace.display()
+        ));
+    }
+
+    match provider_credential_status(config).await {
+        ProviderCredentialStatus::Env(_)
+        | ProviderCredentialStatus::SecureStore(_)
+        | ProviderCredentialStatus::NotRequired => {}
+        ProviderCredentialStatus::Missing(env_key) => {
+            failures.push(format!("provider credential missing ({})", env_key));
+        }
+        ProviderCredentialStatus::UnknownProvider => {
+            failures.push(format!("unknown provider '{}'", config.agent.provider));
+        }
+    }
+
+    if !(config.memory.database_path.parent().is_some()
+        || config.memory.database_path.is_absolute())
+    {
+        failures.push(format!(
+            "memory database path unavailable: {}",
+            config.memory.database_path.display()
+        ));
+    }
+
+    if !(std::fs::create_dir_all(&config.skills.skills_path).is_ok()
+        && config.skills.skills_path.exists())
+    {
+        failures.push(format!(
+            "skills path unavailable: {}",
+            config.skills.skills_path.display()
+        ));
+    }
+
+    let security = SecurityLayer::new();
+    if !matches!(
+        security.check_command("rm -rf /"),
+        borgclaw_core::security::CommandCheck::Blocked(_)
+    ) {
+        failures.push("command blocklist not working".to_string());
+    }
+
+    match config.security.vault.provider.as_deref() {
+        Some("bitwarden") if !cli_path_available(&config.security.vault.bitwarden.cli_path) => {
+            failures.push(format!(
+                "Bitwarden CLI missing ({})",
+                config.security.vault.bitwarden.cli_path.display()
+            ));
+        }
+        Some("1password") if !cli_path_available(&config.security.vault.one_password.cli_path) => {
+            failures.push(format!(
+                "1Password CLI missing ({})",
+                config.security.vault.one_password.cli_path.display()
+            ));
+        }
+        Some(other) if other != "bitwarden" && other != "1password" => {
+            failures.push(format!("unsupported vault provider '{}'", other));
+        }
+        _ => {}
+    }
+
+    failures.extend(
+        security_doctor_lines(config)
+            .into_iter()
+            .filter(|line| line.starts_with('✗'))
+            .map(|line| line.trim_start_matches("✗ ").to_string()),
+    );
+    failures.extend(
+        integration_doctor_lines(config)
+            .await
+            .into_iter()
+            .filter(|line| line.starts_with('✗'))
+            .map(|line| line.trim_start_matches("✗ ").to_string()),
+    );
+    failures.extend(
+        channel_doctor_lines(config)
+            .await
+            .into_iter()
+            .filter(|line| line.starts_with('✗'))
+            .map(|line| line.trim_start_matches("✗ ").to_string()),
+    );
+
+    failures
+}
+
 fn provider_env_var(provider: &str) -> Option<&'static str> {
     match provider {
         "openai" => Some("OPENAI_API_KEY"),
@@ -517,11 +639,16 @@ fn provider_env_var(provider: &str) -> Option<&'static str> {
 enum ProviderCredentialStatus {
     Env(&'static str),
     SecureStore(&'static str),
+    NotRequired,
     Missing(&'static str),
     UnknownProvider,
 }
 
 async fn provider_credential_status(config: &AppConfig) -> ProviderCredentialStatus {
+    if config.agent.provider == "ollama" {
+        return ProviderCredentialStatus::NotRequired;
+    }
+
     let Some(env_key) = provider_env_var(&config.agent.provider) else {
         return ProviderCredentialStatus::UnknownProvider;
     };
@@ -1934,6 +2061,37 @@ mod tests {
         assert!(lines
             .iter()
             .any(|line| line.contains("• Sub-agent state not created yet")));
+    }
+
+    #[test]
+    fn ollama_provider_does_not_require_credentials() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut config = temp_config();
+        config.agent.provider = "ollama".to_string();
+
+        assert!(matches!(
+            runtime.block_on(provider_credential_status(&config)),
+            ProviderCredentialStatus::NotRequired
+        ));
+    }
+
+    #[test]
+    fn self_test_failures_surface_missing_provider_credentials() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut config = temp_config();
+        config.agent.workspace = std::env::temp_dir().join(format!(
+            "borgclaw_self_test_workspace_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&config.agent.workspace).unwrap();
+        config.skills.skills_path = config.agent.workspace.join("skills");
+        config.memory.database_path = config.agent.workspace.join("memory.db");
+        config.agent.provider = "openai".to_string();
+
+        let failures = runtime.block_on(self_test_failures(&config));
+        assert!(failures
+            .iter()
+            .any(|line| line == "provider credential missing (OPENAI_API_KEY)"));
     }
 }
 
