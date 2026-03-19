@@ -78,6 +78,8 @@ enum Commands {
         #[command(subcommand)]
         action: SubagentAction,
     },
+    /// Show comprehensive runtime status
+    Runtime,
 }
 
 #[derive(Subcommand)]
@@ -239,6 +241,7 @@ async fn main() {
         Commands::Backup { action } => backup(config, action),
         Commands::Heartbeat { action } => heartbeat(config, action),
         Commands::Subagent { action } => subagent(config, action),
+        Commands::Runtime => runtime(config).await,
     }
 }
 
@@ -894,6 +897,56 @@ fn subagent(config: AppConfig, action: SubagentAction) {
     }
 }
 
+async fn runtime(config: AppConfig) {
+    println!("BorgClaw Runtime Status");
+    println!("=======================\n");
+
+    let scheduler_path = config.agent.workspace.join("scheduler.json");
+    println!("Scheduler: {}", scheduler_path.display());
+    match schedule_list_lines(&scheduler_path) {
+        Ok(lines) if lines.is_empty() => println!("  No scheduled tasks"),
+        Ok(lines) => {
+            for line in lines {
+                println!("  - {}", line);
+            }
+        }
+        Err(_) => println!("  (not available)"),
+    }
+
+    let heartbeat_path = config.agent.workspace.join("heartbeat.json");
+    println!("\nHeartbeat: {}", heartbeat_path.display());
+    match heartbeat_list_lines(&heartbeat_path) {
+        Ok(lines) if lines.is_empty() => println!("  No heartbeat tasks"),
+        Ok(lines) => {
+            for line in lines {
+                println!("  - {}", line);
+            }
+        }
+        Err(_) => println!("  (not available)"),
+    }
+
+    let subagent_path = config.agent.workspace.join("subagents.json");
+    println!("\nSub-agents: {}", subagent_path.display());
+    match subagent_list_lines(&subagent_path) {
+        Ok(lines) if lines.is_empty() => println!("  No sub-agent tasks"),
+        Ok(lines) => {
+            for line in lines {
+                println!("  - {}", line);
+            }
+        }
+        Err(_) => println!("  (not available)"),
+    }
+
+    println!("\nProvider: {} ({})", config.agent.provider, config.agent.model);
+    let cred_status = match provider_credential_status(&config).await {
+        ProviderCredentialStatus::Env(key) => format!("env: {}", key),
+        ProviderCredentialStatus::SecureStore(key) => format!("secure store: {}", key),
+        ProviderCredentialStatus::NotRequired => "not required".to_string(),
+        ProviderCredentialStatus::Missing(key) => format!("missing: {}", key),
+        ProviderCredentialStatus::UnknownProvider => "unknown".to_string(),
+    };
+    println!("  Credentials: {}", cred_status);
+}
 async fn self_test_failures(config: &AppConfig) -> Vec<String> {
     let mut failures = Vec::new();
 
