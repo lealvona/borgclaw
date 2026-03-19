@@ -4539,6 +4539,148 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
+    async fn google_tools_use_configured_runtime_endpoints_against_local_stub() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_google_tool_stub_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let token_path = root.join("google-token.json");
+        std::fs::write(
+            &token_path,
+            serde_json::json!({
+                "access_token": "test-token",
+                "refresh_token": null,
+                "expires_at": chrono::Utc::now().timestamp() + 3600,
+                "scopes": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let (base_url, server) = spawn_github_stub(vec![
+            (
+                "GET /gmail/v1/users/me/messages/msg-1 ",
+                "authorization: Bearer test-token",
+                serde_json::json!({
+                    "id": "msg-1",
+                    "thread_id": "thread-1",
+                    "snippet": "hello",
+                    "payload": {
+                        "headers": [
+                            {"name": "From", "value": "sender@example.com"},
+                            {"name": "Subject", "value": "Stub message"}
+                        ]
+                    }
+                })
+                .to_string(),
+            ),
+            (
+                "GET /drive/v3/files/file-1?alt=media ",
+                "authorization: Bearer test-token",
+                "drive-bytes".to_string(),
+            ),
+            (
+                "POST /calendar/v3/calendars/primary/events ",
+                "authorization: Bearer test-token",
+                serde_json::json!({
+                    "id": "event-1",
+                    "summary": "Stub event",
+                    "description": "calendar body",
+                    "start": { "dateTime": "2026-03-19T15:00:00Z" },
+                    "end": { "dateTime": "2026-03-19T16:00:00Z" }
+                })
+                .to_string(),
+            ),
+        ])
+        .await;
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &HeartbeatConfig::default(),
+            &SchedulerConfig::default(),
+            &crate::config::SkillsConfig {
+                google: crate::skills::GoogleOAuthConfig {
+                    client_id: "client-id".to_string(),
+                    client_secret: "client-secret".to_string(),
+                    token_path,
+                    gmail_base_url: base_url.clone(),
+                    drive_base_url: base_url.clone(),
+                    calendar_base_url: base_url.clone(),
+                    auth_base_url: format!("{}/oauth2", base_url),
+                    ..Default::default()
+                },
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let message = execute_tool(
+            &ToolCall::new(
+                "google_get_message",
+                HashMap::from([("id".to_string(), serde_json::json!("msg-1"))]),
+            ),
+            &runtime,
+        )
+        .await;
+        let download = execute_tool(
+            &ToolCall::new(
+                "google_download_file",
+                HashMap::from([("id".to_string(), serde_json::json!("file-1"))]),
+            ),
+            &runtime,
+        )
+        .await;
+        let event = execute_tool(
+            &ToolCall::new(
+                "google_create_event",
+                HashMap::from([
+                    ("summary".to_string(), serde_json::json!("Stub event")),
+                    (
+                        "start".to_string(),
+                        serde_json::json!("2026-03-19T15:00:00Z"),
+                    ),
+                    ("end".to_string(), serde_json::json!("2026-03-19T16:00:00Z")),
+                    (
+                        "description".to_string(),
+                        serde_json::json!("calendar body"),
+                    ),
+                ]),
+            ),
+            &runtime,
+        )
+        .await;
+
+        server.await.unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert!(message.success);
+        assert!(message
+            .output
+            .contains("msg-1 | sender@example.com | Stub message"));
+        assert!(download.success);
+        assert_eq!(
+            download.metadata.get("file_id").map(String::as_str),
+            Some("file-1")
+        );
+        assert!(download.output.contains("downloaded 11 bytes"));
+        assert!(event.success);
+        assert!(event.output.contains("event-1 | Stub event"));
+    }
+
+    #[tokio::test]
     async fn scheduled_tool_calls_inherit_group_context() {
         let root = std::env::temp_dir().join(format!(
             "borgclaw_scheduled_group_context_test_{}",
