@@ -27,16 +27,102 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::{net::SocketAddr, path::PathBuf};
 use tokio::sync::mpsc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{error, info, warn};
 
 const DEFAULT_WEBHOOK_BODY_LIMIT_BYTES: usize = 1024 * 1024;
+
+/// Gateway metrics for observability
+#[derive(Default)]
+struct GatewayMetrics {
+    /// Total WebSocket connections accepted
+    connections_total: AtomicU64,
+    /// Current active WebSocket connections
+    connections_active: AtomicU64,
+    /// Total messages received via WebSocket
+    messages_received: AtomicU64,
+    /// Total messages sent via WebSocket
+    messages_sent: AtomicU64,
+    /// Total pairing requests
+    pairing_requests: AtomicU64,
+    /// Total successful authentications
+    auth_success: AtomicU64,
+    /// Total failed authentications
+    auth_failure: AtomicU64,
+    /// Gateway start time
+    started_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl GatewayMetrics {
+    fn new() -> Self {
+        Self {
+            started_at: chrono::Utc::now(),
+            ..Default::default()
+        }
+    }
+
+    fn increment_connections(&self) {
+        self.connections_total.fetch_add(1, Ordering::SeqCst);
+        self.connections_active.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn decrement_connections(&self) {
+        self.connections_active.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    fn increment_messages_received(&self) {
+        self.messages_received.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn increment_messages_sent(&self) {
+        self.messages_sent.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn increment_pairing_requests(&self) {
+        self.pairing_requests.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn increment_auth_success(&self) {
+        self.auth_success.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn increment_auth_failure(&self) {
+        self.auth_failure.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn snapshot(&self) -> MetricsSnapshot {
+        MetricsSnapshot {
+            connections_total: self.connections_total.load(Ordering::SeqCst),
+            connections_active: self.connections_active.load(Ordering::SeqCst),
+            messages_received: self.messages_received.load(Ordering::SeqCst),
+            messages_sent: self.messages_sent.load(Ordering::SeqCst),
+            pairing_requests: self.pairing_requests.load(Ordering::SeqCst),
+            auth_success: self.auth_success.load(Ordering::SeqCst),
+            auth_failure: self.auth_failure.load(Ordering::SeqCst),
+            uptime_seconds: (chrono::Utc::now() - self.started_at).num_seconds() as u64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct MetricsSnapshot {
+    connections_total: u64,
+    connections_active: u64,
+    messages_received: u64,
+    messages_sent: u64,
+    pairing_requests: u64,
+    auth_success: u64,
+    auth_failure: u64,
+    uptime_seconds: u64,
+}
 
 #[derive(Clone)]
 struct GatewayState {
     config: Arc<AppConfig>,
     router: Arc<MessageRouter>,
     webhook: Option<Arc<WebhookChannel>>,
+    metrics: Arc<GatewayMetrics>,
 }
 
 #[tokio::main]
@@ -58,10 +144,12 @@ async fn main() {
     let websocket_port = websocket_port(&config);
     let webhook_port = webhook_port(&config);
     let webhook = configured_webhook_channel(&config).await.map(Arc::new);
+    let metrics = Arc::new(GatewayMetrics::new());
     let state = GatewayState {
         config,
         router,
         webhook,
+        metrics,
     };
 
     // CORS layer
@@ -75,6 +163,8 @@ async fn main() {
         .route("/health", get(api_status))
         .route("/ws", get(websocket_handler))
         .route("/api/status", get(api_status))
+        .route("/api/metrics", get(api_metrics))
+        .route("/api/config", get(api_config))
         .route("/api/chat", get(api_chat_get))
         .layer(cors.clone())
         .with_state(state.clone());
@@ -155,7 +245,8 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
         })
         .unwrap_or(true);
 
-    info!("New WebSocket connection: {}", client_id);
+    state.metrics.increment_connections();
+    info!("New WebSocket connection: {} (active: {})", client_id, state.metrics.connections_active.load(Ordering::SeqCst));
 
     let _ = send_event(
         &mut socket,
@@ -167,6 +258,7 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
         }),
     )
     .await;
+    state.metrics.increment_messages_sent();
 
     let mut heartbeat = tokio::time::interval(Duration::from_secs(30));
 
@@ -180,13 +272,16 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
                 })).await.is_err() {
                     break;
                 }
+                state.metrics.increment_messages_sent();
             }
             msg = socket.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
+                        state.metrics.increment_messages_received();
                         if let Err(e) = handle_ws_message(&mut socket, &state, &client_id, &text).await {
                             error!("Error handling message: {}", e);
                             let _ = send_event(&mut socket, error_event("internal gateway error")).await;
+                            state.metrics.increment_messages_sent();
                         }
                     }
                     Some(Ok(Message::Close(_))) | None => {
@@ -196,6 +291,7 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
                     Some(Err(e)) => {
                         error!("WebSocket error: {}", e);
                         let _ = send_event(&mut socket, error_event(&e.to_string())).await;
+                        state.metrics.increment_messages_sent();
                         break;
                     }
                     _ => {}
@@ -204,7 +300,8 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
         }
     }
 
-    info!("Connection closed: {}", client_id);
+    state.metrics.decrement_connections();
+    info!("Connection closed: {} (active: {})", client_id, state.metrics.connections_active.load(Ordering::SeqCst));
 }
 
 async fn handle_ws_message(
@@ -222,6 +319,7 @@ async fn handle_ws_message(
 
     match msg_type {
         "request_pairing" => {
+            state.metrics.increment_pairing_requests();
             let code = state.router.request_pairing_code(client_id).await?;
             send_event(
                 socket,
@@ -232,6 +330,7 @@ async fn handle_ws_message(
                 }),
             )
             .await?;
+            state.metrics.increment_messages_sent();
         }
         "auth" => {
             let pairing_code = request
@@ -240,6 +339,11 @@ async fn handle_ws_message(
                 .ok_or("Missing pairing_code")?;
             let approved_sender = state.router.approve_pairing_code(pairing_code).await?;
             let authenticated = approved_sender == client_id;
+            if authenticated {
+                state.metrics.increment_auth_success();
+            } else {
+                state.metrics.increment_auth_failure();
+            }
             send_event(socket, serde_json::json!({
                     "type": if authenticated { "authenticated" } else { "error" },
                     "client_id": client_id,
@@ -247,6 +351,7 @@ async fn handle_ws_message(
                     "message": if authenticated { "Pairing approved" } else { "Pairing code belongs to another sender" }
                 }))
             .await?;
+            state.metrics.increment_messages_sent();
         }
         "message" => {
             let content = request
@@ -304,9 +409,11 @@ async fn handle_ws_message(
         }
         "ping" => {
             send_event(socket, serde_json::json!({ "type": "pong" })).await?;
+            state.metrics.increment_messages_sent();
         }
         _ => {
             send_event(socket, error_event("Unknown message type")).await?;
+            state.metrics.increment_messages_sent();
         }
     }
 
@@ -725,6 +832,48 @@ async fn api_status(State(state): State<GatewayState>) -> impl IntoResponse {
     )
 }
 
+async fn api_metrics(State(state): State<GatewayState>) -> impl IntoResponse {
+    let metrics = state.metrics.snapshot();
+    (
+        StatusCode::OK,
+        serde_json::to_string(&metrics).unwrap_or_default(),
+    )
+}
+
+async fn api_config(State(state): State<GatewayState>) -> impl IntoResponse {
+    let sanitized = serde_json::json!({
+        "agent": {
+            "model": state.config.agent.model,
+            "provider": state.config.agent.provider,
+            "workspace": state.config.agent.workspace,
+        },
+        "channels": state.config.channels.keys().collect::<Vec<_>>(),
+        "memory": {
+            "database_path": state.config.memory.database_path,
+            "hybrid_search": state.config.memory.hybrid_search,
+            "session_max_entries": state.config.memory.session_max_entries,
+        },
+        "security": {
+            "approval_mode": state.config.security.approval_mode,
+            "pairing_enabled": state.config.security.pairing.enabled,
+            "prompt_injection_defense": state.config.security.prompt_injection_defense,
+            "secret_leak_detection": state.config.security.secret_leak_detection,
+            "wasm_sandbox": state.config.security.wasm_sandbox,
+            "command_blocklist": state.config.security.command_blocklist,
+        },
+        "skills": {
+            "github_configured": !state.config.skills.github.token.is_empty(),
+            "google_configured": !state.config.skills.google.client_id.is_empty(),
+            "browser_configured": !state.config.skills.browser.node_path.as_os_str().is_empty(),
+        },
+    });
+
+    (
+        StatusCode::OK,
+        serde_json::to_string(&sanitized).unwrap_or_default(),
+    )
+}
+
 async fn api_chat_get() -> impl IntoResponse {
     (StatusCode::METHOD_NOT_ALLOWED, "Use POST for chat")
 }
@@ -816,10 +965,12 @@ mod tests {
 
     #[tokio::test]
     async fn api_status_reports_running_state() {
+        let metrics = Arc::new(GatewayMetrics::new());
         let state = GatewayState {
             config: Arc::new(AppConfig::default()),
             router: Arc::new(MessageRouter::from_config(&AppConfig::default())),
             webhook: None,
+            metrics,
         };
 
         let response = api_status(State(state)).await.into_response();
@@ -912,10 +1063,12 @@ mod tests {
             .extra
             .insert("require_pairing".to_string(), toml::Value::Boolean(true));
 
+        let metrics = Arc::new(GatewayMetrics::new());
         let state = GatewayState {
             config: Arc::new(config.clone()),
             router: Arc::new(MessageRouter::from_config(&config)),
             webhook: None,
+            metrics,
         };
 
         let app = Router::new()
@@ -1013,10 +1166,12 @@ mod tests {
         let websocket = config.channels.entry("websocket".to_string()).or_default();
         websocket.enabled = false;
 
+        let metrics = Arc::new(GatewayMetrics::new());
         let state = GatewayState {
             config: Arc::new(config.clone()),
             router: Arc::new(MessageRouter::from_config(&config)),
             webhook: None,
+            metrics,
         };
 
         let app = Router::new()
@@ -1052,10 +1207,12 @@ mod tests {
             .extra
             .insert("rate_limit_per_minute".to_string(), toml::Value::Integer(1));
 
+        let metrics = Arc::new(GatewayMetrics::new());
         let state = GatewayState {
             config: Arc::new(config.clone()),
             router: Arc::new(MessageRouter::from_config(&config)),
             webhook: configured_webhook_channel(&config).await.map(Arc::new),
+            metrics,
         };
 
         let app = Router::new()
@@ -1144,10 +1301,12 @@ mod tests {
         let webhook = config.channels.entry("webhook".to_string()).or_default();
         webhook.enabled = true;
 
+        let metrics = Arc::new(GatewayMetrics::new());
         let state = GatewayState {
             config: Arc::new(config.clone()),
             router: Arc::new(MessageRouter::from_config(&config)),
             webhook: configured_webhook_channel(&config).await.map(Arc::new),
+            metrics,
         };
 
         let app = Router::new()
