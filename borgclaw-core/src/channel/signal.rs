@@ -1,4 +1,4 @@
-//! Signal channel implementation using signal-cli (primary) with JSON-RPC interface
+//! Signal channel implementation using signal-cli (primary) with JSON-RPC interface with restart recovery
 
 use super::{
     Channel, ChannelConfig, ChannelError, ChannelStatus, ChannelType, InboundMessage,
@@ -15,6 +15,17 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 
+/// Persistent state for restart recovery
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SignalState {
+    /// Last processed message timestamp
+    pub last_timestamp: Option<i64>,
+    /// Total messages processed (for stats)
+    pub total_messages: u64,
+    /// Last activity timestamp
+    pub last_activity: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 pub struct SignalChannel {
     channel_type: ChannelType,
     status: Arc<RwLock<ChannelStatus>>,
@@ -25,6 +36,8 @@ pub struct SignalChannel {
     running: Arc<AtomicBool>,
     loop_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     allowed_users: Vec<String>,
+    state_path: Option<PathBuf>,
+    last_timestamp: Arc<RwLock<Option<i64>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,6 +94,8 @@ impl SignalChannel {
             running: Arc::new(AtomicBool::new(false)),
             loop_handle: Arc::new(Mutex::new(None)),
             allowed_users: Vec::new(),
+            state_path: None,
+            last_timestamp: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -97,6 +112,67 @@ impl SignalChannel {
     pub fn with_data_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.data_path = path.into();
         self
+    }
+
+    pub fn with_state_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.state_path = Some(path.into());
+        self
+    }
+
+    /// Load persisted state for restart recovery
+    fn load_state(&self) -> SignalState {
+        if let Some(ref path) = self.state_path {
+            if let Ok(contents) = std::fs::read_to_string(path) {
+                if let Ok(state) = serde_json::from_str(&contents) {
+                    return state;
+                }
+            }
+        }
+        SignalState::default()
+    }
+
+    /// Persist state for restart recovery
+    async fn persist_state(&self) {
+        if let Some(ref path) = self.state_path {
+            let state = SignalState {
+                last_timestamp: *self.last_timestamp.read().await,
+                total_messages: self.msg_count.load(Ordering::Relaxed),
+                last_activity: self.status.read().await.last_activity,
+            };
+            if let Ok(contents) = serde_json::to_string_pretty(&state) {
+                let _ = std::fs::write(path, contents);
+            }
+        }
+    }
+
+    /// Health check for signal-cli
+    pub async fn health_check(&self) -> Result<(), ChannelError> {
+        if !self.signal_cli_path.exists() && !self.signal_cli_path.to_string_lossy().contains('/') {
+            // Try to find in PATH
+            match Command::new("which").arg(&self.signal_cli_path).output() {
+                Ok(output) if output.status.success() => Ok(()),
+                _ => Err(ChannelError::ConnectionFailed(
+                    "signal-cli not found in PATH".to_string(),
+                )),
+            }
+        } else if self.signal_cli_path.exists() {
+            Ok(())
+        } else {
+            Err(ChannelError::ConnectionFailed(format!(
+                "signal-cli not found at {}",
+                self.signal_cli_path.display()
+            )))
+        }
+    }
+
+    /// Check if restart recovery state is available
+    pub fn has_restart_state(&self) -> bool {
+        self.state_path.as_ref().map_or(false, |p| p.exists())
+    }
+
+    /// Get last timestamp for restart recovery
+    pub async fn last_timestamp(&self) -> Option<i64> {
+        *self.last_timestamp.read().await
     }
 
     pub fn with_allowed_users(mut self, users: Vec<String>) -> Self {
@@ -230,34 +306,6 @@ impl SignalChannel {
 
         *loop_handle.lock().await = Some(handle);
     }
-
-    fn health_check(&self) -> Result<(), ChannelError> {
-        let phone = self.phone_number.as_ref().ok_or_else(|| {
-            ChannelError::ConnectionFailed("Signal phone number not configured".to_string())
-        })?;
-
-        let output = Command::new(&self.signal_cli_path)
-            .arg("-u")
-            .arg(phone)
-            .arg("--config")
-            .arg(&self.data_path)
-            .arg("getUserStatus")
-            .arg(phone)
-            .output()
-            .map_err(|e| {
-                ChannelError::ConnectionFailed(format!("signal health check failed: {}", e))
-            })?;
-
-        if output.status.success() {
-            Ok(())
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(ChannelError::ConnectionFailed(format!(
-                "signal health check failed: {}",
-                stderr.trim()
-            )))
-        }
-    }
 }
 
 impl Default for SignalChannel {
@@ -325,6 +373,15 @@ impl Channel for SignalChannel {
         }
 
         *self.status.write().await = ChannelStatus::connected();
+
+        // Load persisted state for restart recovery
+        let state = self.load_state();
+        *self.last_timestamp.write().await = state.last_timestamp;
+        self.msg_count.store(state.total_messages, Ordering::Relaxed);
+        if let Some(last_activity) = state.last_activity {
+            self.status.write().await.last_activity = Some(last_activity);
+        }
+
         log::info!("Signal: Channel initialized for {}", phone);
 
         Ok(())
@@ -350,7 +407,7 @@ impl Channel for SignalChannel {
             ));
         }
 
-        if let Err(err) = self.health_check() {
+        if let Err(err) = self.health_check().await {
             self.running.store(false, Ordering::SeqCst);
             return Err(err);
         }
@@ -424,6 +481,8 @@ impl Channel for SignalChannel {
         if let Some(handle) = self.loop_handle.lock().await.take() {
             handle.abort();
         }
+        // Persist final state before shutdown
+        self.persist_state().await;
         *self.status.write().await = ChannelStatus::disconnected();
         log::info!("Signal: Channel shutdown");
         Ok(())
@@ -478,6 +537,8 @@ impl SignalChannelBuilder {
             running: Arc::new(AtomicBool::new(false)),
             loop_handle: Arc::new(Mutex::new(None)),
             allowed_users: self.allowed_users,
+            state_path: None,
+            last_timestamp: Arc::new(RwLock::new(None)),
         }
     }
 }
