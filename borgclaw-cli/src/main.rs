@@ -980,12 +980,17 @@ async fn mcp_doctor_lines(config: &AppConfig) -> Vec<String> {
 
     let security = SecurityLayer::with_config(config.security.clone());
     let mut lines = Vec::new();
+    let mut failures = Vec::new();
+    let total = server_names.len();
 
     for name in server_names {
         let Some(server) = config.mcp.servers.get(&name) else {
             continue;
         };
         let (ok, detail) = probe_mcp_server(&security, &name, server).await;
+        if !ok {
+            failures.push(name.clone());
+        }
         lines.push(format!(
             "{} MCP {} ({}) {}",
             marker(ok),
@@ -994,6 +999,26 @@ async fn mcp_doctor_lines(config: &AppConfig) -> Vec<String> {
             detail
         ));
     }
+
+    let failure_count = failures.len();
+    let success_count = total.saturating_sub(failure_count);
+    let summary = if failure_count == 0 {
+        format!("✓ MCP summary: all {} configured servers reachable", total)
+    } else if success_count == 0 {
+        format!(
+            "✗ MCP summary: all {} configured servers failing ({})",
+            total,
+            failures.join(", ")
+        )
+    } else {
+        format!(
+            "✗ MCP summary: {} of {} configured servers failing ({})",
+            failure_count,
+            total,
+            failures.join(", ")
+        )
+    };
+    lines.insert(0, summary);
 
     lines
 }
@@ -1725,6 +1750,9 @@ mod tests {
         let lines = runtime.block_on(mcp_doctor_lines(&config));
         assert!(lines
             .iter()
+            .any(|line| line == "✗ MCP summary: all 1 configured servers failing (blocked)"));
+        assert!(lines
+            .iter()
             .any(|line| line.starts_with("✗ MCP blocked (stdio) blocked by policy:")));
     }
 
@@ -1745,9 +1773,48 @@ mod tests {
         );
 
         let lines = runtime.block_on(mcp_doctor_lines(&config));
+        assert!(lines
+            .iter()
+            .any(|line| line == "✗ MCP summary: all 1 configured servers failing (missing)"));
         assert!(lines.iter().any(|line| {
             line == "✗ MCP missing (stdio) missing binary: /definitely/not/a/real/mcp"
         }));
+    }
+
+    #[test]
+    fn mcp_doctor_summarizes_multiple_failures() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut config = temp_config();
+        config.mcp.servers.insert(
+            "github".to_string(),
+            borgclaw_core::config::McpServerConfig {
+                transport: "sse".to_string(),
+                command: None,
+                args: Vec::new(),
+                env: HashMap::new(),
+                url: Some("http://127.0.0.1:9/sse".to_string()),
+                headers: HashMap::new(),
+            },
+        );
+        config.mcp.servers.insert(
+            "missing".to_string(),
+            borgclaw_core::config::McpServerConfig {
+                transport: "stdio".to_string(),
+                command: Some("/definitely/not/a/real/mcp".to_string()),
+                args: Vec::new(),
+                env: HashMap::new(),
+                url: None,
+                headers: HashMap::new(),
+            },
+        );
+
+        let lines = runtime.block_on(mcp_doctor_lines(&config));
+        assert!(lines.iter().any(
+            |line| line == "✗ MCP summary: all 2 configured servers failing (github, missing)"
+        ));
+        assert!(lines
+            .iter()
+            .any(|line| line.starts_with("✗ MCP github (sse) ")));
     }
 
     #[test]

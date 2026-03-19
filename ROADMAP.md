@@ -84,6 +84,7 @@ Recent landed work in this phase:
 - Shared command policy now supports an additive allowlist, and that policy is enforced consistently for foreground command execution, scheduled command execution, and MCP stdio server commands.
 - MCP stdio transport setup now inherits injected secret environment and resolves `${VAR}` placeholders through the security layer instead of relying on raw configured env only.
 - MCP client coverage now includes a local stdio-stub flow for `initialize`, `tools/list`, and `tools/call`, matching the plan’s stub-server test requirement.
+- CLI `doctor` now summarizes aggregate MCP reachability failures across configured servers instead of surfacing only per-server lines, improving the remaining MCP/runtime correctness diagnostics.
 - Plugin manifest file read/write permissions now preserve declared paths and are enforced against the shared workspace policy instead of being treated as mostly informational.
 - Plugin coverage now includes a real loaded-WASM runtime path through `plugin_invoke`, plus a permission-denial case that proves workspace policy is enforced before execution.
 - Onboarding coverage now includes a non-interactive `--refresh-models` path against a local HTTP stub plus a fallback case, and `providers.toml` now round-trips the documented `env_key` shape for both auth and no-auth providers.
