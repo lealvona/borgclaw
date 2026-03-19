@@ -73,6 +73,11 @@ enum Commands {
         #[command(subcommand)]
         action: HeartbeatAction,
     },
+    /// Inspect persisted sub-agent tasks
+    Subagent {
+        #[command(subcommand)]
+        action: SubagentAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -165,6 +170,16 @@ enum HeartbeatAction {
     Trigger { id: String },
 }
 
+#[derive(Subcommand)]
+enum SubagentAction {
+    /// List persisted sub-agent tasks
+    List,
+    /// Show persisted details for one sub-agent task
+    Show { id: String },
+    /// Cancel a running sub-agent task
+    Cancel { id: String },
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -223,6 +238,7 @@ async fn main() {
         Commands::Schedules { action } => schedules(config, action),
         Commands::Backup { action } => backup(config, action),
         Commands::Heartbeat { action } => heartbeat(config, action),
+        Commands::Subagent { action } => subagent(config, action),
     }
 }
 
@@ -829,6 +845,51 @@ fn heartbeat(config: AppConfig, action: HeartbeatAction) {
             println!("Triggering heartbeat task");
             println!("=========================");
             println!("Manual trigger not yet implemented for '{}'", id);
+        }
+    }
+}
+
+fn subagent(config: AppConfig, action: SubagentAction) {
+    let path = config.agent.workspace.join("subagents.json");
+    match action {
+        SubagentAction::List => {
+            println!("Sub-agent tasks");
+            println!("===============");
+            match subagent_list_lines(&path) {
+                Ok(lines) if lines.is_empty() => {
+                    println!("No sub-agent tasks found in {}", path.display())
+                }
+                Ok(lines) => {
+                    for line in lines {
+                        println!("  - {}", line);
+                    }
+                }
+                Err(err) => println!("Could not read {}: {}", path.display(), err),
+            }
+        }
+        SubagentAction::Show { id } => {
+            println!("Sub-agent task details");
+            println!("======================");
+            match subagent_detail_lines(&path, &id) {
+                Ok(lines) if lines.is_empty() => {
+                    println!("No sub-agent task '{}' found in {}", id, path.display())
+                }
+                Ok(lines) => {
+                    for line in lines {
+                        println!("{}", line);
+                    }
+                }
+                Err(err) => println!("Could not read {}: {}", path.display(), err),
+            }
+        }
+        SubagentAction::Cancel { id } => {
+            println!("Cancelling sub-agent task");
+            println!("=========================");
+            match cancel_subagent_task(&path, &id) {
+                Ok(true) => println!("Cancelled sub-agent task '{}'", id),
+                Ok(false) => println!("No sub-agent task '{}' found", id),
+                Err(err) => println!("Failed to cancel sub-agent task: {}", err),
+            }
         }
     }
 }
@@ -1995,6 +2056,86 @@ fn update_heartbeat_task_status(
 
     if let Some(obj) = task.as_object_mut() {
         obj.insert("enabled".to_string(), serde_json::json!(enabled));
+    }
+
+    let serialized = serde_json::to_string_pretty(&tasks).map_err(|e| e.to_string())?;
+    std::fs::write(path, serialized).map_err(|e| e.to_string())?;
+
+    Ok(true)
+}
+
+fn subagent_list_lines(path: &std::path::Path) -> Result<Vec<String>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let tasks: std::collections::HashMap<String, serde_json::Value> =
+        serde_json::from_str(&contents).map_err(|e| e.to_string())?;
+
+    let mut lines = Vec::new();
+    for (id, task) in tasks {
+        let status = task
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let goal = task
+            .get("goal")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unnamed");
+        lines.push(format!("{} [{}] {}", id, status, goal));
+    }
+
+    lines.sort();
+    Ok(lines)
+}
+
+fn subagent_detail_lines(path: &std::path::Path, id: &str) -> Result<Vec<String>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let tasks: std::collections::HashMap<String, serde_json::Value> =
+        serde_json::from_str(&contents).map_err(|e| e.to_string())?;
+
+    let Some(task) = tasks.get(id) else {
+        return Ok(Vec::new());
+    };
+
+    let mut lines = vec![format!("id: {}", id)];
+
+    if let Some(status) = task.get("status").and_then(|v| v.as_str()) {
+        lines.push(format!("status: {}", status));
+    }
+
+    if let Some(goal) = task.get("goal").and_then(|v| v.as_str()) {
+        lines.push(format!("goal: {}", goal));
+    }
+
+    if let Some(created) = task.get("created_at").and_then(|v| v.as_str()) {
+        lines.push(format!("created_at: {}", created));
+    }
+
+    Ok(lines)
+}
+
+fn cancel_subagent_task(path: &std::path::Path, id: &str) -> Result<bool, String> {
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut tasks: std::collections::HashMap<String, serde_json::Value> =
+        serde_json::from_str(&contents).map_err(|e| e.to_string())?;
+
+    let task = match tasks.get_mut(id) {
+        Some(task) => task,
+        None => return Ok(false),
+    };
+
+    if let Some(obj) = task.as_object_mut() {
+        obj.insert("status".to_string(), serde_json::json!("cancelled"));
     }
 
     let serialized = serde_json::to_string_pretty(&tasks).map_err(|e| e.to_string())?;
