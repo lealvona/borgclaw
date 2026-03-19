@@ -95,3 +95,4 @@ Recent landed work in this phase:
 - The gateway now also rejects WebSocket upgrades when the channel is explicitly disabled, aligning transport entry with the same channel-enable contract.
 - Webhook rate limiting now returns `Retry-After` metadata on `429` responses, improving transport-facing retry semantics instead of leaving operators to guess the backoff window.
 - The next remaining gaps in this phase are backup/recovery workflows, deeper end-to-end security coverage across deferred/background execution paths, stronger routing/ownership correctness coverage, and operator-facing health/self-test surfaces.
+- CLI now provides a first concrete backup workflow via `backup export`, snapshotting persisted scheduler, heartbeat, and sub-agent state for operator recovery and later restore work.

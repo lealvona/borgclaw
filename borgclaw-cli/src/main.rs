@@ -17,7 +17,7 @@ use borgclaw_core::{
     skills::SkillsRegistry,
 };
 use clap::{Parser, Subcommand};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::{error, info};
 
@@ -63,6 +63,11 @@ enum Commands {
         #[command(subcommand)]
         action: ScheduleAction,
     },
+    /// Export persisted local runtime state for backup/recovery
+    Backup {
+        #[command(subcommand)]
+        action: BackupAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -92,6 +97,12 @@ enum ScheduleAction {
     List,
     /// Show persisted details for one scheduled task
     Show { id: String },
+}
+
+#[derive(Subcommand)]
+enum BackupAction {
+    /// Export persisted local runtime state to a JSON snapshot
+    Export { output: PathBuf },
 }
 
 #[tokio::main]
@@ -150,6 +161,7 @@ async fn main() {
             std::process::exit(if ok { 0 } else { 1 });
         }
         Commands::Schedules { action } => schedules(config, action),
+        Commands::Backup { action } => backup(config, action),
     }
 }
 
@@ -585,6 +597,37 @@ fn schedules(config: AppConfig, action: ScheduleAction) {
                     }
                 }
                 Err(err) => println!("Could not read {}: {}", path.display(), err),
+            }
+        }
+    }
+}
+
+fn backup(config: AppConfig, action: BackupAction) {
+    match action {
+        BackupAction::Export { output } => {
+            match export_backup_snapshot(&config.agent.workspace, &output) {
+                Ok(snapshot) => {
+                    println!(
+                        "Exported backup snapshot to {} (scheduler={}, heartbeat={}, subagents={})",
+                        output.display(),
+                        snapshot
+                            .scheduler
+                            .as_ref()
+                            .map(|value| value.len())
+                            .unwrap_or(0),
+                        snapshot
+                            .heartbeat
+                            .as_ref()
+                            .map(|value| value.len())
+                            .unwrap_or(0),
+                        snapshot
+                            .subagents
+                            .as_ref()
+                            .map(|value| value.len())
+                            .unwrap_or(0)
+                    );
+                }
+                Err(err) => println!("Backup export failed: {}", err),
             }
         }
     }
@@ -1133,6 +1176,55 @@ fn background_state_counts(path: &std::path::Path) -> Option<(usize, usize)> {
         })
         .count();
     Some((map.len(), dead_lettered))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BackupSnapshot {
+    version: String,
+    exported_at: String,
+    workspace: String,
+    scheduler: Option<serde_json::Map<String, serde_json::Value>>,
+    heartbeat: Option<serde_json::Map<String, serde_json::Value>>,
+    subagents: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+fn export_backup_snapshot(
+    workspace: &std::path::Path,
+    output: &std::path::Path,
+) -> Result<BackupSnapshot, String> {
+    let snapshot = BackupSnapshot {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        exported_at: chrono::Utc::now().to_rfc3339(),
+        workspace: workspace.display().to_string(),
+        scheduler: read_state_map(&workspace.join("scheduler.json"))?,
+        heartbeat: read_state_map(&workspace.join("heartbeat.json"))?,
+        subagents: read_state_map(&workspace.join("subagents.json"))?,
+    };
+
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    let contents = serde_json::to_string_pretty(&snapshot).map_err(|e| e.to_string())?;
+    std::fs::write(output, contents).map_err(|e| e.to_string())?;
+
+    Ok(snapshot)
+}
+
+fn read_state_map(
+    path: &std::path::Path,
+) -> Result<Option<serde_json::Map<String, serde_json::Value>>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let value: serde_json::Value = serde_json::from_str(&contents).map_err(|e| e.to_string())?;
+    let object = value
+        .as_object()
+        .cloned()
+        .ok_or_else(|| format!("{} does not contain a JSON object", path.display()))?;
+    Ok(Some(object))
 }
 
 fn schedule_list_lines(path: &std::path::Path) -> Result<Vec<String>, String> {
@@ -2404,6 +2496,51 @@ mod tests {
 
         let lines = schedule_detail_lines(&workspace.join("scheduler.json"), "missing").unwrap();
         assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn export_backup_snapshot_writes_available_runtime_state() {
+        let workspace = std::env::temp_dir().join(format!(
+            "borgclaw_cli_backup_export_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let output = workspace.join("exports").join("snapshot.json");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(
+            workspace.join("scheduler.json"),
+            r#"{"job-1":{"status":"pending","dead_lettered_at":null}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.join("heartbeat.json"),
+            r#"{"hb-1":{"enabled":true,"dead_lettered_at":null}}"#,
+        )
+        .unwrap();
+
+        let snapshot = export_backup_snapshot(&workspace, &output).unwrap();
+        let written: BackupSnapshot =
+            serde_json::from_str(&std::fs::read_to_string(&output).unwrap()).unwrap();
+
+        assert_eq!(snapshot.workspace, workspace.display().to_string());
+        assert_eq!(written.workspace, workspace.display().to_string());
+        assert_eq!(written.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(written.scheduler.as_ref().map(|value| value.len()), Some(1));
+        assert_eq!(written.heartbeat.as_ref().map(|value| value.len()), Some(1));
+        assert!(written.subagents.is_none());
+    }
+
+    #[test]
+    fn read_state_map_rejects_non_object_json() {
+        let workspace = std::env::temp_dir().join(format!(
+            "borgclaw_cli_backup_invalid_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace).unwrap();
+        let path = workspace.join("scheduler.json");
+        std::fs::write(&path, "[]").unwrap();
+
+        let err = read_state_map(&path).unwrap_err();
+        assert!(err.contains("does not contain a JSON object"));
     }
 
     #[test]
