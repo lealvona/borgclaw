@@ -90,4 +90,5 @@ Recent landed work in this phase:
 - Onboarding coverage now includes a non-interactive `--refresh-models` path against a local HTTP stub plus a fallback case, and `providers.toml` now round-trips the documented `env_key` shape for both auth and no-auth providers.
 - Gateway coverage now includes black-box WebSocket and webhook tests for the documented welcome/pairing/auth event flow plus webhook health, secret enforcement, and rate-limiting behavior.
 - Webhook ingress now has request-size enforcement and redacted external error responses, narrowing the remaining gap in this phase.
+- The shared router now rejects explicitly disabled channels instead of treating `enabled = false` as informational only, tightening routing correctness against the documented channel contract.
 - The next remaining gaps in this phase are backup/recovery workflows, deeper end-to-end security coverage across deferred/background execution paths, stronger routing/ownership correctness coverage, and operator-facing health/self-test surfaces.

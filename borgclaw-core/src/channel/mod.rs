@@ -322,11 +322,17 @@ impl MessageRouter {
     }
 
     async fn enforce_sender_policy(&self, msg: &InboundMessage) -> Result<(), ChannelError> {
-        let config = self
-            .channel_configs
-            .get(&msg.channel.0)
-            .cloned()
-            .unwrap_or_default();
+        let configured = self.channel_configs.get(&msg.channel.0).cloned();
+        if let Some(config) = configured.as_ref() {
+            if !config.enabled {
+                return Err(ChannelError::AuthFailed(format!(
+                    "channel '{}' is disabled",
+                    msg.channel.0
+                )));
+            }
+        }
+
+        let config = configured.unwrap_or_default();
 
         if !config.allow_from.is_empty()
             && !config
@@ -501,5 +507,36 @@ mod tests {
             .response
             .text
             .contains("provider=unsupported"));
+    }
+
+    #[tokio::test]
+    async fn router_rejects_explicitly_disabled_channels() {
+        let mut config = crate::config::AppConfig::default();
+        config.agent.provider = "unsupported".to_string();
+        config.channels.insert(
+            "webhook".to_string(),
+            crate::config::ChannelConfig {
+                enabled: false,
+                allow_from: Vec::new(),
+                dm_policy: crate::config::DmPolicy::Open,
+                credentials: None,
+                extra: HashMap::new(),
+            },
+        );
+
+        let router = MessageRouter::from_config(&config);
+        let inbound = InboundMessage {
+            channel: ChannelType::new("webhook"),
+            sender: Sender::new("user-1").with_name("User"),
+            content: MessagePayload::text("hello"),
+            group_id: Some("ops".to_string()),
+            timestamp: chrono::Utc::now(),
+            raw: serde_json::Value::Null,
+        };
+
+        let result = router.route(inbound).await;
+        assert!(
+            matches!(result, Err(ChannelError::AuthFailed(message)) if message == "channel 'webhook' is disabled")
+        );
     }
 }
