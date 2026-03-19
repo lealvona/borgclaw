@@ -11,7 +11,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 
 pub struct SignalChannel {
@@ -22,6 +23,7 @@ pub struct SignalChannel {
     signal_cli_path: PathBuf,
     data_path: PathBuf,
     running: Arc<AtomicBool>,
+    loop_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     allowed_users: Vec<String>,
 }
 
@@ -77,6 +79,7 @@ impl SignalChannel {
             signal_cli_path: PathBuf::from("signal-cli"),
             data_path: PathBuf::from(".borgclaw/signal-data"),
             running: Arc::new(AtomicBool::new(false)),
+            loop_handle: Arc::new(Mutex::new(None)),
             allowed_users: Vec::new(),
         }
     }
@@ -132,8 +135,9 @@ impl SignalChannel {
         let status = self.status.clone();
         let channel_type = self.channel_type.clone();
         let msg_count = self.msg_count.clone();
+        let loop_handle = self.loop_handle.clone();
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             log::info!("Signal: Starting message receiver for {}", phone);
 
             while running.load(Ordering::Relaxed) {
@@ -223,6 +227,36 @@ impl SignalChannel {
 
             log::info!("Signal: Message receiver stopped");
         });
+
+        *loop_handle.lock().await = Some(handle);
+    }
+
+    fn health_check(&self) -> Result<(), ChannelError> {
+        let phone = self.phone_number.as_ref().ok_or_else(|| {
+            ChannelError::ConnectionFailed("Signal phone number not configured".to_string())
+        })?;
+
+        let output = Command::new(&self.signal_cli_path)
+            .arg("-u")
+            .arg(phone)
+            .arg("--config")
+            .arg(&self.data_path)
+            .arg("getUserStatus")
+            .arg(phone)
+            .output()
+            .map_err(|e| {
+                ChannelError::ConnectionFailed(format!("signal health check failed: {}", e))
+            })?;
+
+        if output.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(ChannelError::ConnectionFailed(format!(
+                "signal health check failed: {}",
+                stderr.trim()
+            )))
+        }
     }
 }
 
@@ -306,7 +340,21 @@ impl Channel for SignalChannel {
             ));
         }
 
-        self.running.store(true, Ordering::Relaxed);
+        if self
+            .running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err(ChannelError::ConnectionFailed(
+                "Signal receiver already running".to_string(),
+            ));
+        }
+
+        if let Err(err) = self.health_check() {
+            self.running.store(false, Ordering::SeqCst);
+            return Err(err);
+        }
+
         self.receive_messages(sender).await;
 
         Ok(())
@@ -372,7 +420,10 @@ impl Channel for SignalChannel {
     }
 
     async fn shutdown(&self) -> Result<(), ChannelError> {
-        self.running.store(false, Ordering::Relaxed);
+        self.running.store(false, Ordering::SeqCst);
+        if let Some(handle) = self.loop_handle.lock().await.take() {
+            handle.abort();
+        }
         *self.status.write().await = ChannelStatus::disconnected();
         log::info!("Signal: Channel shutdown");
         Ok(())
@@ -425,6 +476,7 @@ impl SignalChannelBuilder {
             signal_cli_path: self.signal_cli_path,
             data_path: self.data_path,
             running: Arc::new(AtomicBool::new(false)),
+            loop_handle: Arc::new(Mutex::new(None)),
             allowed_users: self.allowed_users,
         }
     }
@@ -433,5 +485,50 @@ impl SignalChannelBuilder {
 impl Default for SignalChannelBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fake_signal_cli_script() -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("borgclaw_signal_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("signal-cli");
+        std::fs::write(
+            &path,
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo 1.0.0\n  exit 0\nfi\ncase \"$5\" in\n  getUserStatus)\n    echo '{\"registered\":true}'\n    exit 0\n    ;;\n  receive)\n    sleep 5\n    exit 0\n    ;;\nesac\nexit 0\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&path).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&path, perms).unwrap();
+        }
+        path
+    }
+
+    #[tokio::test]
+    async fn signal_start_receiving_rejects_duplicate_starts_and_shutdown_clears_handle() {
+        let script = fake_signal_cli_script();
+        let channel = SignalChannelBuilder::new()
+            .phone_number("+15551234567")
+            .signal_cli_path(script)
+            .build();
+        *channel.status.write().await = ChannelStatus::connected();
+
+        let (tx, _rx) = mpsc::channel(1);
+        channel.start_receiving(tx.clone()).await.unwrap();
+
+        let err = channel.start_receiving(tx).await.unwrap_err();
+        assert!(err.to_string().contains("already running"));
+
+        channel.shutdown().await.unwrap();
+        assert!(!channel.running.load(Ordering::SeqCst));
+        assert!(channel.loop_handle.lock().await.is_none());
     }
 }

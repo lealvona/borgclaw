@@ -141,6 +141,8 @@ X-Webhook-Secret: your-secret
 
 Default: 60 requests/minute per IP
 
+Request bodies larger than 1 MiB are rejected before routing.
+
 ### Triggers
 
 Named triggers for automation:
