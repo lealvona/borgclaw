@@ -46,3 +46,4 @@ Last reviewed: March 19, 2026, with upstream inspiration follow-up through March
 - Telegram polling now has duplicate-start rejection and tracked shutdown for its background receive loop, but broader restart recovery behavior across transports is still incomplete.
 - GitHub, Google, and browser now all have local shared-runtime happy-path coverage, but broader operational completeness across those families is still incomplete.
 - Managed schedule/backup/recovery operator workflows remain incomplete even though core persisted scheduler state is now landed.
+- CLI `doctor` now summarizes aggregate MCP reachability failures across configured servers, but deeper transport-facing retry/rate-limit diagnostics still remain.
