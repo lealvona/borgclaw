@@ -53,6 +53,7 @@ Recent landed work in this phase:
 - Tool execution now carries conversation context so memory tools respect `group_id`, and scheduled tool jobs inherit originating sender/session metadata.
 - CLI `status`/`doctor` now surface persisted scheduler, heartbeat, and sub-agent recovery state from the workspace, including task counts and dead-letter counts when state files exist.
 - The next remaining gaps in this phase are deeper restart-safe catch-up/recovery behavior across more transports, clearer operator visibility into recovered background state over time, and more explicit schedule-management surfaces.
+- CLI now provides a read-only `schedules list` view over persisted scheduler state, narrowing the operator visibility gap without yet adding schedule mutation UX.
 - Signal polling now rejects duplicate receiver starts, performs a health check before entering the receive loop, and tracks/aborts the background poll task on shutdown.
 - Telegram polling now rejects duplicate receiver starts and tracks/aborts the background receive task on shutdown.
 

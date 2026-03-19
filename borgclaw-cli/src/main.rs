@@ -12,6 +12,7 @@ use borgclaw_core::{
             McpTransportConfig, SseTransportConfig, StdioTransportConfig, WebSocketTransportConfig,
         },
     },
+    scheduler::{Job, JobTrigger},
     security::SecurityLayer,
     skills::SkillsRegistry,
 };
@@ -57,6 +58,11 @@ enum Commands {
     Doctor,
     /// Run self-test with exit status
     SelfTest,
+    /// Inspect persisted scheduled tasks
+    Schedules {
+        #[command(subcommand)]
+        action: ScheduleAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -78,6 +84,12 @@ enum SkillsAction {
     },
     /// Install a skill
     Install { name: String },
+}
+
+#[derive(Subcommand)]
+enum ScheduleAction {
+    /// List persisted scheduled tasks
+    List,
 }
 
 #[tokio::main]
@@ -135,6 +147,7 @@ async fn main() {
             let ok = self_test(config).await;
             std::process::exit(if ok { 0 } else { 1 });
         }
+        Commands::Schedules { action } => schedules(config, action),
     }
 }
 
@@ -533,6 +546,27 @@ async fn self_test(config: AppConfig) -> bool {
         println!("  - {}", failure);
     }
     false
+}
+
+fn schedules(config: AppConfig, action: ScheduleAction) {
+    match action {
+        ScheduleAction::List => {
+            let path = config.agent.workspace.join("scheduler.json");
+            println!("Scheduled tasks");
+            println!("===============");
+            match schedule_list_lines(&path) {
+                Ok(lines) if lines.is_empty() => {
+                    println!("No scheduled tasks found in {}", path.display())
+                }
+                Ok(lines) => {
+                    for line in lines {
+                        println!("  - {}", line);
+                    }
+                }
+                Err(err) => println!("Could not read {}: {}", path.display(), err),
+            }
+        }
+    }
 }
 
 async fn self_test_failures(config: &AppConfig) -> Vec<String> {
@@ -1078,6 +1112,61 @@ fn background_state_counts(path: &std::path::Path) -> Option<(usize, usize)> {
         })
         .count();
     Some((map.len(), dead_lettered))
+}
+
+fn schedule_list_lines(path: &std::path::Path) -> Result<Vec<String>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let jobs: std::collections::HashMap<String, Job> =
+        serde_json::from_str(&contents).map_err(|e| e.to_string())?;
+    let mut jobs = jobs.into_values().collect::<Vec<_>>();
+    jobs.sort_by(|left, right| {
+        left.next_run
+            .cmp(&right.next_run)
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    Ok(jobs.into_iter().map(format_schedule_job_line).collect())
+}
+
+fn format_schedule_job_line(job: Job) -> String {
+    let next_run = job
+        .next_run
+        .map(|value| value.to_rfc3339())
+        .unwrap_or_else(|| "none".to_string());
+    let last_run = job
+        .last_run
+        .map(|value| value.to_rfc3339())
+        .unwrap_or_else(|| "never".to_string());
+    let dead_letter = if job.dead_lettered_at.is_some() {
+        "dead-lettered"
+    } else {
+        "active"
+    };
+    format!(
+        "{} [{}] trigger={} next={} last={} runs={} retries={}/{} {}",
+        job.name,
+        job.status,
+        schedule_trigger_label(&job.trigger),
+        next_run,
+        last_run,
+        job.run_count,
+        job.retry_count,
+        job.max_retries,
+        dead_letter
+    )
+}
+
+fn schedule_trigger_label(trigger: &JobTrigger) -> String {
+    match trigger {
+        JobTrigger::Cron(expr) => format!("cron({})", expr),
+        JobTrigger::Interval(seconds) => format!("interval({}s)", seconds),
+        JobTrigger::OneShot(at) => format!("oneshot({})", at.to_rfc3339()),
+    }
 }
 
 fn pluralize(count: usize, noun: &str) -> String {
@@ -2061,6 +2150,81 @@ mod tests {
         assert!(lines
             .iter()
             .any(|line| line.contains("• Sub-agent state not created yet")));
+    }
+
+    #[test]
+    fn schedule_list_lines_returns_empty_when_scheduler_state_is_missing() {
+        let workspace = std::env::temp_dir().join(format!(
+            "borgclaw_cli_schedule_list_missing_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let lines = schedule_list_lines(&workspace.join("scheduler.json")).unwrap();
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn schedule_list_lines_formats_persisted_jobs() {
+        let workspace = std::env::temp_dir().join(format!(
+            "borgclaw_cli_schedule_list_present_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(
+            workspace.join("scheduler.json"),
+            r#"{
+              "job-1": {
+                "id": "job-1",
+                "name": "nightly-backup",
+                "description": null,
+                "trigger": {"type": "Cron", "value": "0 0 * * * *"},
+                "action": "message",
+                "status": "pending",
+                "created_at": "2026-03-19T00:00:00Z",
+                "last_run": null,
+                "next_run": "2026-03-20T00:00:00Z",
+                "run_count": 2,
+                "max_retries": 3,
+                "retry_count": 1,
+                "retry_delay_seconds": 60,
+                "dead_lettered_at": null,
+                "run_history": [],
+                "metadata": {}
+              },
+              "job-2": {
+                "id": "job-2",
+                "name": "stale-job",
+                "description": null,
+                "trigger": {"type": "Interval", "value": 300},
+                "action": "message",
+                "status": "failed",
+                "created_at": "2026-03-19T00:00:00Z",
+                "last_run": "2026-03-19T00:05:00Z",
+                "next_run": null,
+                "run_count": 4,
+                "max_retries": 2,
+                "retry_count": 2,
+                "retry_delay_seconds": 30,
+                "dead_lettered_at": "2026-03-19T00:06:00Z",
+                "run_history": [],
+                "metadata": {}
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let lines = schedule_list_lines(&workspace.join("scheduler.json")).unwrap();
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            lines[0],
+            "stale-job [failed] trigger=interval(300s) next=none last=2026-03-19T00:05:00+00:00 runs=4 retries=2/2 dead-lettered"
+        );
+        assert_eq!(
+            lines[1],
+            "nightly-backup [pending] trigger=cron(0 0 * * * *) next=2026-03-20T00:00:00+00:00 last=never runs=2 retries=1/3 active"
+        );
     }
 
     #[test]
