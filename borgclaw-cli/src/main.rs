@@ -923,7 +923,7 @@ fn security_policy_status(config: &AppConfig) -> String {
 }
 
 fn security_doctor_lines(config: &AppConfig) -> Vec<String> {
-    vec![
+    let mut lines = vec![
         format!(
             "{} Approval mode {:?}",
             marker(true),
@@ -970,7 +970,24 @@ fn security_doctor_lines(config: &AppConfig) -> Vec<String> {
             },
             config.security.allowed_commands.len()
         ),
-    ]
+    ];
+
+    let workspace_status = if config.security.workspace.workspace_only {
+        "workspace-only".to_string()
+    } else {
+        format!(
+            " unrestricted ({} allowed roots, {} forbidden)",
+            config.security.workspace.allowed_roots.len(),
+            config.security.workspace.forbidden_paths.len()
+        )
+    };
+    lines.push(format!(
+        "{} Workspace policy {}",
+        marker(config.security.workspace.workspace_only),
+        workspace_status
+    ));
+
+    lines
 }
 
 async fn integration_status_lines(config: &AppConfig) -> Vec<String> {
