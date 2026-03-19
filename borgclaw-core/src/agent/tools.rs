@@ -4159,6 +4159,134 @@ file_write = ["/etc"]
     }
 
     #[tokio::test]
+    async fn scheduler_restart_recovery_executes_persisted_due_tool_jobs() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_scheduler_restart_recovery_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &HeartbeatConfig::default(),
+            &SchedulerConfig::default(),
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let schedule = execute_tool(
+            &ToolCall::new(
+                "schedule_task",
+                HashMap::from([
+                    ("tool".to_string(), serde_json::json!("memory_store")),
+                    (
+                        "arguments".to_string(),
+                        serde_json::json!({
+                            "key": "restartrecovery",
+                            "value": "restored run"
+                        }),
+                    ),
+                ]),
+            ),
+            &runtime,
+        )
+        .await;
+        assert!(schedule.success);
+
+        let job_id = {
+            let scheduler = runtime.scheduler.lock().await;
+            let jobs = scheduler.list().await;
+            let id = jobs[0].id.clone();
+            drop(jobs);
+            let mut stored = scheduler.get(&id).await.unwrap();
+            stored.next_run = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+            scheduler.unschedule(&id).await.unwrap();
+            scheduler.schedule(stored).await.unwrap();
+            scheduler
+                .update_status(&id, JobStatus::Running)
+                .await
+                .unwrap();
+            id
+        };
+
+        drop(runtime);
+
+        let restarted = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &HeartbeatConfig::default(),
+            &SchedulerConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let scheduler = restarted.scheduler.lock().await;
+                if let Some(job) = scheduler.get(&job_id).await {
+                    if job.status == JobStatus::Completed {
+                        break;
+                    }
+                }
+                drop(scheduler);
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let recalled = restarted
+            .memory
+            .recall(&MemoryQuery {
+                query: "restartrecovery".to_string(),
+                limit: 5,
+                min_score: 0.0,
+                group_id: None,
+            })
+            .await
+            .unwrap();
+        let scheduler = restarted.scheduler.lock().await;
+        let job = scheduler.get(&job_id).await.unwrap();
+        scheduler.stop().await;
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(job.status, JobStatus::Completed);
+        assert_eq!(job.run_count, 1);
+        assert!(recalled
+            .iter()
+            .any(|entry| entry.entry.key == "restartrecovery"
+                && entry.entry.content == "restored run"));
+    }
+
+    #[tokio::test]
     async fn scheduled_tool_calls_inherit_group_context() {
         let root = std::env::temp_dir().join(format!(
             "borgclaw_scheduled_group_context_test_{}",

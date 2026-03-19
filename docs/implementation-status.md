@@ -16,7 +16,7 @@ Last reviewed: March 19, 2026
 | SQLite memory + group isolation | `complete` | Metadata round-trip, isolation, recall, and compaction are implemented. |
 | Solution memory | `complete` | Documented public structs and search helpers are aligned. |
 | Heartbeat engine | `partial` | Documented task/handler surface exists. Engine state gating, background loop startup, shared-runtime ownership, enable/disable consistency, manual-run state updates, persisted task snapshots, and retry/dead-letter behavior are landed; richer operator ergonomics remain. |
-| Scheduler | `partial` | Execution loop, timeout/concurrency policy, retries/dead-letter behavior, persisted job state, and bounded run history are landed; richer catch-up/recovery semantics still remain. |
+| Scheduler | `partial` | Execution loop, timeout/concurrency policy, retries/dead-letter behavior, persisted job state, bounded run history, and restart-recovery coverage for persisted due jobs are landed; richer catch-up/recovery semantics still remain. |
 | Sub-agent coordinator | `partial` | Spawn/status/result flow exists. Concurrency limits, cancellation precedence, memory policy enforcement, parent-context inheritance, persisted task snapshots, and retry/dead-letter behavior are landed; explicit workspace/security policy depth remains. |
 | Security config contract | `complete` | Documented TOML shape parses and core enforcement exists. |
 | Secret storage + vault | `partial` | Encrypted secrets and vault clients exist; onboarding/auth UX is still mixed. |
