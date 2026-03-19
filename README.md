@@ -128,6 +128,7 @@ cargo run --bin borgclaw -- init
 cargo run --bin borgclaw -- self-test   # Exit 0 on pass, 1 on failure
 cargo run --bin borgclaw -- schedules list   # Inspect persisted scheduled tasks
 cargo run --bin borgclaw -- schedules show <job-id>   # Inspect one persisted task in detail
+cargo run --bin borgclaw -- backup export ./.local/data/backup.json   # Snapshot persisted runtime state
 ```
 
 ## Configuration
