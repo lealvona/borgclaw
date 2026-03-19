@@ -131,7 +131,7 @@ impl WebhookChannel {
         self.triggers.read().await.clone()
     }
 
-    async fn check_rate_limit(&self, trigger: &WebhookTrigger, requester: &str) -> bool {
+    async fn check_rate_limit(&self, trigger: &WebhookTrigger, requester: &str) -> Result<(), u64> {
         if let Some(rpm) = trigger.rate_limit {
             let mut limits = self.rate_limits.write().await;
             let now = Utc::now();
@@ -143,12 +143,21 @@ impl WebhookChannel {
             requests.retain(|&t| t > minute_ago);
 
             if requests.len() >= rpm as usize {
-                return false;
+                let retry_after = requests
+                    .iter()
+                    .min()
+                    .map(|earliest| {
+                        let retry_at = *earliest + chrono::Duration::seconds(60);
+                        let remaining = (retry_at - now).num_seconds().max(1);
+                        remaining as u64
+                    })
+                    .unwrap_or(60);
+                return Err(retry_after);
             }
 
             requests.push(now);
         }
-        true
+        Ok(())
     }
 
     pub async fn handle_request(
@@ -173,8 +182,8 @@ impl WebhookChannel {
         }
 
         let requester = webhook_requester(&headers);
-        if !self.check_rate_limit(trigger, &requester).await {
-            return Err(WebhookError::RateLimited);
+        if let Err(retry_after_seconds) = self.check_rate_limit(trigger, &requester).await {
+            return Err(WebhookError::RateLimited(retry_after_seconds));
         }
 
         let body_str = String::from_utf8_lossy(&body);
@@ -286,7 +295,7 @@ pub enum WebhookError {
     #[error("Unauthorized")]
     Unauthorized,
     #[error("Rate limited")]
-    RateLimited,
+    RateLimited(u64),
     #[error("Channel closed")]
     ChannelClosed,
 }
@@ -444,7 +453,7 @@ mod tests {
             .handle_request("/webhook", "POST", headers_b, b"three".to_vec(), tx)
             .await;
 
-        assert!(matches!(limited, Err(WebhookError::RateLimited)));
+        assert!(matches!(limited, Err(WebhookError::RateLimited(retry_after)) if retry_after >= 1));
         assert!(other_requester.is_ok());
     }
 

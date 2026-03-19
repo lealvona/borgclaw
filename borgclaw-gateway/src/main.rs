@@ -635,8 +635,8 @@ async fn route_webhook_request(
         Err(WebhookError::Unauthorized) => {
             json_error_response(StatusCode::UNAUTHORIZED, "Unauthorized")
         }
-        Err(WebhookError::RateLimited) => {
-            json_error_response(StatusCode::TOO_MANY_REQUESTS, "Rate limited")
+        Err(WebhookError::RateLimited(retry_after_seconds)) => {
+            rate_limited_response(retry_after_seconds)
         }
         Err(WebhookError::ChannelClosed) => {
             error!("webhook channel closed while handling request");
@@ -695,6 +695,16 @@ fn json_error_response(status: StatusCode, message: &str) -> axum::response::Res
     (status, serde_json::json!({ "error": message }).to_string()).into_response()
 }
 
+fn rate_limited_response(retry_after_seconds: u64) -> axum::response::Response {
+    let mut response = json_error_response(StatusCode::TOO_MANY_REQUESTS, "Rate limited");
+    if let Ok(value) = axum::http::HeaderValue::from_str(&retry_after_seconds.to_string()) {
+        response
+            .headers_mut()
+            .insert(axum::http::header::RETRY_AFTER, value);
+    }
+    response
+}
+
 fn error_event(message: &str) -> serde_json::Value {
     serde_json::json!({
         "type": "error",
@@ -730,6 +740,16 @@ mod tests {
         let event = error_event("bad request");
         assert_eq!(event["type"], "error");
         assert_eq!(event["message"], "bad request");
+    }
+
+    #[test]
+    fn rate_limited_response_includes_retry_after_header() {
+        let response = rate_limited_response(17);
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response.headers().get(axum::http::header::RETRY_AFTER),
+            Some(&axum::http::HeaderValue::from_static("17"))
+        );
     }
 
     #[test]
@@ -1095,6 +1115,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(limited
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .is_some());
         let limited_body: serde_json::Value = limited.json().await.unwrap();
         assert_eq!(limited_body["error"], "Rate limited");
 

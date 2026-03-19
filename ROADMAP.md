@@ -92,4 +92,5 @@ Recent landed work in this phase:
 - Webhook ingress now has request-size enforcement and redacted external error responses, narrowing the remaining gap in this phase.
 - The shared router now rejects explicitly disabled channels instead of treating `enabled = false` as informational only, tightening routing correctness against the documented channel contract.
 - The gateway now also rejects WebSocket upgrades when the channel is explicitly disabled, aligning transport entry with the same channel-enable contract.
+- Webhook rate limiting now returns `Retry-After` metadata on `429` responses, improving transport-facing retry semantics instead of leaving operators to guess the backoff window.
 - The next remaining gaps in this phase are backup/recovery workflows, deeper end-to-end security coverage across deferred/background execution paths, stronger routing/ownership correctness coverage, and operator-facing health/self-test surfaces.
