@@ -23,7 +23,7 @@ Last reviewed: March 19, 2026, with upstream inspiration follow-up through March
 | Skill registry lifecycle | `partial` | Local install, remote `SKILL.md`, and GitHub-backed listing exist; packaging/publishing remain planned. |
 | MCP client | `complete` | Documented transports and client API are aligned. |
 | GitHub skill client | `partial` | Core client surface, substantial shared tool/runtime coverage, and local shared-runtime happy-path coverage are landed; broader operational completeness remains. |
-| Google skill client | `partial` | Gmail/Drive/Calendar facade and shared runtime coverage are landed; broader operational completeness remains. |
+| Google skill client | `partial` | Gmail/Drive/Calendar facade, shared runtime coverage, and local shared-runtime happy-path coverage are landed; broader operational completeness remains. |
 | Browser skill client | `partial` | Playwright/CDP surface, core shared runtime actions, and local shared-runtime bridge coverage are landed; broader operational completeness remains. |
 | STT/TTS/Image/QR/URL skills | `partial` | Typed config and shared runtime coverage are landed; broader operational completeness and deeper integration coverage remain. |
 | Onboarding contract | `partial` | Provider registry, secure-store-backed integration setup, and `.env` generation exist; operator UX and some live-auth flows still need completion. |
@@ -44,5 +44,5 @@ Last reviewed: March 19, 2026, with upstream inspiration follow-up through March
 - CLI `status`/`doctor` now report persisted scheduler, heartbeat, and sub-agent recovery-state files, including task and dead-letter counts when available.
 - Signal polling now has duplicate-start rejection and tracked shutdown for its background receive loop, but broader restart recovery behavior across transports is still incomplete.
 - Telegram polling now has duplicate-start rejection and tracked shutdown for its background receive loop, but broader restart recovery behavior across transports is still incomplete.
-- GitHub and browser shared-runtime happy-path coverage now exist against local stubs/bridges, but equivalent Google operational coverage is still thinner.
+- GitHub, Google, and browser now all have local shared-runtime happy-path coverage, but broader operational completeness across those families is still incomplete.
 - Managed schedule/backup/recovery operator workflows remain incomplete even though core persisted scheduler state is now landed.

@@ -14,6 +14,14 @@ pub struct GoogleOAuthConfig {
     pub redirect_uri: String,
     pub token_path: PathBuf,
     pub scopes: Vec<String>,
+    #[serde(skip)]
+    pub auth_base_url: String,
+    #[serde(skip)]
+    pub gmail_base_url: String,
+    #[serde(skip)]
+    pub drive_base_url: String,
+    #[serde(skip)]
+    pub calendar_base_url: String,
 }
 
 impl Default for GoogleOAuthConfig {
@@ -31,6 +39,10 @@ impl Default for GoogleOAuthConfig {
                 "https://www.googleapis.com/auth/calendar.readonly".to_string(),
                 "https://www.googleapis.com/auth/calendar.events".to_string(),
             ],
+            auth_base_url: "https://oauth2.googleapis.com".to_string(),
+            gmail_base_url: "https://gmail.googleapis.com".to_string(),
+            drive_base_url: "https://www.googleapis.com".to_string(),
+            calendar_base_url: "https://www.googleapis.com".to_string(),
         }
     }
 }
@@ -78,7 +90,8 @@ impl GoogleAuth {
     pub fn build_auth_url(&self) -> String {
         let scopes = self.config.scopes.join(" ");
         format!(
-            "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent",
+            "{}/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent",
+            self.authorization_base_url(),
             urlencoding::encode(&self.config.client_id),
             urlencoding::encode(&self.config.redirect_uri),
             urlencoding::encode(&scopes)
@@ -96,7 +109,7 @@ impl GoogleAuth {
 
         let response = self
             .http
-            .post("https://oauth2.googleapis.com/token")
+            .post(self.token_url())
             .form(&params)
             .send()
             .await
@@ -168,7 +181,7 @@ impl GoogleAuth {
 
         let response = self
             .http
-            .post("https://oauth2.googleapis.com/token")
+            .post(self.token_url())
             .form(&params)
             .send()
             .await
@@ -214,6 +227,18 @@ impl GoogleAuth {
             serde_json::from_str(&content).map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
         *self.token.write().await = Some(token);
         Ok(())
+    }
+
+    fn authorization_base_url(&self) -> String {
+        self.config
+            .auth_base_url
+            .trim_end_matches("/token")
+            .trim_end_matches('/')
+            .to_string()
+    }
+
+    fn token_url(&self) -> String {
+        format!("{}/token", self.authorization_base_url())
     }
 }
 
@@ -321,7 +346,8 @@ impl GmailClient {
         let token = self.auth.get_token().await?;
 
         let mut url = format!(
-            "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults={}",
+            "{}/gmail/v1/users/me/messages?maxResults={}",
+            self.auth.config.gmail_base_url.trim_end_matches('/'),
             limit
         );
         if let Some(query) = query {
@@ -370,7 +396,8 @@ impl GmailClient {
         let token = self.auth.get_token().await?;
 
         let url = format!(
-            "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}",
+            "{}/gmail/v1/users/me/messages/{}",
+            self.auth.config.gmail_base_url.trim_end_matches('/'),
             id
         );
 
@@ -455,7 +482,10 @@ impl GmailClient {
         let response = self
             .auth
             .http
-            .post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send")
+            .post(format!(
+                "{}/gmail/v1/users/me/messages/send",
+                self.auth.config.gmail_base_url.trim_end_matches('/')
+            ))
             .bearer_auth(&token.access_token)
             .json(&body)
             .send()
@@ -512,7 +542,8 @@ impl DriveClient {
         let token = self.auth.get_token().await?;
 
         let mut url = format!(
-            "https://www.googleapis.com/drive/v3/files?pageSize={}",
+            "{}/drive/v3/files?pageSize={}",
+            self.auth.config.drive_base_url.trim_end_matches('/'),
             page_size
         );
 
@@ -545,7 +576,11 @@ impl DriveClient {
     pub async fn download_file(&self, id: &str) -> Result<Vec<u8>, GoogleError> {
         let token = self.auth.get_token().await?;
 
-        let url = format!("https://www.googleapis.com/drive/v3/files/{}?alt=media", id);
+        let url = format!(
+            "{}/drive/v3/files/{}?alt=media",
+            self.auth.config.drive_base_url.trim_end_matches('/'),
+            id
+        );
 
         let response = self
             .auth
@@ -593,7 +628,10 @@ impl DriveClient {
             .part("file", multipart);
 
         let response = client
-            .post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart")
+            .post(format!(
+                "{}/upload/drive/v3/files?uploadType=multipart",
+                self.auth.config.drive_base_url.trim_end_matches('/')
+            ))
             .bearer_auth(&token.access_token)
             .multipart(form)
             .send()
@@ -655,7 +693,8 @@ impl CalendarClient {
         let token = self.auth.get_token().await?;
 
         let url = format!(
-            "https://www.googleapis.com/calendar/v3/calendars/{}/events?timeMin={}&timeMax={}&maxResults={}",
+            "{}/calendar/v3/calendars/{}/events?timeMin={}&timeMax={}&maxResults={}",
+            self.auth.config.calendar_base_url.trim_end_matches('/'),
             urlencoding::encode(calendar_id),
             urlencoding::encode(&time_min.to_rfc3339()),
             urlencoding::encode(&time_max.to_rfc3339()),
@@ -697,7 +736,8 @@ impl CalendarClient {
         let token = self.auth.get_token().await?;
 
         let url = format!(
-            "https://www.googleapis.com/calendar/v3/calendars/{}/events",
+            "{}/calendar/v3/calendars/{}/events",
+            self.auth.config.calendar_base_url.trim_end_matches('/'),
             urlencoding::encode(calendar_id)
         );
 
