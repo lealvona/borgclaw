@@ -141,6 +141,8 @@ X-Webhook-Secret: your-secret
 
 Default: 60 requests/minute per IP
 
+Rate-limited webhook responses return HTTP `429` with a `Retry-After` header.
+
 Request bodies larger than 1 MiB are rejected before routing.
 
 ### Triggers
