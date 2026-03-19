@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.2.0 - 2026-03-19
+
+### Features
+
+- **Schedule Management** - Full CRUD operations for scheduled tasks:
+  - `schedules create` - Create jobs with cron, interval, or oneshot triggers
+  - `schedules delete <id>` - Remove scheduled tasks
+  - `schedules pause <id>` - Disable scheduled tasks
+  - `schedules resume <id>` - Re-enable paused tasks
+- **Backup Import/Restore** - Complete backup/recovery workflow:
+  - `backup import <path>` - Restore runtime state from snapshot
+  - `backup verify <path>` - Validate snapshots without importing
+  - `--force` flag for non-interactive import
+- **Security Visibility** - Enhanced `doctor` output with workspace policy status
+
+### Release Policy
+
+- `1.2.0` is the current release line
+- New work after `1.2.0` should continue on feature branches
+
 ## 1.1.0 - 2026-03-19
 
 ### Features
