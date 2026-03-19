@@ -1025,6 +1025,126 @@ impl GitHubClient {
 
         Ok(())
     }
+
+    pub async fn update_file(
+        &self,
+        owner: &str,
+        repo: &str,
+        path: &str,
+        content: &str,
+        message: &str,
+        sha: &str,
+        branch: &str,
+    ) -> Result<(), GitHubError> {
+        self.check_repo_access(owner, repo).await?;
+
+        let url = format!(
+            "{}/repos/{}/{}/contents/{}",
+            self.config.base_url, owner, repo, path
+        );
+
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(content);
+
+        let body = serde_json::json!({
+            "message": message,
+            "content": encoded,
+            "sha": sha,
+            "branch": branch
+        });
+
+        let response = self
+            .http
+            .put(&url)
+            .header("User-Agent", &self.config.user_agent)
+            .header("Authorization", format!("Bearer {}", self.config.token))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(GitHubError::RequestFailed)?;
+
+        if !response.status().is_success() {
+            return Err(GitHubError::HttpError(response.status().as_u16()));
+        }
+
+        Ok(())
+    }
+
+    pub async fn delete_file(
+        &self,
+        owner: &str,
+        repo: &str,
+        path: &str,
+        message: &str,
+        sha: &str,
+        branch: &str,
+    ) -> Result<(), GitHubError> {
+        self.check_repo_access(owner, repo).await?;
+
+        let url = format!(
+            "{}/repos/{}/{}/contents/{}",
+            self.config.base_url, owner, repo, path
+        );
+
+        let body = serde_json::json!({
+            "message": message,
+            "sha": sha,
+            "branch": branch
+        });
+
+        let response = self
+            .http
+            .delete(&url)
+            .header("User-Agent", &self.config.user_agent)
+            .header("Authorization", format!("Bearer {}", self.config.token))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(GitHubError::RequestFailed)?;
+
+        if !response.status().is_success() {
+            return Err(GitHubError::HttpError(response.status().as_u16()));
+        }
+
+        Ok(())
+    }
+
+    pub async fn close_issue(
+        &self,
+        owner: &str,
+        repo: &str,
+        issue_number: u32,
+    ) -> Result<(), GitHubError> {
+        self.check_repo_access(owner, repo).await?;
+
+        let url = format!(
+            "{}/repos/{}/{}/issues/{}",
+            self.config.base_url, owner, repo, issue_number
+        );
+
+        let body = serde_json::json!({
+            "state": "closed"
+        });
+
+        let response = self
+            .http
+            .patch(&url)
+            .header("User-Agent", &self.config.user_agent)
+            .header("Authorization", format!("Bearer {}", self.config.token))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(GitHubError::RequestFailed)?;
+
+        if !response.status().is_success() {
+            return Err(GitHubError::HttpError(response.status().as_u16()));
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

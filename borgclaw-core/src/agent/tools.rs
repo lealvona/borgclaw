@@ -406,6 +406,9 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "github_list_releases" => github_list_releases(&call.arguments, runtime).await,
         "github_get_file" => github_get_file(&call.arguments, runtime).await,
         "github_create_file" => github_create_file(&call.arguments, runtime).await,
+        "github_update_file" => github_update_file(&call.arguments, runtime).await,
+        "github_delete_file" => github_delete_file(&call.arguments, runtime).await,
+        "github_close_issue" => github_close_issue(&call.arguments, runtime).await,
         "google_list_messages" => google_list_messages(&call.arguments, runtime).await,
         "google_get_message" => google_get_message(&call.arguments, runtime).await,
         "google_send_email" => google_send_email(&call.arguments, runtime).await,
@@ -1593,6 +1596,132 @@ async fn github_create_file(
             .with_metadata("owner", owner)
             .with_metadata("repo", repo)
             .with_metadata("branch", branch.to_string()),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn github_update_file(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = match github_client(runtime) {
+        Ok(client) => client,
+        Err(err) => return ToolResult::err(err),
+    };
+    let owner = match get_required_string(arguments, "owner") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let repo = match get_required_string(arguments, "repo") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let path = match get_required_string(arguments, "path") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let content = match get_required_string(arguments, "content") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let message = match get_required_string(arguments, "message") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let sha = match get_required_string(arguments, "sha") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let branch = arguments
+        .get("branch")
+        .and_then(|value| value.as_str())
+        .unwrap_or("main");
+
+    match client
+        .update_file(&owner, &repo, &path, &content, &message, &sha, branch)
+        .await
+    {
+        Ok(()) => ToolResult::ok(format!("updated {}", path))
+            .with_metadata("owner", owner)
+            .with_metadata("repo", repo)
+            .with_metadata("branch", branch.to_string()),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn github_delete_file(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = match github_client(runtime) {
+        Ok(client) => client,
+        Err(err) => return ToolResult::err(err),
+    };
+    let owner = match get_required_string(arguments, "owner") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let repo = match get_required_string(arguments, "repo") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let path = match get_required_string(arguments, "path") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let message = match get_required_string(arguments, "message") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let sha = match get_required_string(arguments, "sha") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let branch = arguments
+        .get("branch")
+        .and_then(|value| value.as_str())
+        .unwrap_or("main");
+
+    match client
+        .delete_file(&owner, &repo, &path, &message, &sha, branch)
+        .await
+    {
+        Ok(()) => ToolResult::ok(format!("deleted {}", path))
+            .with_metadata("owner", owner)
+            .with_metadata("repo", repo)
+            .with_metadata("branch", branch.to_string()),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn github_close_issue(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = match github_client(runtime) {
+        Ok(client) => client,
+        Err(err) => return ToolResult::err(err),
+    };
+    let owner = match get_required_string(arguments, "owner") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let repo = match get_required_string(arguments, "repo") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let issue_number = match get_u64(arguments, "issue_number") {
+        Some(value) => value as u32,
+        None => return ToolResult::err("missing issue_number argument"),
+    };
+
+    match client
+        .close_issue(&owner, &repo, issue_number)
+        .await
+    {
+        Ok(()) => ToolResult::ok(format!("closed issue #{}", issue_number))
+            .with_metadata("owner", owner)
+            .with_metadata("repo", repo),
         Err(err) => ToolResult::err(err.to_string()),
     }
 }
@@ -5437,6 +5566,63 @@ pub fn builtin_tools() -> Vec<Tool> {
                     "path".to_string(),
                     "content".to_string(),
                     "message".to_string(),
+                ],
+            ))
+            .with_tags(vec!["github".to_string(), "integration".to_string()]),
+        Tool::new("github_update_file", "Update a file in a GitHub repository")
+            .with_schema(ToolSchema::object(
+                [
+                    ("owner".to_string(), string_property("Repository owner")),
+                    ("repo".to_string(), string_property("Repository name")),
+                    ("path".to_string(), string_property("Repository file path")),
+                    ("content".to_string(), string_property("New file content")),
+                    ("message".to_string(), string_property("Commit message")),
+                    ("sha".to_string(), string_property("File SHA (required for update)")),
+                    ("branch".to_string(), string_property("Target branch")),
+                ]
+                .into(),
+                vec![
+                    "owner".to_string(),
+                    "repo".to_string(),
+                    "path".to_string(),
+                    "content".to_string(),
+                    "message".to_string(),
+                    "sha".to_string(),
+                ],
+            ))
+            .with_tags(vec!["github".to_string(), "integration".to_string()]),
+        Tool::new("github_delete_file", "Delete a file from a GitHub repository")
+            .with_schema(ToolSchema::object(
+                [
+                    ("owner".to_string(), string_property("Repository owner")),
+                    ("repo".to_string(), string_property("Repository name")),
+                    ("path".to_string(), string_property("Repository file path")),
+                    ("message".to_string(), string_property("Commit message")),
+                    ("sha".to_string(), string_property("File SHA (required for deletion)")),
+                    ("branch".to_string(), string_property("Target branch")),
+                ]
+                .into(),
+                vec![
+                    "owner".to_string(),
+                    "repo".to_string(),
+                    "path".to_string(),
+                    "message".to_string(),
+                    "sha".to_string(),
+                ],
+            ))
+            .with_tags(vec!["github".to_string(), "integration".to_string()]),
+        Tool::new("github_close_issue", "Close a GitHub issue")
+            .with_schema(ToolSchema::object(
+                [
+                    ("owner".to_string(), string_property("Repository owner")),
+                    ("repo".to_string(), string_property("Repository name")),
+                    ("issue_number".to_string(), number_property("Issue number to close", serde_json::json!(1))),
+                ]
+                .into(),
+                vec![
+                    "owner".to_string(),
+                    "repo".to_string(),
+                    "issue_number".to_string(),
                 ],
             ))
             .with_tags(vec!["github".to_string(), "integration".to_string()]),
