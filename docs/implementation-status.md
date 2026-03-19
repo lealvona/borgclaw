@@ -48,6 +48,7 @@ Last reviewed: March 19, 2026, with upstream inspiration follow-up through March
 - Managed schedule/backup/recovery operator workflows remain incomplete even though core persisted scheduler state is now landed.
 - CLI now exposes read-only `schedules list` and `schedules show <job-id>` surfaces backed by persisted scheduler state, but schedule mutation and richer recovery UX remain incomplete.
 - CLI now exposes `backup export <path>` for persisted local runtime state, but restore/import workflows remain incomplete.
+- `self-test` now fails when persisted scheduler, heartbeat, or sub-agent state contains dead-lettered tasks, making stalled recovery state visible in the health path.
 - CLI `doctor` now summarizes aggregate MCP reachability failures across configured servers, but deeper transport-facing retry/rate-limit diagnostics still remain.
 - The shared router now enforces explicit channel disablement, so configured `enabled = false` remote channels are rejected instead of silently routing.
 - The gateway now rejects disabled WebSocket upgrades at the transport boundary instead of accepting the connection and failing only later in message routing.
