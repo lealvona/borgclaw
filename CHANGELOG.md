@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.3.0 - 2026-03-19
+
+### Features
+
+**Gateway Control-Plane**
+- Added /api/metrics endpoint with connection stats, message counts, auth metrics
+- Added /api/config endpoint returning sanitized configuration
+- Gateway metrics tracking: connections, messages sent/received, pairing requests, auth success/failure
+
+**Heartbeat Operator Commands**
+- heartbeat list - Show all persisted heartbeat tasks
+- heartbeat show <id> - Display task details
+- heartbeat enable/disable <id> - Toggle task state
+- heartbeat trigger <id> - Manual task trigger (placeholder)
+
+**Sub-Agent Operator Commands**
+- subagent list - Show all persisted sub-agent tasks
+- subagent show <id> - Display task details
+- subagent cancel <id> - Cancel running tasks
+
+### Release Policy
+
+- 1.3.0 is the current release line
+- New work after 1.3.0 should continue on feature branches
+
 ## 1.2.0 - 2026-03-19
 
 ### Features
