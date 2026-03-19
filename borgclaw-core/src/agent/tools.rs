@@ -4447,6 +4447,98 @@ file_write = ["/etc"]
     }
 
     #[tokio::test]
+    async fn browser_tools_use_configured_bridge_runtime() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_browser_tool_stub_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let bridge = root.join("fake_bridge.py");
+        std::fs::write(
+            &bridge,
+            r#"#!/usr/bin/env python3
+import json
+import sys
+
+for line in sys.stdin:
+    req = json.loads(line)
+    action = req.get("action")
+    resp = {"id": req["id"], "success": True}
+    if action == "new_page":
+        resp["result"] = {"ok": True}
+    elif action == "get_url":
+        resp["result"] = {"url": "https://example.com/dashboard"}
+    elif action == "evaluate":
+        resp["result"] = {"value": 42, "source": "fake-bridge"}
+    elif action == "close":
+        resp["result"] = {"closed": True}
+    else:
+        resp["success"] = False
+        resp["error"] = f"unexpected action: {action}"
+    sys.stdout.write(json.dumps(resp) + "\n")
+    sys.stdout.flush()
+"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&bridge).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&bridge, perms).unwrap();
+        }
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &HeartbeatConfig::default(),
+            &SchedulerConfig::default(),
+            &crate::config::SkillsConfig {
+                browser: crate::skills::BrowserConfig {
+                    node_path: std::path::PathBuf::from("python3"),
+                    bridge_path: bridge,
+                    ..Default::default()
+                },
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let get_url =
+            execute_tool(&ToolCall::new("browser_get_url", HashMap::new()), &runtime).await;
+        let eval = execute_tool(
+            &ToolCall::new(
+                "browser_eval_js",
+                HashMap::from([(
+                    "script".to_string(),
+                    serde_json::json!("window.location.href"),
+                )]),
+            ),
+            &runtime,
+        )
+        .await;
+
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert!(get_url.success);
+        assert_eq!(get_url.output, "https://example.com/dashboard");
+        assert!(eval.success);
+        assert!(eval.output.contains("\"value\":42"));
+        assert!(eval.output.contains("\"source\":\"fake-bridge\""));
+    }
+
+    #[tokio::test]
     async fn scheduled_tool_calls_inherit_group_context() {
         let root = std::env::temp_dir().join(format!(
             "borgclaw_scheduled_group_context_test_{}",
