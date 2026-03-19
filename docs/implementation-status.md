@@ -29,10 +29,10 @@ Last reviewed: March 11, 2026
 
 ## Current Priorities
 
-1. Unify security-pipeline behavior across built-in tools, MCP, and plugins.
-2. Harden background execution with explicit inherited workspace/security policy.
-3. Expand end-to-end coverage for gateway, onboarding, MCP, plugins, and skills.
-4. Continue operator UX/status/doctor parity for the remaining documented surfaces.
+1. Harden restart-sensitive background execution: scheduler catch-up, polling-loop restart guards, and explicit health checks before restart.
+2. Unify security-pipeline behavior across built-in tools, MCP, plugins, deferred execution, and the remaining non-webhook ingress paths.
+3. Expand end-to-end coverage for gateway, onboarding, MCP, plugins, and remaining skill-family happy paths.
+4. Continue operator UX/status/doctor parity for recovery, backup, and transport health surfaces.
 
 ## Temporary Limitations That Must Stay Explicit
 
@@ -40,3 +40,5 @@ Last reviewed: March 11, 2026
 - Remote skill installs currently persist manifest content, not companion assets.
 - Several skill families have meaningful shared tool exposure, but not full operational completeness.
 - Background execution now persists scheduler run history, heartbeat task state, and sub-agent task state locally. Scheduler, heartbeat, and sub-agent retry/dead-letter semantics are landed.
+- Signal polling now has duplicate-start rejection and tracked shutdown for its background receive loop, but broader restart recovery behavior across transports is still incomplete.
+- Telegram polling now has duplicate-start rejection and tracked shutdown for its background receive loop, but broader restart recovery behavior across transports is still incomplete.

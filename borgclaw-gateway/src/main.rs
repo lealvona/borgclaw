@@ -4,7 +4,7 @@ use axum::{
     body::Bytes,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Path, State,
+        DefaultBodyLimit, Path, State,
     },
     http::HeaderMap,
     http::StatusCode,
@@ -29,6 +29,8 @@ use std::{net::SocketAddr, path::PathBuf};
 use tokio::sync::mpsc;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{error, info, warn};
+
+const DEFAULT_WEBHOOK_BODY_LIMIT_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone)]
 struct GatewayState {
@@ -80,6 +82,7 @@ async fn main() {
         .route("/webhook", post(webhook_handler))
         .route("/webhook/health", get(webhook_health))
         .route("/webhook/trigger/{id}", post(webhook_trigger_handler))
+        .layer(DefaultBodyLimit::max(DEFAULT_WEBHOOK_BODY_LIMIT_BYTES))
         .layer(cors)
         .with_state(state.clone());
 
@@ -584,11 +587,8 @@ async fn route_webhook_request(
                 let route_outcome = match state.router.route(inbound).await {
                     Ok(outcome) => outcome,
                     Err(err) => {
-                        return (
-                            StatusCode::BAD_REQUEST,
-                            serde_json::json!({ "error": err.to_string() }).to_string(),
-                        )
-                            .into_response();
+                        warn!("webhook request rejected: {}", err);
+                        return json_error_response(StatusCode::BAD_REQUEST, "request rejected");
                     }
                 };
 
@@ -603,11 +603,11 @@ async fn route_webhook_request(
                                 forward_configured_webhook(&trigger, &route_outcome.response.text)
                                     .await
                             {
-                                return (
+                                warn!("webhook forward failed for trigger {}: {}", trigger_id, err);
+                                return json_error_response(
                                     StatusCode::BAD_GATEWAY,
-                                    serde_json::json!({ "error": err }).to_string(),
-                                )
-                                    .into_response();
+                                    "forward failed",
+                                );
                             }
                         }
                         None => {}
@@ -622,15 +622,18 @@ async fn route_webhook_request(
             )
                 .into_response()
         }
-        Err(WebhookError::NotFound) => (StatusCode::NOT_FOUND, "Webhook not found").into_response(),
+        Err(WebhookError::NotFound) => {
+            json_error_response(StatusCode::NOT_FOUND, "Webhook not found")
+        }
         Err(WebhookError::Unauthorized) => {
-            (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
+            json_error_response(StatusCode::UNAUTHORIZED, "Unauthorized")
         }
         Err(WebhookError::RateLimited) => {
-            (StatusCode::TOO_MANY_REQUESTS, "Rate limited").into_response()
+            json_error_response(StatusCode::TOO_MANY_REQUESTS, "Rate limited")
         }
         Err(WebhookError::ChannelClosed) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, "Webhook channel closed").into_response()
+            error!("webhook channel closed while handling request");
+            json_error_response(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
         }
     }
 }
@@ -679,6 +682,10 @@ fn header_map_to_hash_map(headers: &HeaderMap) -> HashMap<String, String> {
                 .map(|value| (key.as_str().to_string(), value.to_string()))
         })
         .collect()
+}
+
+fn json_error_response(status: StatusCode, message: &str) -> axum::response::Response {
+    (status, serde_json::json!({ "error": message }).to_string()).into_response()
 }
 
 fn error_event(message: &str) -> serde_json::Value {
@@ -995,6 +1002,7 @@ mod tests {
         let app = Router::new()
             .route("/webhook", post(webhook_handler))
             .route("/webhook/health", get(webhook_health))
+            .layer(DefaultBodyLimit::max(DEFAULT_WEBHOOK_BODY_LIMIT_BYTES))
             .with_state(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -1022,6 +1030,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let unauthorized_body: serde_json::Value = unauthorized.json().await.unwrap();
+        assert_eq!(unauthorized_body["error"], "Unauthorized");
 
         let first = client
             .post(format!("http://{addr}/webhook"))
@@ -1033,6 +1043,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first.status(), StatusCode::BAD_REQUEST);
+        let first_body: serde_json::Value = first.json().await.unwrap();
+        assert_eq!(first_body["error"], "request rejected");
 
         let limited = client
             .post(format!("http://{addr}/webhook"))
@@ -1044,6 +1056,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        let limited_body: serde_json::Value = limited.json().await.unwrap();
+        assert_eq!(limited_body["error"], "Rate limited");
 
         let other_requester = client
             .post(format!("http://{addr}/webhook"))
@@ -1055,6 +1069,46 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(other_requester.status(), StatusCode::BAD_REQUEST);
+        let other_body: serde_json::Value = other_requester.json().await.unwrap();
+        assert_eq!(other_body["error"], "request rejected");
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn webhook_http_flow_rejects_oversized_bodies() {
+        let mut config = AppConfig::default();
+        let webhook = config.channels.entry("webhook".to_string()).or_default();
+        webhook.enabled = true;
+
+        let state = GatewayState {
+            config: Arc::new(config.clone()),
+            router: Arc::new(MessageRouter::from_config(&config)),
+            webhook: configured_webhook_channel(&config).await.map(Arc::new),
+        };
+
+        let app = Router::new()
+            .route("/webhook", post(webhook_handler))
+            .route("/webhook/health", get(webhook_health))
+            .layer(DefaultBodyLimit::max(DEFAULT_WEBHOOK_BODY_LIMIT_BYTES))
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client = reqwest::Client::new();
+
+        let oversized = "x".repeat(DEFAULT_WEBHOOK_BODY_LIMIT_BYTES + 1);
+        let response = client
+            .post(format!("http://{addr}/webhook"))
+            .header("content-type", "application/json")
+            .body(oversized)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 
         server.abort();
     }

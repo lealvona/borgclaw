@@ -6,16 +6,19 @@ use super::{
 };
 use async_trait::async_trait;
 use chrono::Utc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use teloxide::prelude::*;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::task::JoinHandle;
 
 pub struct TelegramChannel {
     bot: Arc<RwLock<Option<Bot>>>,
     channel_type: ChannelType,
     status: Arc<RwLock<ChannelStatus>>,
     msg_count: AtomicU64,
+    receiving: Arc<AtomicBool>,
+    receive_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     allowed_users: Vec<String>,
 }
 
@@ -26,6 +29,8 @@ impl TelegramChannel {
             channel_type: ChannelType::telegram(),
             status: Arc::new(RwLock::new(ChannelStatus::disconnected())),
             msg_count: AtomicU64::new(0),
+            receiving: Arc::new(AtomicBool::new(false)),
+            receive_handle: Arc::new(Mutex::new(None)),
             allowed_users: Vec::new(),
         }
     }
@@ -77,24 +82,41 @@ impl Channel for TelegramChannel {
         &self,
         sender: mpsc::Sender<InboundMessage>,
     ) -> Result<(), ChannelError> {
+        if self
+            .receiving
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err(ChannelError::ConnectionFailed(
+                "Telegram receiver already running".to_string(),
+            ));
+        }
+
         // Clone bot for use in spawned task
         let bot = {
             let bot_guard = self.bot.read().await;
-            bot_guard
-                .as_ref()
-                .ok_or_else(|| ChannelError::ConnectionFailed("Bot not initialized".to_string()))?
-                .clone()
+            match bot_guard.as_ref() {
+                Some(bot) => bot.clone(),
+                None => {
+                    self.receiving.store(false, Ordering::SeqCst);
+                    return Err(ChannelError::ConnectionFailed(
+                        "Bot not initialized".to_string(),
+                    ));
+                }
+            }
         };
 
         let allowed_users = self.allowed_users.clone();
         let msg_count = Arc::new(AtomicU64::new(0));
         let status = self.status.clone();
         let channel_type = self.channel_type.clone();
+        let receiving = self.receiving.clone();
+        let receive_handle = self.receive_handle.clone();
 
         let sender_clone = sender.clone();
 
         // Spawn message handler
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             teloxide::repl(bot.clone(), move |msg: Message| {
                 let sender = sender_clone.clone();
                 let allowed_users = allowed_users.clone();
@@ -158,7 +180,11 @@ impl Channel for TelegramChannel {
                 }
             })
             .await;
+
+            receiving.store(false, Ordering::SeqCst);
         });
+
+        *receive_handle.lock().await = Some(handle);
 
         Ok(())
     }
@@ -216,6 +242,10 @@ impl Channel for TelegramChannel {
     }
 
     async fn shutdown(&self) -> Result<(), ChannelError> {
+        self.receiving.store(false, Ordering::SeqCst);
+        if let Some(handle) = self.receive_handle.lock().await.take() {
+            handle.abort();
+        }
         *self.status.write().await = ChannelStatus::disconnected();
         *self.bot.write().await = None;
         Ok(())
@@ -237,7 +267,7 @@ fn resolve_telegram_token(configured: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_telegram_token;
+    use super::*;
 
     #[test]
     fn telegram_token_resolves_documented_env_placeholder() {
@@ -254,5 +284,22 @@ mod tests {
         unsafe {
             std::env::remove_var(key);
         }
+    }
+
+    #[tokio::test]
+    async fn telegram_start_receiving_rejects_duplicate_starts_and_shutdown_clears_handle() {
+        let channel = TelegramChannel::new();
+        *channel.bot.write().await = Some(Bot::new("123456:ABCDEF"));
+        *channel.status.write().await = ChannelStatus::connected();
+
+        let (tx, _rx) = mpsc::channel(1);
+        channel.start_receiving(tx.clone()).await.unwrap();
+
+        let err = channel.start_receiving(tx).await.unwrap_err();
+        assert!(err.to_string().contains("already running"));
+
+        channel.shutdown().await.unwrap();
+        assert!(!channel.receiving.load(Ordering::SeqCst));
+        assert!(channel.receive_handle.lock().await.is_none());
     }
 }
