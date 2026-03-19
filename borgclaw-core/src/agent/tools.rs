@@ -241,7 +241,9 @@ impl ToolRuntime {
             workspace_policy: security_config.workspace.clone(),
             memory,
             heartbeat,
-            scheduler: Arc::new(Mutex::new(Scheduler::new())),
+            scheduler: Arc::new(Mutex::new(
+                Scheduler::new().with_state_path(agent.workspace.join("scheduler.json")),
+            )),
             heartbeat_config: heartbeat_config.clone(),
             scheduler_config: scheduler_config.clone(),
             plugins,

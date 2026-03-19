@@ -7,7 +7,7 @@ Implement the remaining documented BorgClaw feature set in a security-first sequ
 Status note as of March 11, 2026:
 - Phase 1 is largely complete.
 - Phase 2 is largely complete.
-- Phase 3 is largely complete. Memory, session compaction, scheduler execution, sub-agent persistence, heartbeat persistence, retry/dead-letter behavior, and background-context inheritance are landed; explicit workspace/security policy depth still remains.
+- Phase 3 is largely complete. Memory, session compaction, scheduler execution, scheduler persistence, sub-agent persistence, heartbeat persistence, retry/dead-letter behavior, and background-context inheritance are landed; explicit workspace/security policy depth still remains.
 - Phase 4 is partially complete, with substantial shared tool/runtime coverage across documented skill families, but broader operational completeness still remains.
 - Phase 5 is partially complete, with security enforcement substantially improved but security-pipeline unification and operator UX still behind the documented end state.
 - Recent upstream follow-up tightened the remaining priorities further: restart-safe background behavior, webhook ingress hardening, MCP/runtime correctness polish, and backup/recovery workflows are now the clearest remaining deltas versus the inspiration set.
@@ -45,14 +45,15 @@ Recent landed work in this phase:
 - Sub-agent retry rescheduling, retry-backoff visibility, and dead-letter handling for exhausted tasks.
 - Scheduler job initialization with stable `next_run` state for cron, interval, and one-shot jobs.
 - Scheduler loop startup, concurrency limits, timeout enforcement, due-job execution, and bounded run history.
+- Scheduler state persistence across reconstruction, including recovery of in-flight `Running` jobs back to runnable `Pending` state.
 - Scheduler retry rescheduling and dead-letter handling for exhausted jobs.
 - Scheduled jobs can now dispatch built-in tool calls through the shared runtime, not just synthetic message actions.
 - Background scheduled and sub-agent tool selection now reject approval-gated tools when interactive approval is unavailable.
 - Tool execution now carries conversation context so memory tools respect `group_id`, and scheduled tool jobs inherit originating sender/session metadata.
-- The next remaining gaps in this phase are restart-safe catch-up/recovery behavior and clearer operator visibility into recovered background state.
+- CLI `status`/`doctor` now surface persisted scheduler, heartbeat, and sub-agent recovery state from the workspace, including task counts and dead-letter counts when state files exist.
+- The next remaining gaps in this phase are deeper restart-safe catch-up/recovery behavior and clearer operator visibility into recovered background state over time.
 - Signal polling now rejects duplicate receiver starts, performs a health check before entering the receive loop, and tracks/aborts the background poll task on shutdown.
 - Telegram polling now rejects duplicate receiver starts and tracks/aborts the background receive task on shutdown.
-- CLI `status`/`doctor` now surface persisted heartbeat and sub-agent recovery state from the workspace, including task counts and dead-letter counts when state files exist.
 
 ## Phase 4: Skills and Integrations
 
