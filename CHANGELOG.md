@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.1.0 - 2026-03-19
+
+### Features
+
+- **Self-Test Command** (`borgclaw self-test`) - Exit 0 on pass, 1 on failure; surfaces dead-lettered scheduler/heartbeat/sub-agent state as failures
+- **Backup Export** (`borgclaw backup export <path>`) - Snapshot persisted scheduler, heartbeat, and sub-agent state for operator recovery
+- **Scheduler Status** (`borgclaw schedules list`) - List persisted scheduled tasks with recovery state
+- **Scheduler Details** (`borgclaw schedules show <job-id>`) - Inspect individual persisted scheduled task metadata and history
+
+### Release Policy
+
+- `1.1.0` is the current release line
+- New work after `1.1.0` should continue on feature branches
+
 ## 1.0.0 - 2026-03-19
 
 First MVP release.
