@@ -12,7 +12,7 @@ use borgclaw_core::{
             McpTransportConfig, SseTransportConfig, StdioTransportConfig, WebSocketTransportConfig,
         },
     },
-    scheduler::{Job, JobTrigger},
+    scheduler::{Job, JobStatus, JobTrigger},
     security::SecurityLayer,
     skills::SkillsRegistry,
 };
@@ -97,6 +97,34 @@ enum ScheduleAction {
     List,
     /// Show persisted details for one scheduled task
     Show { id: String },
+    /// Create a new scheduled task
+    Create {
+        /// Task name
+        name: String,
+        /// Task action (command to execute)
+        action: String,
+        /// Trigger type: cron, interval, or oneshot
+        #[arg(short, long)]
+        trigger: String,
+        /// Trigger value (cron expr, interval seconds, or ISO datetime)
+        #[arg(short, long)]
+        value: String,
+        /// Optional description
+        #[arg(short, long)]
+        description: Option<String>,
+        /// Maximum retry attempts (default: 0)
+        #[arg(long, default_value = "0")]
+        retries: u32,
+        /// Retry delay in seconds (default: 60)
+        #[arg(long, default_value = "60")]
+        retry_delay: u64,
+    },
+    /// Delete a scheduled task
+    Delete { id: String },
+    /// Pause (disable) a scheduled task
+    Pause { id: String },
+    /// Resume (enable) a paused scheduled task
+    Resume { id: String },
 }
 
 #[derive(Subcommand)]
@@ -597,6 +625,58 @@ fn schedules(config: AppConfig, action: ScheduleAction) {
                     }
                 }
                 Err(err) => println!("Could not read {}: {}", path.display(), err),
+            }
+        }
+        ScheduleAction::Create {
+            name,
+            action: job_action,
+            trigger,
+            value,
+            description,
+            retries,
+            retry_delay,
+        } => {
+            println!("Creating scheduled task");
+            println!("=======================");
+            match create_scheduled_job(
+                &path,
+                &name,
+                &job_action,
+                &trigger,
+                &value,
+                description.as_deref(),
+                retries,
+                retry_delay,
+            ) {
+                Ok(id) => println!("Created scheduled task '{}' (ID: {})", name, id),
+                Err(err) => println!("Failed to create scheduled task: {}", err),
+            }
+        }
+        ScheduleAction::Delete { id } => {
+            println!("Deleting scheduled task");
+            println!("=======================");
+            match delete_scheduled_job(&path, &id) {
+                Ok(true) => println!("Deleted scheduled task '{}'", id),
+                Ok(false) => println!("No scheduled task '{}' found", id),
+                Err(err) => println!("Failed to delete scheduled task: {}", err),
+            }
+        }
+        ScheduleAction::Pause { id } => {
+            println!("Pausing scheduled task");
+            println!("======================");
+            match update_job_status(&path, &id, JobStatus::Disabled) {
+                Ok(true) => println!("Paused scheduled task '{}'", id),
+                Ok(false) => println!("No scheduled task '{}' found", id),
+                Err(err) => println!("Failed to pause scheduled task: {}", err),
+            }
+        }
+        ScheduleAction::Resume { id } => {
+            println!("Resuming scheduled task");
+            println!("=======================");
+            match resume_scheduled_job(&path, &id) {
+                Ok(true) => println!("Resumed scheduled task '{}'", id),
+                Ok(false) => println!("No scheduled task '{}' found or not paused", id),
+                Err(err) => println!("Failed to resume scheduled task: {}", err),
             }
         }
     }
@@ -1390,6 +1470,164 @@ fn schedule_trigger_label(trigger: &JobTrigger) -> String {
         JobTrigger::Interval(seconds) => format!("interval({}s)", seconds),
         JobTrigger::OneShot(at) => format!("oneshot({})", at.to_rfc3339()),
     }
+}
+
+fn create_scheduled_job(
+    path: &std::path::Path,
+    name: &str,
+    action: &str,
+    trigger_type: &str,
+    trigger_value: &str,
+    description: Option<&str>,
+    max_retries: u32,
+    retry_delay_seconds: u64,
+) -> Result<String, String> {
+    use borgclaw_core::scheduler::{with_retry_policy, Job, JobTrigger};
+    use chrono::Utc;
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    let trigger = match trigger_type.to_lowercase().as_str() {
+        "cron" => JobTrigger::Cron(trigger_value.to_string()),
+        "interval" => {
+            let seconds = trigger_value
+                .parse::<u64>()
+                .map_err(|_| "interval value must be a number (seconds)".to_string())?;
+            JobTrigger::Interval(seconds)
+        }
+        "oneshot" => {
+            let datetime = trigger_value
+                .parse::<chrono::DateTime<Utc>>()
+                .map_err(|_| "oneshot value must be an ISO 8601 datetime".to_string())?;
+            JobTrigger::OneShot(datetime)
+        }
+        _ => return Err(format!("unknown trigger type: {}. Use cron, interval, or oneshot", trigger_type)),
+    };
+
+    let next_run = trigger.next_run();
+    let job = Job {
+        id: Uuid::new_v4().to_string(),
+        name: name.to_string(),
+        description: description.map(|s| s.to_string()),
+        trigger,
+        action: action.to_string(),
+        status: borgclaw_core::scheduler::JobStatus::Pending,
+        created_at: Utc::now(),
+        last_run: None,
+        next_run,
+        run_count: 0,
+        max_retries,
+        retry_count: 0,
+        retry_delay_seconds: retry_delay_seconds.max(1),
+        dead_lettered_at: None,
+        run_history: Vec::new(),
+        metadata: HashMap::new(),
+    };
+
+    let job = if max_retries > 0 {
+        with_retry_policy(job, max_retries, retry_delay_seconds)
+    } else {
+        job
+    };
+
+    let id = job.id.clone();
+
+    let mut jobs: HashMap<String, Job> = if path.exists() {
+        let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&contents).unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
+
+    jobs.insert(id.clone(), job);
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let serialized = serde_json::to_string_pretty(&jobs).map_err(|e| e.to_string())?;
+    std::fs::write(path, serialized).map_err(|e| e.to_string())?;
+
+    Ok(id)
+}
+
+fn delete_scheduled_job(path: &std::path::Path, id: &str) -> Result<bool, String> {
+    use borgclaw_core::scheduler::Job;
+
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut jobs: std::collections::HashMap<String, Job> =
+        serde_json::from_str(&contents).map_err(|e| e.to_string())?;
+
+    if jobs.remove(id).is_none() {
+        return Ok(false);
+    }
+
+    let serialized = serde_json::to_string_pretty(&jobs).map_err(|e| e.to_string())?;
+    std::fs::write(path, serialized).map_err(|e| e.to_string())?;
+
+    Ok(true)
+}
+
+fn update_job_status(
+    path: &std::path::Path,
+    id: &str,
+    status: borgclaw_core::scheduler::JobStatus,
+) -> Result<bool, String> {
+    use borgclaw_core::scheduler::Job;
+
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut jobs: std::collections::HashMap<String, Job> =
+        serde_json::from_str(&contents).map_err(|e| e.to_string())?;
+
+    let job = match jobs.get_mut(id) {
+        Some(job) => job,
+        None => return Ok(false),
+    };
+
+    job.status = status;
+
+    let serialized = serde_json::to_string_pretty(&jobs).map_err(|e| e.to_string())?;
+    std::fs::write(path, serialized).map_err(|e| e.to_string())?;
+
+    Ok(true)
+}
+
+fn resume_scheduled_job(path: &std::path::Path, id: &str) -> Result<bool, String> {
+    use borgclaw_core::scheduler::{Job, JobStatus};
+
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut jobs: std::collections::HashMap<String, Job> =
+        serde_json::from_str(&contents).map_err(|e| e.to_string())?;
+
+    let job = match jobs.get_mut(id) {
+        Some(job) => job,
+        None => return Ok(false),
+    };
+
+    if job.status != JobStatus::Disabled {
+        return Ok(false);
+    }
+
+    job.status = JobStatus::Pending;
+    if job.next_run.is_none() && job.trigger.next_run().is_some() {
+        job.next_run = job.trigger.next_run();
+    }
+
+    let serialized = serde_json::to_string_pretty(&jobs).map_err(|e| e.to_string())?;
+    std::fs::write(path, serialized).map_err(|e| e.to_string())?;
+
+    Ok(true)
 }
 
 fn pluralize(count: usize, noun: &str) -> String {
