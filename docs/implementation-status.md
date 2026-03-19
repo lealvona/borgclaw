@@ -46,7 +46,7 @@ Last reviewed: March 19, 2026, with upstream inspiration follow-up through March
 - Telegram polling now has duplicate-start rejection and tracked shutdown for its background receive loop, but broader restart recovery behavior across transports is still incomplete.
 - GitHub, Google, and browser now all have local shared-runtime happy-path coverage, but broader operational completeness across those families is still incomplete.
 - Managed schedule/backup/recovery operator workflows remain incomplete even though core persisted scheduler state is now landed.
-- CLI now exposes a read-only `schedules list` surface backed by persisted scheduler state, but schedule mutation and richer recovery UX remain incomplete.
+- CLI now exposes read-only `schedules list` and `schedules show <job-id>` surfaces backed by persisted scheduler state, but schedule mutation and richer recovery UX remain incomplete.
 - CLI `doctor` now summarizes aggregate MCP reachability failures across configured servers, but deeper transport-facing retry/rate-limit diagnostics still remain.
 - The shared router now enforces explicit channel disablement, so configured `enabled = false` remote channels are rejected instead of silently routing.
 - The gateway now rejects disabled WebSocket upgrades at the transport boundary instead of accepting the connection and failing only later in message routing.

@@ -90,6 +90,8 @@ enum SkillsAction {
 enum ScheduleAction {
     /// List persisted scheduled tasks
     List,
+    /// Show persisted details for one scheduled task
+    Show { id: String },
 }
 
 #[tokio::main]
@@ -549,9 +551,9 @@ async fn self_test(config: AppConfig) -> bool {
 }
 
 fn schedules(config: AppConfig, action: ScheduleAction) {
+    let path = config.agent.workspace.join("scheduler.json");
     match action {
         ScheduleAction::List => {
-            let path = config.agent.workspace.join("scheduler.json");
             println!("Scheduled tasks");
             println!("===============");
             match schedule_list_lines(&path) {
@@ -561,6 +563,25 @@ fn schedules(config: AppConfig, action: ScheduleAction) {
                 Ok(lines) => {
                     for line in lines {
                         println!("  - {}", line);
+                    }
+                }
+                Err(err) => println!("Could not read {}: {}", path.display(), err),
+            }
+        }
+        ScheduleAction::Show { id } => {
+            println!("Scheduled task details");
+            println!("======================");
+            match schedule_detail_lines(&path, &id) {
+                Ok(lines) if lines.is_empty() => {
+                    println!(
+                        "No scheduled task named '{}' found in {}",
+                        id,
+                        path.display()
+                    )
+                }
+                Ok(lines) => {
+                    for line in lines {
+                        println!("{}", line);
                     }
                 }
                 Err(err) => println!("Could not read {}: {}", path.display(), err),
@@ -1131,6 +1152,93 @@ fn schedule_list_lines(path: &std::path::Path) -> Result<Vec<String>, String> {
     });
 
     Ok(jobs.into_iter().map(format_schedule_job_line).collect())
+}
+
+fn schedule_detail_lines(path: &std::path::Path, id: &str) -> Result<Vec<String>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let jobs: std::collections::HashMap<String, Job> =
+        serde_json::from_str(&contents).map_err(|e| e.to_string())?;
+    let Some(job) = jobs.get(id).cloned() else {
+        return Ok(Vec::new());
+    };
+
+    let mut lines = vec![
+        format!("id: {}", job.id),
+        format!("name: {}", job.name),
+        format!("status: {}", job.status),
+        format!("trigger: {}", schedule_trigger_label(&job.trigger)),
+        format!(
+            "description: {}",
+            job.description.unwrap_or_else(|| "none".to_string())
+        ),
+        format!("action: {}", job.action),
+        format!("created_at: {}", job.created_at.to_rfc3339()),
+        format!(
+            "last_run: {}",
+            job.last_run
+                .map(|value| value.to_rfc3339())
+                .unwrap_or_else(|| "never".to_string())
+        ),
+        format!(
+            "next_run: {}",
+            job.next_run
+                .map(|value| value.to_rfc3339())
+                .unwrap_or_else(|| "none".to_string())
+        ),
+        format!("run_count: {}", job.run_count),
+        format!(
+            "retries: {}/{} (delay={}s)",
+            job.retry_count, job.max_retries, job.retry_delay_seconds
+        ),
+        format!(
+            "dead_lettered_at: {}",
+            job.dead_lettered_at
+                .map(|value| value.to_rfc3339())
+                .unwrap_or_else(|| "none".to_string())
+        ),
+    ];
+
+    if job.metadata.is_empty() {
+        lines.push("metadata: none".to_string());
+    } else {
+        let mut metadata = job.metadata.into_iter().collect::<Vec<_>>();
+        metadata.sort_by(|left, right| left.0.cmp(&right.0));
+        lines.push(format!(
+            "metadata: {}",
+            metadata
+                .into_iter()
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
+    if job.run_history.is_empty() {
+        lines.push("history: none".to_string());
+    } else {
+        lines.push("history:".to_string());
+        for run in job.run_history {
+            let retry = run
+                .retry_scheduled
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string());
+            let error = run.error.unwrap_or_else(|| "none".to_string());
+            lines.push(format!(
+                "  - {} -> {} [{}] retry={} error={}",
+                run.started_at.to_rfc3339(),
+                run.finished_at.to_rfc3339(),
+                run.status,
+                retry,
+                error
+            ));
+        }
+    }
+
+    Ok(lines)
 }
 
 fn format_schedule_job_line(job: Job) -> String {
@@ -2225,6 +2333,77 @@ mod tests {
             lines[1],
             "nightly-backup [pending] trigger=cron(0 0 * * * *) next=2026-03-20T00:00:00+00:00 last=never runs=2 retries=1/3 active"
         );
+    }
+
+    #[test]
+    fn schedule_detail_lines_formats_metadata_and_history() {
+        let workspace = std::env::temp_dir().join(format!(
+            "borgclaw_cli_schedule_detail_present_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(
+            workspace.join("scheduler.json"),
+            r#"{
+              "job-1": {
+                "id": "job-1",
+                "name": "nightly-backup",
+                "description": "Backup local workspace",
+                "trigger": {"type": "Cron", "value": "0 0 * * * *"},
+                "action": "message",
+                "status": "failed",
+                "created_at": "2026-03-19T00:00:00Z",
+                "last_run": "2026-03-19T00:05:00Z",
+                "next_run": "2026-03-20T00:00:00Z",
+                "run_count": 2,
+                "max_retries": 3,
+                "retry_count": 1,
+                "retry_delay_seconds": 60,
+                "dead_lettered_at": null,
+                "run_history": [
+                  {
+                    "started_at": "2026-03-19T00:05:00Z",
+                    "finished_at": "2026-03-19T00:05:03Z",
+                    "status": "failed",
+                    "error": "disk full",
+                    "retry_scheduled": 2
+                  }
+                ],
+                "metadata": {
+                  "origin": "self-test",
+                  "group_id": "ops"
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let lines = schedule_detail_lines(&workspace.join("scheduler.json"), "job-1").unwrap();
+
+        assert!(lines.iter().any(|line| line == "id: job-1"));
+        assert!(lines.iter().any(|line| line == "name: nightly-backup"));
+        assert!(lines
+            .iter()
+            .any(|line| line == "trigger: cron(0 0 * * * *)"));
+        assert!(lines
+            .iter()
+            .any(|line| line == "metadata: group_id=ops, origin=self-test"));
+        assert!(lines.iter().any(|line| {
+            line == "  - 2026-03-19T00:05:00+00:00 -> 2026-03-19T00:05:03+00:00 [failed] retry=2 error=disk full"
+        }));
+    }
+
+    #[test]
+    fn schedule_detail_lines_returns_empty_for_missing_job() {
+        let workspace = std::env::temp_dir().join(format!(
+            "borgclaw_cli_schedule_detail_missing_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("scheduler.json"), "{}").unwrap();
+
+        let lines = schedule_detail_lines(&workspace.join("scheduler.json"), "missing").unwrap();
+        assert!(lines.is_empty());
     }
 
     #[test]

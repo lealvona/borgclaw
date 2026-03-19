@@ -127,6 +127,7 @@ cargo run --bin borgclaw -- init
 ./scripts/doctor.sh    # Verify all components
 cargo run --bin borgclaw -- self-test   # Exit 0 on pass, 1 on failure
 cargo run --bin borgclaw -- schedules list   # Inspect persisted scheduled tasks
+cargo run --bin borgclaw -- schedules show <job-id>   # Inspect one persisted task in detail
 ```
 
 ## Configuration
