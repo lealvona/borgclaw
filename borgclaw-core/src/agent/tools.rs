@@ -2599,6 +2599,36 @@ mod tests {
         SchedulerConfig, SecurityConfig,
     };
     use crate::scheduler::JobStatus;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn spawn_github_stub(
+        responses: Vec<(&'static str, &'static str, String)>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for (method, path, body) in responses {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buf = [0_u8; 8192];
+                let read = socket.read(&mut buf).await.unwrap();
+                let request = String::from_utf8_lossy(&buf[..read]);
+                assert!(
+                    request.starts_with(method),
+                    "unexpected method: {}",
+                    request
+                );
+                assert!(request.contains(path), "unexpected path: {}", request);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+
+        (format!("http://{addr}"), server)
+    }
 
     #[test]
     fn parses_json_tool_command() {
@@ -4284,6 +4314,136 @@ file_write = ["/etc"]
             .iter()
             .any(|entry| entry.entry.key == "restartrecovery"
                 && entry.entry.content == "restored run"));
+    }
+
+    #[tokio::test]
+    async fn github_tools_use_configured_runtime_client_against_local_stub() {
+        use base64::Engine;
+
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_github_tool_stub_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let readme = base64::engine::general_purpose::STANDARD.encode("hello from github");
+        let (base_url, server) = spawn_github_stub(vec![
+            (
+                "GET /repos/owner/repo ",
+                "authorization: Bearer test-token",
+                serde_json::json!({
+                    "name": "repo",
+                    "full_name": "owner/repo",
+                    "owner": {"login": "owner"},
+                    "description": "stub repo",
+                    "private": false,
+                    "html_url": "https://github.com/owner/repo",
+                    "default_branch": "main"
+                })
+                .to_string(),
+            ),
+            (
+                "GET /repos/owner/repo/branches ",
+                "authorization: Bearer test-token",
+                serde_json::json!([
+                    {
+                        "name": "main",
+                        "commit": {"sha": "abc123"},
+                        "protected": true
+                    }
+                ])
+                .to_string(),
+            ),
+            (
+                "GET /repos/owner/repo/contents/README.md?ref=main ",
+                "authorization: Bearer test-token",
+                serde_json::json!({
+                    "content": readme,
+                    "encoding": "base64"
+                })
+                .to_string(),
+            ),
+        ])
+        .await;
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &HeartbeatConfig::default(),
+            &SchedulerConfig::default(),
+            &crate::config::SkillsConfig {
+                github: crate::config::GitHubSkillConfig {
+                    token: "test-token".to_string(),
+                    user_agent: "BorgClawTest/1.0".to_string(),
+                    base_url,
+                    safety: crate::config::GitHubSafetyConfig {
+                        repo_access: "all".to_string(),
+                        require_confirmation: false,
+                        allowlist: Vec::new(),
+                    },
+                },
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let repo = execute_tool(
+            &ToolCall::new(
+                "github_get_repo",
+                HashMap::from([
+                    ("owner".to_string(), serde_json::json!("owner")),
+                    ("repo".to_string(), serde_json::json!("repo")),
+                ]),
+            ),
+            &runtime,
+        )
+        .await;
+        let branches = execute_tool(
+            &ToolCall::new(
+                "github_list_branches",
+                HashMap::from([
+                    ("owner".to_string(), serde_json::json!("owner")),
+                    ("repo".to_string(), serde_json::json!("repo")),
+                ]),
+            ),
+            &runtime,
+        )
+        .await;
+        let readme = execute_tool(
+            &ToolCall::new(
+                "github_get_file",
+                HashMap::from([
+                    ("owner".to_string(), serde_json::json!("owner")),
+                    ("repo".to_string(), serde_json::json!("repo")),
+                    ("path".to_string(), serde_json::json!("README.md")),
+                    ("ref".to_string(), serde_json::json!("main")),
+                ]),
+            ),
+            &runtime,
+        )
+        .await;
+
+        server.await.unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert!(repo.success);
+        assert!(repo
+            .output
+            .contains("owner/repo | default=main | private=false"));
+        assert!(branches.success);
+        assert!(branches.output.contains("main | abc123 | protected=true"));
+        assert!(readme.success);
+        assert_eq!(readme.output, "hello from github");
     }
 
     #[tokio::test]

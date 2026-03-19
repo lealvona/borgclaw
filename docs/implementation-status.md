@@ -22,7 +22,7 @@ Last reviewed: March 19, 2026
 | Secret storage + vault | `partial` | Encrypted secrets and vault clients exist; onboarding/auth UX is still mixed. |
 | Skill registry lifecycle | `partial` | Local install, remote `SKILL.md`, and GitHub-backed listing exist; packaging/publishing remain planned. |
 | MCP client | `complete` | Documented transports and client API are aligned. |
-| GitHub skill client | `partial` | Core client surface and substantial shared tool/runtime coverage are landed; broader operational completeness remains. |
+| GitHub skill client | `partial` | Core client surface, substantial shared tool/runtime coverage, and local shared-runtime happy-path coverage are landed; broader operational completeness remains. |
 | Google skill client | `partial` | Gmail/Drive/Calendar facade and shared runtime coverage are landed; broader operational completeness remains. |
 | Browser skill client | `partial` | Playwright/CDP surface and core shared runtime actions are landed; broader operational completeness remains. |
 | STT/TTS/Image/QR/URL skills | `partial` | Typed config and shared runtime coverage are landed; broader operational completeness and deeper integration coverage remain. |
