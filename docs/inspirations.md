@@ -2,7 +2,7 @@
 
 This guide expands the short origin list in the README into an engineering reference.
 
-Last reviewed against upstream repositories: March 11, 2026
+Last reviewed against upstream repositories: March 19, 2026
 
 Status note:
 - Several gaps originally called out here are now partially or fully closed in BorgClaw.
@@ -14,27 +14,27 @@ Use it for two things:
 1. Understand which upstream project is the best model for a given BorgClaw subsystem.
 2. Cross-check BorgClaw roadmap items, stubs, and rough edges against upstream implementations that already solved similar problems well.
 
-## Upstream Follow-Up: March 11, 2026
+## Upstream Follow-Up: March 19, 2026
 
 Recent upstream movement sharpened a few priorities for BorgClaw:
 
-- OpenClaw `v2026.3.8` pushed further on backup/restore safety, remote gateway token handling, Brave `web_search` context mode, cron restart catch-up staggering, workspace plugin bootstrap at compaction/subagent boundaries, and post-approval script snapshot binding.  
-  Source: [OpenClaw v2026.3.8 release](https://github.com/openclaw/openclaw/releases/tag/v2026.3.8)
-- ZeroClaw `v0.1.7` reinforced prompt-injection defense, leak detection, reasoning-content preservation across tool calls, and supply-chain/release hardening.  
-  Source: [ZeroClaw v0.1.7 release](https://github.com/zeroclaw-labs/zeroclaw/releases/tag/v0.1.7)
-- NanoClaw's latest work shifted further toward deterministic local-skill/bootstrap behavior instead of marketplace assumptions, and tightened setup correctness around registration flows.  
+- OpenClaw `v2026.3.13` pushed further on compaction correctness, Telegram media SSRF policy, session continuity after reset, cross-agent workspace resolution, gateway token leak prevention in Docker build context, and Signal config/schema expansion.  
+  Source: [OpenClaw releases](https://github.com/openclaw/openclaw/releases)
+- ZeroClaw `v0.5.0` pushed further on runtime model switching, configurable sub-agent timeouts, self-test and healthcheck flows, rollback-capable updates, gateway device registry/pairing APIs, persisted WebSocket sessions, and more concrete plugin-host/Wasm execution plumbing.  
+  Source: [ZeroClaw releases](https://github.com/zeroclaw-labs/zeroclaw/releases)
+- NanoClaw's latest work added host-level `/remote-control`, explicit read-only `/capabilities` and `/status` skills, and continued its bias toward deterministic local/bootstrap flows and docker sandbox dispatch.  
   Source: [NanoClaw recent commits](https://github.com/qwibitai/nanoclaw/commits/main/)
-- IronClaw's latest work tightened webhook ingress around capability gating, mandatory auth, body limits, redacted error responses, and approval consistency across immediate and deferred tool paths.  
+- IronClaw's latest work tightened approval waiting, jobs limits, rate-limit retry behavior, Telegram verification/routing, live trigger cache refresh, and cross-channel owner-scope/routing fallback correctness.  
   Source: [IronClaw recent commits](https://github.com/nearai/ironclaw/commits/staging/)
-- PicoClaw `v0.2.1` improved MCP path/env correctness, aggregated connection errors, atomic memory durability, registry-backed skill discovery, configurable exec timeout, and sandbox read/write policy depth.  
-  Source: [PicoClaw v0.2.1 release](https://github.com/sipeed/picoclaw/releases/tag/v0.2.1)
-- TinyClaw `v0.0.9` tightened restart-safe Telegram polling via awaited shutdown, connectivity verification, and concurrent-restart guards.  
-  Source: [TinyClaw v0.0.9 release](https://github.com/TinyAGI/tinyclaw/releases/tag/v0.0.9)
+- PicoClaw `v0.2.3` pushed further on cron exec policy gating, web-configurable cron execution settings, subagent status reporting, gateway hot reload and polling-state sync, symlink-aware allowed-root normalization, and startup dependency checks for the gateway/backend pair.  
+  Source: [PicoClaw releases](https://github.com/sipeed/picoclaw/releases)
+- TinyClaw `v0.0.14` moved fully onto an in-process persisted scheduler with schedule-management surfaces and stronger workspace-source-of-truth conventions for agent identity/system prompts.  
+  Source: [TinyClaw releases](https://github.com/TinyAGI/tinyclaw/releases)
 
 Implication for BorgClaw:
 
 - The main remaining work is no longer broad feature discovery.
-- It is execution correctness, restart safety, and policy consistency across already-landed surfaces.
+- It is execution correctness, restart safety, operator introspection, and policy consistency across already-landed surfaces.
 
 The sources here are the public GitHub repositories cited by BorgClaw's own documentation:
 
@@ -82,6 +82,7 @@ What BorgClaw should copy:
 - Add restart-safe scheduler catch-up and gateway restart guards so recovered processes do not flood or stall background execution.
 - Treat backup/restore and destructive-flow verification as part of the operator contract, not as an afterthought.
 - Keep workspace/plugin bootstrap behavior explicit at compaction, scheduler, and subagent boundaries.
+- Tighten transport-specific SSRF/media policy enforcement and deployment-time secret handling, not just runtime prompt/tool defenses.
 
 Best matches for current BorgClaw gaps:
 
@@ -114,6 +115,7 @@ What BorgClaw should copy:
 - Treat identity format as an interface, not a one-off prompt file.
 - Preserve richer provider transcript artifacts such as reasoning content when tools are involved, instead of flattening every turn to plain text.
 - Keep release and bootstrap paths reproducible and supply-chain-conscious.
+- Expand self-test/healthcheck and gateway-session persistence depth so runtime and operator UX stay aligned.
 
 Best matches for current BorgClaw gaps:
 
@@ -138,6 +140,7 @@ What BorgClaw should copy:
 - Document the runtime contract for isolation at the same level as transport setup.
 - Make scheduled jobs and remote-channel execution inherit the same sandbox boundary automatically.
 - Prefer deterministic local bootstrap/install flows over marketplace assumptions when the managed lifecycle is not yet complete.
+- Add read-only capabilities/status surfaces before introducing more mutable remote-control surfaces.
 
 Best matches for current BorgClaw gaps:
 
@@ -167,6 +170,7 @@ What BorgClaw should copy:
 - Gate webhook-triggerable tools on explicit capability declarations, not mere tool existence.
 - Keep approval semantics identical across immediate, deferred, and background tool execution paths.
 - Redact internal failure detail at transport boundaries while retaining richer internal diagnostics.
+- Tighten rate-limit semantics, deferred approval waiting coverage, and channel ownership/routing fallback tests as correctness work, not polish.
 
 Best matches for current BorgClaw gaps:
 
@@ -199,6 +203,7 @@ What BorgClaw should copy:
 - Resolve MCP relative config paths against the workspace predictably, and prefer aggregated reachability failures over the first opaque transport error.
 - Keep tool timeouts policy-driven and surfaced in config, not hidden in per-tool defaults.
 - Treat memory durability as an atomic-write and crash-safety concern, not just a serialization concern.
+- Normalize allowed-root checks through symlink-aware canonicalization, and fail startup early when gateway/backend prerequisites are not actually satisfied.
 
 Best matches for current BorgClaw gaps:
 
@@ -223,6 +228,7 @@ What BorgClaw should copy:
 - Add retries, terminal failure state, and dead-letter semantics to background execution.
 - Keep workspaces isolated per spawned agent/task.
 - Treat long-lived polling/channel loops as restart-sensitive state machines with explicit shutdown, health verification, and restart guards.
+- Treat persisted schedule management and operator-visible scheduler state as part of the product surface, not only internal runtime machinery.
 
 Best matches for current BorgClaw gaps:
 
