@@ -1263,6 +1263,11 @@ async fn integration_doctor_lines(config: &AppConfig) -> Vec<String> {
         config.skills.url_shortener.provider
     ));
     lines.extend(mcp_doctor_lines(config).await);
+    lines.push(format!(
+        "{} MCP servers configured ({})",
+        marker(!config.mcp.servers.is_empty()),
+        config.mcp.servers.len()
+    ));
     lines
 }
 
