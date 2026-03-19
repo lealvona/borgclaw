@@ -54,3 +54,22 @@
 - `SecurityConfig` must accept the documented fields and nesting.
 - The runtime must honor `injection_action`, `secrets_encryption`, `secrets_path`, and `[security.pairing]`.
 - Any temporary narrowing elsewhere should be documented explicitly until implemented.
+
+---
+
+## D004: Cut MVP Release As 1.0.0 And Hold Further Releases Until 1.1.0
+**Decision**: Mark the current documented-contract MVP as `1.0.0`, then continue subsequent work on feature branches without cutting another release until `1.1.0`.
+
+**Rationale**:
+- The repo has crossed out of prototype-only status and now has a coherent documented MVP surface.
+- A stable `1.0.0` release line makes post-MVP work easier to isolate without mixing release-candidate and ongoing feature work.
+- The user explicitly requested a `1.0` release followed by feature-branch-only development until `1.1`.
+
+**Alternatives Considered**:
+- Continue shipping more `0.x` releases while finishing the remaining roadmap.
+- Cut repeated point releases immediately after `1.0.0`.
+
+**Impact**:
+- Workspace package version moves to `1.0.0`.
+- `CHANGELOG.md` becomes the release-history source of truth.
+- Post-`1.0.0` implementation continues behind feature branches, with the next coordinated release target set to `1.1.0`.

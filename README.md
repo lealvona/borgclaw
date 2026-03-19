@@ -224,6 +224,7 @@ borgclaw/
 
 ## Documentation
 
+- [Changelog](CHANGELOG.md) - Release history and release-line policy
 - [Quick Start Guide](docs/quickstart.md) - Step-by-step setup
 - [Onboarding](docs/onboarding.md) - Configuration wizard
 - [Channels](docs/channels.md) - Messaging integrations
