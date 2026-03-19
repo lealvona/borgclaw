@@ -377,6 +377,16 @@ async fn status(config: AppConfig) {
         "Heartbeat config: enabled={}, poll={}s",
         config.heartbeat.enabled, config.heartbeat.check_interval_seconds
     );
+    println!(
+        "Scheduler config: enabled={}, max_jobs={}, timeout={}s",
+        config.scheduler.enabled,
+        config.scheduler.max_concurrent_jobs,
+        config.scheduler.job_timeout
+    );
+    println!(
+        "Background state: {}",
+        background_state_status(&config.agent.workspace)
+    );
     println!("Skills path: {:?}", config.skills.skills_path);
     println!(
         "Skill providers: github={}, google={}, browser={:?}, stt={}, tts={}, image={}, url={}",
@@ -454,6 +464,9 @@ async fn doctor(config: AppConfig) {
         println!("✓ Skills path available");
     } else {
         println!("✗ Skills path unavailable: {:?}", config.skills.skills_path);
+    }
+    for line in background_state_doctor_lines(&config.agent.workspace) {
+        println!("{}", line);
     }
     match config.security.vault.provider.as_deref() {
         Some("bitwarden") if cli_path_available(&config.security.vault.bitwarden.cli_path) => {
@@ -882,6 +895,64 @@ async fn image_provider_status(config: &AppConfig) -> &'static str {
         "ready"
     } else {
         "missing config"
+    }
+}
+
+fn background_state_status(workspace: &std::path::Path) -> String {
+    let heartbeat = background_state_summary(&workspace.join("heartbeat.json"));
+    let subagents = background_state_summary(&workspace.join("subagents.json"));
+    format!("heartbeat={}, subagents={}", heartbeat, subagents)
+}
+
+fn background_state_doctor_lines(workspace: &std::path::Path) -> Vec<String> {
+    vec![
+        background_state_doctor_line("Heartbeat", &workspace.join("heartbeat.json")),
+        background_state_doctor_line("Sub-agent", &workspace.join("subagents.json")),
+    ]
+}
+
+fn background_state_doctor_line(label: &str, path: &std::path::Path) -> String {
+    match background_state_counts(path) {
+        Some((tasks, dead)) => format!(
+            "{} {} state present ({}, dead-lettered={}) at {}",
+            marker(true),
+            label,
+            pluralize(tasks, "task"),
+            dead,
+            path.display()
+        ),
+        None => format!("• {} state not created yet ({})", label, path.display()),
+    }
+}
+
+fn background_state_summary(path: &std::path::Path) -> String {
+    match background_state_counts(path) {
+        Some((tasks, dead)) => format!("{} (dead-lettered={})", pluralize(tasks, "task"), dead),
+        None => "not created".to_string(),
+    }
+}
+
+fn background_state_counts(path: &std::path::Path) -> Option<(usize, usize)> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&contents).ok()?;
+    let map = value.as_object()?;
+    let dead_lettered = map
+        .values()
+        .filter(|entry| {
+            entry
+                .get("dead_lettered_at")
+                .map(|value| !value.is_null())
+                .unwrap_or(false)
+        })
+        .count();
+    Some((map.len(), dead_lettered))
+}
+
+fn pluralize(count: usize, noun: &str) -> String {
+    if count == 1 {
+        format!("1 {}", noun)
+    } else {
+        format!("{} {}s", count, noun)
     }
 }
 
@@ -1725,6 +1796,60 @@ mod tests {
         assert!(lines
             .iter()
             .any(|line| line == "✓ Command allowlist disabled (patterns=0)"));
+    }
+
+    #[test]
+    fn background_state_status_reports_persisted_counts() {
+        let workspace = std::env::temp_dir().join(format!(
+            "borgclaw_cli_background_state_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(
+            workspace.join("heartbeat.json"),
+            r#"{
+              "hb-1": {"dead_lettered_at": null},
+              "hb-2": {"dead_lettered_at": "2026-03-19T00:00:00Z"}
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.join("subagents.json"),
+            r#"{
+              "sg-1": {"dead_lettered_at": null}
+            }"#,
+        )
+        .unwrap();
+
+        let line = background_state_status(&workspace);
+        assert_eq!(
+            line,
+            "heartbeat=2 tasks (dead-lettered=1), subagents=1 task (dead-lettered=0)"
+        );
+    }
+
+    #[test]
+    fn background_state_doctor_lines_report_missing_and_present_state_files() {
+        let workspace = std::env::temp_dir().join(format!(
+            "borgclaw_cli_background_doctor_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(
+            workspace.join("heartbeat.json"),
+            r#"{
+              "hb-1": {"dead_lettered_at": null}
+            }"#,
+        )
+        .unwrap();
+
+        let lines = background_state_doctor_lines(&workspace);
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("✓ Heartbeat state present (1 task, dead-lettered=0)")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("• Sub-agent state not created yet")));
     }
 }
 
