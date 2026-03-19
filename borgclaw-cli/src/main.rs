@@ -103,6 +103,19 @@ enum ScheduleAction {
 enum BackupAction {
     /// Export persisted local runtime state to a JSON snapshot
     Export { output: PathBuf },
+    /// Import persisted local runtime state from a JSON snapshot
+    Import {
+        /// Path to the backup snapshot JSON file
+        input: PathBuf,
+        /// Skip confirmation prompt
+        #[arg(short, long)]
+        force: bool,
+    },
+    /// Verify a backup snapshot without importing
+    Verify {
+        /// Path to the backup snapshot JSON file
+        input: PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -628,6 +641,34 @@ fn backup(config: AppConfig, action: BackupAction) {
                     );
                 }
                 Err(err) => println!("Backup export failed: {}", err),
+            }
+        }
+        BackupAction::Import { input, force } => {
+            println!("Importing backup snapshot");
+            println!("=======================");
+            match import_backup_snapshot(&config.agent.workspace, &input, force) {
+                Ok(stats) => {
+                    println!("Imported backup from {}", input.display());
+                    println!("  - Scheduler jobs: {}", stats.scheduler_count);
+                    println!("  - Heartbeat tasks: {}", stats.heartbeat_count);
+                    println!("  - Sub-agent tasks: {}", stats.subagent_count);
+                }
+                Err(err) => println!("Backup import failed: {}", err),
+            }
+        }
+        BackupAction::Verify { input } => {
+            println!("Verifying backup snapshot");
+            println!("=========================");
+            match verify_backup_snapshot(&input) {
+                Ok(stats) => {
+                    println!("✓ Backup is valid (version: {})", stats.version);
+                    println!("  - Exported at: {}", stats.exported_at);
+                    println!("  - Original workspace: {}", stats.workspace);
+                    println!("  - Scheduler jobs: {}", stats.scheduler_count);
+                    println!("  - Heartbeat tasks: {}", stats.heartbeat_count);
+                    println!("  - Sub-agent tasks: {}", stats.subagent_count);
+                }
+                Err(err) => println!("✗ Backup verification failed: {}", err),
             }
         }
     }
@@ -1248,6 +1289,116 @@ fn read_state_map(
         .cloned()
         .ok_or_else(|| format!("{} does not contain a JSON object", path.display()))?;
     Ok(Some(object))
+}
+
+#[derive(Debug)]
+struct ImportStats {
+    scheduler_count: usize,
+    heartbeat_count: usize,
+    subagent_count: usize,
+}
+
+fn import_backup_snapshot(
+    workspace: &std::path::Path,
+    input: &std::path::Path,
+    force: bool,
+) -> Result<ImportStats, String> {
+    if !input.exists() {
+        return Err(format!("backup file not found: {}", input.display()));
+    }
+
+    let contents = std::fs::read_to_string(input).map_err(|e| e.to_string())?;
+    let snapshot: BackupSnapshot =
+        serde_json::from_str(&contents).map_err(|e| format!("invalid backup format: {}", e))?;
+
+    if !force {
+        println!("This will restore:");
+        println!(
+            "  - {} scheduler jobs",
+            snapshot.scheduler.as_ref().map(|m| m.len()).unwrap_or(0)
+        );
+        println!(
+            "  - {} heartbeat tasks",
+            snapshot.heartbeat.as_ref().map(|m| m.len()).unwrap_or(0)
+        );
+        println!(
+            "  - {} sub-agent tasks",
+            snapshot.subagents.as_ref().map(|m| m.len()).unwrap_or(0)
+        );
+        println!("\nContinue? [y/N]");
+
+        let mut response = String::new();
+        std::io::stdin()
+            .read_line(&mut response)
+            .map_err(|e| e.to_string())?;
+        if !response.trim().eq_ignore_ascii_case("y") {
+            return Err("import cancelled by user".to_string());
+        }
+    }
+
+    std::fs::create_dir_all(workspace).map_err(|e| e.to_string())?;
+
+    let scheduler_count = if let Some(scheduler) = snapshot.scheduler {
+        let path = workspace.join("scheduler.json");
+        let contents = serde_json::to_string_pretty(&scheduler).map_err(|e| e.to_string())?;
+        std::fs::write(&path, contents).map_err(|e| e.to_string())?;
+        scheduler.len()
+    } else {
+        0
+    };
+
+    let heartbeat_count = if let Some(heartbeat) = snapshot.heartbeat {
+        let path = workspace.join("heartbeat.json");
+        let contents = serde_json::to_string_pretty(&heartbeat).map_err(|e| e.to_string())?;
+        std::fs::write(&path, contents).map_err(|e| e.to_string())?;
+        heartbeat.len()
+    } else {
+        0
+    };
+
+    let subagent_count = if let Some(subagents) = snapshot.subagents {
+        let path = workspace.join("subagents.json");
+        let contents = serde_json::to_string_pretty(&subagents).map_err(|e| e.to_string())?;
+        std::fs::write(&path, contents).map_err(|e| e.to_string())?;
+        subagents.len()
+    } else {
+        0
+    };
+
+    Ok(ImportStats {
+        scheduler_count,
+        heartbeat_count,
+        subagent_count,
+    })
+}
+
+#[derive(Debug)]
+struct VerifyStats {
+    version: String,
+    exported_at: String,
+    workspace: String,
+    scheduler_count: usize,
+    heartbeat_count: usize,
+    subagent_count: usize,
+}
+
+fn verify_backup_snapshot(input: &std::path::Path) -> Result<VerifyStats, String> {
+    if !input.exists() {
+        return Err(format!("backup file not found: {}", input.display()));
+    }
+
+    let contents = std::fs::read_to_string(input).map_err(|e| e.to_string())?;
+    let snapshot: BackupSnapshot =
+        serde_json::from_str(&contents).map_err(|e| format!("invalid backup format: {}", e))?;
+
+    Ok(VerifyStats {
+        version: snapshot.version,
+        exported_at: snapshot.exported_at,
+        workspace: snapshot.workspace,
+        scheduler_count: snapshot.scheduler.as_ref().map(|m| m.len()).unwrap_or(0),
+        heartbeat_count: snapshot.heartbeat.as_ref().map(|m| m.len()).unwrap_or(0),
+        subagent_count: snapshot.subagents.as_ref().map(|m| m.len()).unwrap_or(0),
+    })
 }
 
 fn schedule_list_lines(path: &std::path::Path) -> Result<Vec<String>, String> {
