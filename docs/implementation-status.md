@@ -48,3 +48,4 @@ Last reviewed: March 19, 2026, with upstream inspiration follow-up through March
 - Managed schedule/backup/recovery operator workflows remain incomplete even though core persisted scheduler state is now landed.
 - CLI `doctor` now summarizes aggregate MCP reachability failures across configured servers, but deeper transport-facing retry/rate-limit diagnostics still remain.
 - The shared router now enforces explicit channel disablement, so configured `enabled = false` remote channels are rejected instead of silently routing.
+- The gateway now rejects disabled WebSocket upgrades at the transport boundary instead of accepting the connection and failing only later in message routing.

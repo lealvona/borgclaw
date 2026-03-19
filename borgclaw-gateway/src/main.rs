@@ -126,6 +126,13 @@ async fn websocket_handler(
     ws: WebSocketUpgrade,
     State(state): State<GatewayState>,
 ) -> impl IntoResponse {
+    if matches!(
+        state.config.channels.get("websocket"),
+        Some(channel) if !channel.enabled
+    ) {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+
     ws.on_upgrade(|socket| handle_socket(socket, state))
 }
 
@@ -977,6 +984,38 @@ mod tests {
         assert_eq!(error["message"], "Unknown message type");
 
         socket.close(None).await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn websocket_upgrade_is_rejected_when_channel_is_disabled() {
+        let mut config = AppConfig::default();
+        let websocket = config.channels.entry("websocket".to_string()).or_default();
+        websocket.enabled = false;
+
+        let state = GatewayState {
+            config: Arc::new(config.clone()),
+            router: Arc::new(MessageRouter::from_config(&config)),
+            webhook: None,
+        };
+
+        let app = Router::new()
+            .route("/ws", get(websocket_handler))
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let err = connect_async(format!("ws://{addr}/ws")).await.unwrap_err();
+        match err {
+            tokio_tungstenite::tungstenite::Error::Http(response) => {
+                assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            }
+            other => panic!("unexpected websocket connect error: {other:?}"),
+        }
+
         server.abort();
     }
 
