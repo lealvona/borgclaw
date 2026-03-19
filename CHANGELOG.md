@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.4.0 - 2026-03-19
+
+### Features
+
+**Runtime Status Command**
+- `runtime` command showing comprehensive background task status
+- Displays scheduler, heartbeat, and sub-agent tasks in one view
+- Shows provider configuration and credential status
+
+**Doctor Improvements**
+- MCP server count visible in doctor output
+
+### Release Policy
+
+- `1.4.0` is the current release line
+- New work after `1.4.0` should continue on feature branches
+
 ## 1.3.0 - 2026-03-19
 
 ### Features
