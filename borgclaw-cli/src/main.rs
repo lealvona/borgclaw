@@ -68,6 +68,11 @@ enum Commands {
         #[command(subcommand)]
         action: BackupAction,
     },
+    /// Inspect persisted heartbeat tasks
+    Heartbeat {
+        #[command(subcommand)]
+        action: HeartbeatAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -146,6 +151,20 @@ enum BackupAction {
     },
 }
 
+#[derive(Subcommand)]
+enum HeartbeatAction {
+    /// List persisted heartbeat tasks
+    List,
+    /// Show persisted details for one heartbeat task
+    Show { id: String },
+    /// Enable a heartbeat task
+    Enable { id: String },
+    /// Disable a heartbeat task
+    Disable { id: String },
+    /// Trigger a heartbeat task manually
+    Trigger { id: String },
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -203,6 +222,7 @@ async fn main() {
         }
         Commands::Schedules { action } => schedules(config, action),
         Commands::Backup { action } => backup(config, action),
+        Commands::Heartbeat { action } => heartbeat(config, action),
     }
 }
 
@@ -750,6 +770,65 @@ fn backup(config: AppConfig, action: BackupAction) {
                 }
                 Err(err) => println!("✗ Backup verification failed: {}", err),
             }
+        }
+    }
+}
+
+fn heartbeat(config: AppConfig, action: HeartbeatAction) {
+    let path = config.agent.workspace.join("heartbeat.json");
+    match action {
+        HeartbeatAction::List => {
+            println!("Heartbeat tasks");
+            println!("===============");
+            match heartbeat_list_lines(&path) {
+                Ok(lines) if lines.is_empty() => {
+                    println!("No heartbeat tasks found in {}", path.display())
+                }
+                Ok(lines) => {
+                    for line in lines {
+                        println!("  - {}", line);
+                    }
+                }
+                Err(err) => println!("Could not read {}: {}", path.display(), err),
+            }
+        }
+        HeartbeatAction::Show { id } => {
+            println!("Heartbeat task details");
+            println!("======================");
+            match heartbeat_detail_lines(&path, &id) {
+                Ok(lines) if lines.is_empty() => {
+                    println!("No heartbeat task '{}' found in {}", id, path.display())
+                }
+                Ok(lines) => {
+                    for line in lines {
+                        println!("{}", line);
+                    }
+                }
+                Err(err) => println!("Could not read {}: {}", path.display(), err),
+            }
+        }
+        HeartbeatAction::Enable { id } => {
+            println!("Enabling heartbeat task");
+            println!("=======================");
+            match update_heartbeat_task_status(&path, &id, true) {
+                Ok(true) => println!("Enabled heartbeat task '{}'", id),
+                Ok(false) => println!("No heartbeat task '{}' found", id),
+                Err(err) => println!("Failed to enable heartbeat task: {}", err),
+            }
+        }
+        HeartbeatAction::Disable { id } => {
+            println!("Disabling heartbeat task");
+            println!("========================");
+            match update_heartbeat_task_status(&path, &id, false) {
+                Ok(true) => println!("Disabled heartbeat task '{}'", id),
+                Ok(false) => println!("No heartbeat task '{}' found", id),
+                Err(err) => println!("Failed to disable heartbeat task: {}", err),
+            }
+        }
+        HeartbeatAction::Trigger { id } => {
+            println!("Triggering heartbeat task");
+            println!("=========================");
+            println!("Manual trigger not yet implemented for '{}'", id);
         }
     }
 }
@@ -1804,6 +1883,124 @@ fn pluralize(count: usize, noun: &str) -> String {
     } else {
         format!("{} {}s", count, noun)
     }
+}
+
+fn heartbeat_list_lines(path: &std::path::Path) -> Result<Vec<String>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let tasks: std::collections::HashMap<String, serde_json::Value> =
+        serde_json::from_str(&contents).map_err(|e| e.to_string())?;
+
+    let mut lines = Vec::new();
+    for (id, task) in tasks {
+        let name = task
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unnamed");
+        let enabled = task
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let schedule = task
+            .get("schedule")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let dead_lettered = task.get("dead_lettered_at").and_then(|v| v.as_str());
+        let status = if dead_lettered.is_some() {
+            "dead-lettered"
+        } else if enabled {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        lines.push(format!("{} [{}] schedule={} {}", name, id, schedule, status));
+    }
+
+    lines.sort();
+    Ok(lines)
+}
+
+fn heartbeat_detail_lines(path: &std::path::Path, id: &str) -> Result<Vec<String>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let tasks: std::collections::HashMap<String, serde_json::Value> =
+        serde_json::from_str(&contents).map_err(|e| e.to_string())?;
+
+    let Some(task) = tasks.get(id) else {
+        return Ok(Vec::new());
+    };
+
+    let mut lines = vec![format!("id: {}", id)];
+
+    if let Some(name) = task.get("name").and_then(|v| v.as_str()) {
+        lines.push(format!("name: {}", name));
+    }
+
+    let enabled = task
+        .get("enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    lines.push(format!("enabled: {}", enabled));
+
+    if let Some(schedule) = task.get("schedule").and_then(|v| v.as_str()) {
+        lines.push(format!("schedule: {}", schedule));
+    }
+
+    if let Some(last_run) = task.get("last_run").and_then(|v| v.as_str()) {
+        lines.push(format!("last_run: {}", last_run));
+    } else {
+        lines.push("last_run: never".to_string());
+    }
+
+    if let Some(next_run) = task.get("next_run").and_then(|v| v.as_str()) {
+        lines.push(format!("next_run: {}", next_run));
+    } else {
+        lines.push("next_run: unknown".to_string());
+    }
+
+    if let Some(run_count) = task.get("run_count").and_then(|v| v.as_u64()) {
+        lines.push(format!("run_count: {}", run_count));
+    }
+
+    if let Some(dead_lettered) = task.get("dead_lettered_at").and_then(|v| v.as_str()) {
+        lines.push(format!("dead_lettered_at: {}", dead_lettered));
+    }
+
+    Ok(lines)
+}
+
+fn update_heartbeat_task_status(
+    path: &std::path::Path,
+    id: &str,
+    enabled: bool,
+) -> Result<bool, String> {
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut tasks: std::collections::HashMap<String, serde_json::Value> =
+        serde_json::from_str(&contents).map_err(|e| e.to_string())?;
+
+    let task = match tasks.get_mut(id) {
+        Some(task) => task,
+        None => return Ok(false),
+    };
+
+    if let Some(obj) = task.as_object_mut() {
+        obj.insert("enabled".to_string(), serde_json::json!(enabled));
+    }
+
+    let serialized = serde_json::to_string_pretty(&tasks).map_err(|e| e.to_string())?;
+    std::fs::write(path, serialized).map_err(|e| e.to_string())?;
+
+    Ok(true)
 }
 
 fn mcp_transport_label(server: &borgclaw_core::config::McpServerConfig) -> &'static str {
