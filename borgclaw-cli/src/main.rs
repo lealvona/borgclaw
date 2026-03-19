@@ -720,6 +720,7 @@ async fn self_test_failures(config: &AppConfig) -> Vec<String> {
             .filter(|line| line.starts_with('✗'))
             .map(|line| line.trim_start_matches("✗ ").to_string()),
     );
+    failures.extend(background_state_failure_lines(&config.agent.workspace));
 
     failures
 }
@@ -1160,6 +1161,28 @@ fn background_state_summary(path: &std::path::Path) -> String {
         Some((tasks, dead)) => format!("{} (dead-lettered={})", pluralize(tasks, "task"), dead),
         None => "not created".to_string(),
     }
+}
+
+fn background_state_failure_lines(workspace: &std::path::Path) -> Vec<String> {
+    let mut failures = Vec::new();
+    for (label, path) in [
+        ("scheduler", workspace.join("scheduler.json")),
+        ("heartbeat", workspace.join("heartbeat.json")),
+        ("sub-agent", workspace.join("subagents.json")),
+    ] {
+        if let Some((tasks, dead)) = background_state_counts(&path) {
+            if dead > 0 {
+                failures.push(format!(
+                    "{} state has {} dead-lettered of {} persisted {}",
+                    label,
+                    dead,
+                    tasks,
+                    if tasks == 1 { "task" } else { "tasks" }
+                ));
+            }
+        }
+    }
+    failures
 }
 
 fn background_state_counts(path: &std::path::Path) -> Option<(usize, usize)> {
@@ -2353,6 +2376,38 @@ mod tests {
     }
 
     #[test]
+    fn background_state_failure_lines_report_dead_lettered_tasks() {
+        let workspace = std::env::temp_dir().join(format!(
+            "borgclaw_cli_background_failures_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(
+            workspace.join("scheduler.json"),
+            r#"{
+              "job-1": {"dead_lettered_at": null},
+              "job-2": {"dead_lettered_at": "2026-03-19T00:00:00Z"}
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.join("heartbeat.json"),
+            r#"{
+              "hb-1": {"dead_lettered_at": "2026-03-19T00:00:00Z"}
+            }"#,
+        )
+        .unwrap();
+
+        let failures = background_state_failure_lines(&workspace);
+        assert!(failures
+            .iter()
+            .any(|line| line == "scheduler state has 1 dead-lettered of 2 persisted tasks"));
+        assert!(failures
+            .iter()
+            .any(|line| line == "heartbeat state has 1 dead-lettered of 1 persisted task"));
+    }
+
+    #[test]
     fn schedule_list_lines_returns_empty_when_scheduler_state_is_missing() {
         let workspace = std::env::temp_dir().join(format!(
             "borgclaw_cli_schedule_list_missing_{}",
@@ -2572,6 +2627,33 @@ mod tests {
         assert!(failures
             .iter()
             .any(|line| line == "provider credential missing (OPENAI_API_KEY)"));
+    }
+
+    #[test]
+    fn self_test_failures_surface_dead_lettered_background_state() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut config = temp_config();
+        config.agent.workspace = std::env::temp_dir().join(format!(
+            "borgclaw_self_test_dead_lettered_workspace_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&config.agent.workspace).unwrap();
+        config.skills.skills_path = config.agent.workspace.join("skills");
+        std::fs::create_dir_all(&config.skills.skills_path).unwrap();
+        config.memory.database_path = config.agent.workspace.join("memory.db");
+        config.agent.provider = "ollama".to_string();
+        std::fs::write(
+            config.agent.workspace.join("subagents.json"),
+            r#"{
+              "sg-1": {"dead_lettered_at": "2026-03-19T00:00:00Z"}
+            }"#,
+        )
+        .unwrap();
+
+        let failures = runtime.block_on(self_test_failures(&config));
+        assert!(failures
+            .iter()
+            .any(|line| line == "sub-agent state has 1 dead-lettered of 1 persisted task"));
     }
 }
 
