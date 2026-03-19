@@ -65,6 +65,7 @@ Recent landed work in this phase:
 Recent landed work in this phase:
 - WASM plugin manifests now accept the documented TOML permission table shape, default invocations honor `entry_point`, and non-exported function calls are rejected.
 - MCP stdio server commands now pass through the shared command policy instead of bypassing the blocklist.
+- Shared runtime GitHub happy-path coverage now exercises configured read operations against a local API stub, instead of relying only on client-level tests.
 - Shared runtime coverage now includes local happy-path tests for QR URL encoding and URL shortening via a configured YOURLS-compatible provider.
 - The next remaining gaps in this phase are broader happy-path coverage for the documented skill families and more operational completeness around managed skill lifecycle.
 
