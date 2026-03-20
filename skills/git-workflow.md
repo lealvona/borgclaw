@@ -10,7 +10,7 @@
 
 ### Repository Ownership Check
 1. Always check `git remote -v` before pushing
-2. If repository is NOT personally owned:
+2. If repository is NOT personally owned (e.g., `upstream`, `origin` pointing to other users/orgs):
    - Set push target to `NO_PUSH`:
      ```bash
      git remote set-url --push upstream NO_PUSH
@@ -38,10 +38,10 @@ git remote -v
 git remote -v
 
 # 2. Verify push targets
-git remote get-url --push origin
-git remote get-url --push upstream
+git remote get-url --push origin  # Should be your fork
+git remote get-url --push upstream  # Should be NO_PUSH or your org's repo
 
-# 3. Configure upstream as NO_PUSH if you don't own it
+# 3. If upstream needs NO_PUSH protection
 git remote set-url --push upstream NO_PUSH
 
 # 4. Now safe to push to your fork
@@ -57,7 +57,7 @@ git push origin YOUR-BRANCH
 ## Configuration
 
 ### Per-Repository Setup
-For non-owned upstream repositories, configure NO_PUSH:
+For non-owned repositories, configure NO_PUSH:
 ```bash
 # Check current push URL
 git remote get-url --push upstream
@@ -66,28 +66,30 @@ git remote get-url --push upstream
 git remote set-url --push upstream NO_PUSH
 ```
 
-### Global Git Alias (Optional)
+### Global Git Alias (Recommended)
 Add to your `~/.gitconfig`:
 ```bash
 [alias]
   safe-push = "!f() { \
     owner=$(git remote get-url origin | cut -d: -f2 | cut -d/ -f1); \
-    echo \"Pushing to: $owner\"; \
+    if [ \"$owner\" != \"$(whoami)\" ]; then \
+      echo \"ERROR: Not pushing to your repository!\"; \
+      echo \"Owner: $owner, Your user: $(whoami)\"; \
+      return 1; \
+    fi; \
     git push origin HEAD; \
   }; f"
 ```
 
-### Pre-Push Hook (Optional)
+### Pre-Push Hook (Recommended)
 For additional safety, create `.git/hooks/pre-push`:
 ```bash
 #!/bin/bash
-upstream_url=$(git remote get-url --push upstream 2>/dev/null)
-if [ "$upstream_url" = "NO_PUSH" ]; then
-  echo "Upstream is configured as NO_PUSH"
-elif [[ "$upstream_url" == *"$(whoami)"* ]]; then
-  echo "Pushing to your repository..."
-else
-  echo "WARNING: Verify you own the upstream before pushing"
+owner=$(git remote get-url origin | cut -d: -f2 | cut -d/ -f1)
+if [ "$owner" != "$(whoami)" ]; then
+  echo "ERROR: Attempting to push to non-owned repository: $owner"
+  echo "Your user: $(whoami)"
+  exit 1
 fi
 ```
 Make executable: `chmod +x .git/hooks/pre-push`
