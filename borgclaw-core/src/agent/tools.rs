@@ -440,7 +440,9 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "browser_go_forward" => browser_go_forward(runtime).await,
         "browser_reload" => browser_reload(runtime).await,
         "stt_transcribe" => stt_transcribe(&call.arguments, runtime).await,
+        "stt_transcribe_url" => stt_transcribe_url(&call.arguments, runtime).await,
         "tts_list_voices" => tts_list_voices(runtime).await,
+        "tts_speak_stream" => tts_speak_stream(&call.arguments, runtime).await,
         "tts_speak" => tts_speak(&call.arguments, runtime).await,
         "image_generate" => image_generate(&call.arguments, runtime).await,
         "qr_encode" => qr_encode(&call.arguments).await,
@@ -2415,6 +2417,26 @@ async fn stt_transcribe(
     }
 }
 
+async fn stt_transcribe_url(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let url = match get_required_string(arguments, "url") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let format = match audio_format(arguments.get("format").and_then(|value| value.as_str())) {
+        Ok(format) => format,
+        Err(err) => return ToolResult::err(err),
+    };
+    let client = SttClient::new(runtime.skills.stt.backend_config());
+
+    match client.transcribe_url(&url, format).await {
+        Ok(text) => ToolResult::ok(text),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
 async fn tts_speak(
     arguments: &HashMap<String, serde_json::Value>,
     runtime: &ToolRuntime,
@@ -2430,6 +2452,58 @@ async fn tts_speak(
             .with_metadata("bytes", audio.len().to_string()),
         Err(err) => ToolResult::err(err.to_string()),
     }
+}
+
+async fn tts_speak_stream(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let text = match get_required_string(arguments, "text") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let output_path = match get_required_string(arguments, "output_path") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let client = TtsClient::new(resolve_tts_config(&runtime.skills.tts));
+
+    let resolved = match resolve_workspace_path(
+        &runtime.workspace_root,
+        &runtime.workspace_policy,
+        &output_path,
+    ) {
+        Ok(path) => path,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    use futures_util::StreamExt;
+    let mut stream = match client.speak_stream(&text).await {
+        Ok(s) => s,
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
+
+    let mut file = match std::fs::File::create(&resolved) {
+        Ok(f) => f,
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
+
+    let mut total_bytes = 0usize;
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(bytes) => {
+                total_bytes += bytes.len();
+                if let Err(err) = std::io::Write::write_all(&mut file, &bytes) {
+                    return ToolResult::err(err.to_string());
+                }
+            }
+            Err(err) => return ToolResult::err(err.to_string()),
+        }
+    }
+
+    ToolResult::ok(format!("streamed {} bytes to {}", total_bytes, output_path))
+        .with_metadata("bytes", total_bytes.to_string())
+        .with_metadata("path", output_path)
 }
 
 async fn tts_list_voices(runtime: &ToolRuntime) -> ToolResult {
@@ -6234,6 +6308,16 @@ pub fn builtin_tools() -> Vec<Tool> {
                 vec!["path".to_string()],
             ))
             .with_tags(vec!["stt".to_string(), "integration".to_string()]),
+        Tool::new("stt_transcribe_url", "Transcribe audio from URL")
+            .with_schema(ToolSchema::object(
+                [
+                    ("url".to_string(), string_property("Audio file URL")),
+                    ("format".to_string(), string_property("Audio format")),
+                ]
+                .into(),
+                vec!["url".to_string()],
+            ))
+            .with_tags(vec!["stt".to_string(), "integration".to_string()]),
         Tool::new("tts_list_voices", "List available TTS voices")
             .with_schema(ToolSchema::object(HashMap::new(), Vec::new()))
             .with_tags(vec!["tts".to_string(), "integration".to_string()]),
@@ -6241,6 +6325,19 @@ pub fn builtin_tools() -> Vec<Tool> {
             .with_schema(ToolSchema::object(
                 [("text".to_string(), string_property("Text to synthesize"))].into(),
                 vec!["text".to_string()],
+            ))
+            .with_tags(vec!["tts".to_string(), "integration".to_string()]),
+        Tool::new("tts_speak_stream", "Stream speech synthesis to file")
+            .with_schema(ToolSchema::object(
+                [
+                    ("text".to_string(), string_property("Text to synthesize")),
+                    (
+                        "output_path".to_string(),
+                        string_property("Output file path within workspace"),
+                    ),
+                ]
+                .into(),
+                vec!["text".to_string(), "output_path".to_string()],
             ))
             .with_tags(vec!["tts".to_string(), "integration".to_string()]),
         Tool::new("image_generate", "Generate an image from a prompt")
