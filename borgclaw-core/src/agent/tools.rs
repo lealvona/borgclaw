@@ -382,6 +382,8 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "memory_keys" => memory_keys(runtime).await,
         "memory_groups" => memory_groups(runtime).await,
         "memory_clear_group" => memory_clear_group(&call.arguments, runtime).await,
+        "solution_store" => solution_store(&call.arguments, runtime).await,
+        "solution_find" => solution_find(&call.arguments, runtime).await,
         "execute_command" => execute_command(&call.arguments, runtime).await,
         "read_file" => read_file(&call.arguments, runtime).await,
         "list_directory" => list_directory(&call.arguments, runtime).await,
@@ -646,6 +648,100 @@ async fn memory_clear_group(
 
     match runtime.memory.clear_group(&group_id).await {
         Ok(()) => ToolResult::ok(format!("cleared group {}", group_id)),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn solution_store(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let problem = match get_required_string(arguments, "problem") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let solution = match get_required_string(arguments, "solution") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let tags = arguments
+        .get("tags")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let solution_data = serde_json::json!({
+        "problem": problem,
+        "solution": solution,
+        "tags": tags,
+        "created_at": chrono::Utc::now().to_rfc3339(),
+        "success_count": 0,
+    });
+
+    let entry = crate::memory::MemoryEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        key: format!("solution:{}", problem),
+        content: solution_data.to_string(),
+        metadata: {
+            let mut m = std::collections::HashMap::new();
+            m.insert("type".to_string(), "solution".to_string());
+            m.insert("problem".to_string(), problem.clone());
+            if !tags.is_empty() {
+                m.insert("tags".to_string(), tags.join(","));
+            }
+            m
+        },
+        created_at: chrono::Utc::now(),
+        accessed_at: chrono::Utc::now(),
+        access_count: 0,
+        importance: 0.8,
+        group_id: Some("solutions".to_string()),
+    };
+
+    match runtime.memory.store(entry).await {
+        Ok(()) => ToolResult::ok(format!("stored solution for: {}", problem)),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn solution_find(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let query = match get_required_string(arguments, "query") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let limit = get_u64(arguments, "limit").unwrap_or(5) as usize;
+
+    match runtime
+        .memory
+        .recall(&crate::memory::MemoryQuery {
+            query: format!("solution:{}", query),
+            limit,
+            min_score: 0.0,
+            group_id: Some("solutions".to_string()),
+        })
+        .await
+    {
+        Ok(results) if results.is_empty() => ToolResult::ok("no matching solutions"),
+        Ok(results) => {
+            let formatted = results
+                .into_iter()
+                .filter_map(|r| {
+                    let data: serde_json::Value = serde_json::from_str(&r.entry.content).ok()?;
+                    let problem = data.get("problem")?.as_str()?;
+                    let solution = data.get("solution")?.as_str()?;
+                    Some(format!("Problem: {}\nSolution: {}", problem, solution))
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n---\n\n");
+            ToolResult::ok(formatted)
+        }
         Err(err) => ToolResult::err(err.to_string()),
     }
 }
@@ -5403,6 +5499,67 @@ pub fn builtin_tools() -> Vec<Tool> {
             ))
             .with_approval(true)
             .with_tags(vec!["memory".to_string()]),
+        Tool::new("solution_store", "Store a problem-solution pattern")
+            .with_schema(ToolSchema::object(
+                [
+                    (
+                        "problem".to_string(),
+                        PropertySchema {
+                            prop_type: "string".to_string(),
+                            description: Some("Problem description".to_string()),
+                            default: None,
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "solution".to_string(),
+                        PropertySchema {
+                            prop_type: "string".to_string(),
+                            description: Some("Solution description".to_string()),
+                            default: None,
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "tags".to_string(),
+                        PropertySchema {
+                            prop_type: "array".to_string(),
+                            description: Some("Optional tags".to_string()),
+                            default: None,
+                            enum_values: None,
+                        },
+                    ),
+                ]
+                .into(),
+                vec!["problem".to_string(), "solution".to_string()],
+            ))
+            .with_tags(vec!["memory".to_string(), "solution".to_string()]),
+        Tool::new("solution_find", "Find solutions by query")
+            .with_schema(ToolSchema::object(
+                [
+                    (
+                        "query".to_string(),
+                        PropertySchema {
+                            prop_type: "string".to_string(),
+                            description: Some("Search query".to_string()),
+                            default: None,
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "limit".to_string(),
+                        PropertySchema {
+                            prop_type: "number".to_string(),
+                            description: Some("Max results".to_string()),
+                            default: Some(serde_json::json!(5)),
+                            enum_values: None,
+                        },
+                    ),
+                ]
+                .into(),
+                vec!["query".to_string()],
+            ))
+            .with_tags(vec!["memory".to_string(), "solution".to_string()]),
         Tool::new("execute_command", "Execute a shell command")
             .with_schema(ToolSchema::object(
                 [
