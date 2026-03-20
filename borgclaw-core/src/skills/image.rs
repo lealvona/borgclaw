@@ -219,6 +219,89 @@ impl ImageClient {
             Err(ImageError::ParseFailed("No images in response".to_string()))
         }
     }
+
+    pub async fn analyze(
+        &self,
+        image_url: &str,
+        prompt: &str,
+    ) -> Result<String, ImageError> {
+        let api_key = if let Some(api_key) = &self.openai_api_key {
+            api_key.clone()
+        } else {
+            std::env::var("OPENAI_API_KEY")
+                .map_err(|_| ImageError::ConfigError("OPENAI_API_KEY not set".to_string()))?
+        };
+
+        let body = serde_json::json!({
+            "model": "gpt-4o-mini",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": prompt
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": image_url
+                            }
+                        }
+                    ]
+                }
+            ],
+            "max_tokens": 1000
+        });
+
+        let response = self
+            .http
+            .post("https://api.openai.com/v1/chat/completions")
+            .bearer_auth(&api_key)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ImageError::RequestFailed(e.to_string()))?;
+
+        #[derive(Deserialize)]
+        struct ChatResponse {
+            choices: Vec<Choice>,
+        }
+
+        #[derive(Deserialize)]
+        struct Choice {
+            message: Message,
+        }
+
+        #[derive(Deserialize)]
+        struct Message {
+            content: String,
+        }
+
+        let result: ChatResponse = response
+            .json()
+            .await
+            .map_err(|e| ImageError::ParseFailed(e.to_string()))?;
+
+        result
+            .choices
+            .into_iter()
+            .next()
+            .map(|c| c.message.content)
+            .ok_or_else(|| ImageError::ParseFailed("No response from vision model".to_string()))
+    }
+
+    pub async fn analyze_file(
+        &self,
+        image_bytes: &[u8],
+        prompt: &str,
+    ) -> Result<String, ImageError> {
+        use base64::Engine;
+        let base64_image = base64::engine::general_purpose::STANDARD.encode(image_bytes);
+        let data_url = format!("data:image/png;base64,{}", base64_image);
+        self.analyze(&data_url, prompt).await
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
