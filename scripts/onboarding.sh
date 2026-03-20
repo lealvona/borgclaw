@@ -4,6 +4,93 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+show_help() {
+    cat << EOF
+Usage: ./scripts/onboarding.sh [OPTIONS]
+
+BorgClaw Onboarding Wizard
+
+OPTIONS:
+    --quick              Run minimal onboarding (skip integrations)
+    --update             Reconfigure existing setup
+    --features          Show available feature flags
+    --enable <feature>  Enable a feature during onboarding
+    --disable <feature> Disable a feature during onboarding
+    -h, --help          Show this help message
+
+FEATURES:
+    github              GitHub integration
+    google              Google Workspace integration
+    browser             Browser automation (Playwright)
+    stt                 Speech-to-text (whisper.cpp)
+    tts                 Text-to-speech (ElevenLabs)
+    image               Image generation (Stable Diffusion)
+    url                 URL shortener
+    telegram            Telegram channel
+    signal              Signal channel
+    webhook             Webhook channel
+
+EXAMPLES:
+    # Minimal onboarding (skip integrations)
+    ./scripts/onboarding.sh --quick
+
+    # Enable only Telegram and GitHub
+    ./scripts/onboarding.sh --disable google --disable browser
+
+    # Reconfigure existing setup
+    ./scripts/onboarding.sh --update
+
+    # Show available features
+    ./scripts/onboarding.sh --features
+EOF
+}
+
+show_features() {
+    cat << EOF
+Available Features:
+  github              GitHub integration
+  google              Google Workspace integration
+  browser             Browser automation (Playwright)
+  stt                 Speech-to-text (whisper.cpp)
+  tts                 Text-to-speech (ElevenLabs)
+  image               Image generation (Stable Diffusion)
+  url                 URL shortener
+  telegram            Telegram channel
+  signal              Signal channel
+  webhook             Webhook channel
+  websocket           WebSocket channel (default: enabled)
+EOF
+}
+
+QUICK_MODE=false
+UPDATE_MODE=false
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --quick)
+            QUICK_MODE=true
+            shift
+            ;;
+        --update)
+            UPDATE_MODE=true
+            shift
+            ;;
+        --features)
+            show_features
+            exit 0
+            ;;
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
 echo ""
 echo "╔════════════════════════════════════════════════════════════════╗"
 echo "║              🤖 BorgClaw Onboarding Wizard 🤖                   ║"
@@ -55,7 +142,13 @@ fi
 
 echo ""
 echo "[borgclaw] Running configuration wizard..."
-cargo run --bin borgclaw -- init
+
+if [ "$QUICK_MODE" = true ]; then
+    echo "[borgclaw] Running in QUICK mode (minimal configuration)"
+    cargo run --bin borgclaw -- init --quick
+else
+    cargo run --bin borgclaw -- init
+fi
 
 echo ""
 echo "╔════════════════════════════════════════════════════════════════╗"
