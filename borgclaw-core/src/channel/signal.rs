@@ -48,35 +48,44 @@ struct SignalMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SignalEnvelope {
     source: String,
-    sourceNumber: Option<String>,
-    sourceName: Option<String>,
+    #[serde(rename = "sourceNumber")]
+    source_number: Option<String>,
+    #[serde(rename = "sourceName")]
+    source_name: Option<String>,
     timestamp: i64,
-    dataMessage: Option<SignalDataMessage>,
-    syncMessage: Option<SignalSyncMessage>,
+    #[serde(rename = "dataMessage")]
+    data_message: Option<SignalDataMessage>,
+    #[serde(rename = "syncMessage")]
+    sync_message: Option<SignalSyncMessage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SignalDataMessage {
     timestamp: i64,
     message: Option<String>,
-    groupInfo: Option<SignalGroupInfo>,
+    #[serde(rename = "groupInfo")]
+    group_info: Option<SignalGroupInfo>,
     attachments: Option<Vec<SignalAttachment>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SignalSyncMessage {
-    sentMessage: Option<SignalDataMessage>,
+    #[serde(rename = "sentMessage")]
+    sent_message: Option<SignalDataMessage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SignalGroupInfo {
-    groupId: String,
-    groupName: Option<String>,
+    #[serde(rename = "groupId")]
+    group_id: String,
+    #[serde(rename = "groupName")]
+    group_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SignalAttachment {
-    contentType: String,
+    #[serde(rename = "contentType")]
+    content_type: String,
     filename: Option<String>,
     id: Option<String>,
     size: Option<u64>,
@@ -237,19 +246,19 @@ impl SignalChannel {
                             }
 
                             if let Ok(msg) = serde_json::from_str::<SignalMessage>(line) {
-                                if let Some(ref data_msg) = msg.envelope.dataMessage {
+                                if let Some(ref data_msg) = msg.envelope.data_message {
                                     if let Some(ref text) = data_msg.message {
                                         let source = msg
                                             .envelope
-                                            .sourceNumber
+                                            .source_number
                                             .clone()
                                             .unwrap_or_else(|| msg.envelope.source.clone());
                                         let source_name =
-                                            msg.envelope.sourceName.clone().unwrap_or_default();
+                                            msg.envelope.source_name.clone().unwrap_or_default();
                                         let raw = serde_json::to_value(&msg)
                                             .unwrap_or(serde_json::json!({}));
                                         let group_id =
-                                            data_msg.groupInfo.as_ref().map(|g| g.groupId.clone());
+                                            data_msg.group_info.as_ref().map(|g| g.group_id.clone());
                                         let timestamp = chrono::DateTime::from_timestamp(
                                             data_msg.timestamp / 1000,
                                             0,

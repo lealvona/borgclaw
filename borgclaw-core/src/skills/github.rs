@@ -540,8 +540,6 @@ impl GitHubClient {
 
         #[derive(Deserialize)]
         struct RefResponse {
-            #[serde(rename = "ref")]
-            r#ref: String,
             object: Object,
         }
 

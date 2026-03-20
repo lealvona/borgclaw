@@ -155,8 +155,8 @@ impl McpTransport for SseTransport {
         let url = self.config.url.clone();
         let headers = self.config.headers.clone();
 
+        let client = self.client.clone();
         tokio::spawn(async move {
-            let client = reqwest::Client::new();
             let mut request = client.get(&url);
             for (k, v) in &headers {
                 request = request.header(k, v);

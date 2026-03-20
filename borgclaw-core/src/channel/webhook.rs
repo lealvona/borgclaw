@@ -300,37 +300,6 @@ pub enum WebhookError {
     ChannelClosed,
 }
 
-pub struct WebhookChannelBuilder {
-    triggers: Vec<WebhookTrigger>,
-}
-
-impl WebhookChannelBuilder {
-    pub fn new() -> Self {
-        Self {
-            triggers: Vec::new(),
-        }
-    }
-
-    pub fn trigger(mut self, trigger: WebhookTrigger) -> Self {
-        self.triggers.push(trigger);
-        self
-    }
-
-    pub async fn build(self) -> WebhookChannel {
-        let channel = WebhookChannel::new();
-        for trigger in self.triggers {
-            channel.register_trigger(trigger).await;
-        }
-        channel
-    }
-}
-
-impl Default for WebhookChannelBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 fn webhook_requester(headers: &HashMap<String, String>) -> String {
     header_value(headers, "x-forwarded-for")
         .or_else(|| header_value(headers, "x-real-ip"))

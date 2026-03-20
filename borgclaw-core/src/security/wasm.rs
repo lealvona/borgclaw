@@ -2,18 +2,18 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Semaphore};
 
 pub struct WasmSandbox {
     modules: Arc<RwLock<HashMap<String, Vec<u8>>>>,
-    max_instances: usize,
+    instance_semaphore: Arc<Semaphore>,
 }
 
 impl WasmSandbox {
     pub fn new(max_instances: usize) -> Self {
         Self {
             modules: Arc::new(RwLock::new(HashMap::new())),
-            max_instances,
+            instance_semaphore: Arc::new(Semaphore::new(max_instances)),
         }
     }
 
@@ -33,6 +33,13 @@ impl WasmSandbox {
         function: &str,
         input: &str,
     ) -> Result<String, super::SecurityError> {
+        // Acquire permit to limit concurrent executions
+        let _permit = self
+            .instance_semaphore
+            .acquire()
+            .await
+            .map_err(|e| super::SecurityError::WasmError(format!("Semaphore error: {}", e)))?;
+
         let modules = self.modules.read().await;
 
         let wasm_bytes = modules
@@ -42,7 +49,6 @@ impl WasmSandbox {
         let wasm_bytes = wasm_bytes.clone();
         drop(modules);
 
-        let _module_name = module_name.to_string();
         let function = function.to_string();
         let input = input.to_string();
 
@@ -154,27 +160,5 @@ impl WasmSandbox {
     pub async fn has_module(&self, name: &str) -> bool {
         let modules = self.modules.read().await;
         modules.contains_key(name)
-    }
-}
-
-pub struct WasmTool {
-    pub module_name: String,
-    pub function_name: String,
-    pub description: String,
-    pub input_schema: super::super::agent::ToolSchema,
-}
-
-impl WasmTool {
-    pub fn new(
-        module_name: impl Into<String>,
-        function_name: impl Into<String>,
-        description: impl Into<String>,
-    ) -> Self {
-        Self {
-            module_name: module_name.into(),
-            function_name: function_name.into(),
-            description: description.into(),
-            input_schema: super::super::agent::ToolSchema::default(),
-        }
     }
 }

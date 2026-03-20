@@ -155,17 +155,4 @@ impl SkillManifest {
     }
 }
 
-/// Simple skill manifest for basic skills
-pub fn default_skill(name: &str, description: &str) -> SkillManifest {
-    SkillManifest {
-        name: name.to_string(),
-        version: "1.0.0".to_string(),
-        description: description.to_string(),
-        author: None,
-        commands: Vec::new(),
-        env: HashMap::new(),
-        dependencies: Vec::new(),
-        instructions: String::new(),
-        examples: Vec::new(),
-    }
-}
+

@@ -394,7 +394,13 @@ impl VaultClient for OnePasswordClient {
                 id: i.id,
                 name: i.title,
                 folder: i.vault,
-                item_type: VaultItemType::Login,
+                item_type: match i.item_type.as_str() {
+                    "LOGIN" => VaultItemType::Login,
+                    "SECURENOTE" | "SECURE_NOTE" => VaultItemType::SecureNote,
+                    "CARD" => VaultItemType::Card,
+                    "IDENTITY" => VaultItemType::Identity,
+                    _ => VaultItemType::Login,
+                },
                 created_at: None,
                 modified_at: None,
             })

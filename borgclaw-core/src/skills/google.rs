@@ -191,7 +191,6 @@ impl GoogleAuth {
         struct TokenResponse {
             access_token: String,
             expires_in: i64,
-            scope: Option<String>,
         }
 
         let token_resp: TokenResponse = response
@@ -392,7 +391,6 @@ impl GmailClient {
         #[derive(Deserialize)]
         struct MessageId {
             id: String,
-            thread_id: String,
         }
 
         let list: ListResponse = response

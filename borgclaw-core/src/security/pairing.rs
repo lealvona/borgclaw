@@ -8,7 +8,6 @@ use uuid::Uuid;
 #[derive(Debug, Clone)]
 struct PendingPairing {
     sender_id: String,
-    code: String,
     expires_at: chrono::DateTime<Utc>,
 }
 
@@ -47,7 +46,6 @@ impl PairingManager {
 
         let pending = PendingPairing {
             sender_id: sender_id.to_string(),
-            code: code.clone(),
             expires_at: Utc::now() + Duration::seconds(self.code_expiry_secs as i64),
         };
 

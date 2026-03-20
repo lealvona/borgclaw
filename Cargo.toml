@@ -4,6 +4,7 @@ members = [
     "borgclaw-cli",
     "borgclaw-gateway",
 ]
+resolver = "2"
 
 [workspace.package]
 version = "1.10.1"

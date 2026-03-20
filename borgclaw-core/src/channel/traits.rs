@@ -106,8 +106,4 @@ impl ChannelSender {
     }
 }
 
-/// Helper trait for creating channels
-pub trait ChannelFactory: Send + Sync {
-    fn create(&self) -> Box<dyn Channel>;
-    fn channel_type(&self) -> ChannelType;
-}
+
