@@ -6,9 +6,7 @@ mod secrets;
 mod vault;
 mod wasm;
 
-pub use audit::{
-    AuditConfig, AuditEntry, AuditError, AuditEventType, AuditLogger,
-};
+pub use audit::{AuditConfig, AuditEntry, AuditError, AuditEventType, AuditLogger};
 pub use pairing::PairingManager;
 pub use secrets::{SecretStore, SecretStoreConfig};
 pub use vault::{

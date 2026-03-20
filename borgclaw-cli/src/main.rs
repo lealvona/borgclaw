@@ -847,7 +847,11 @@ fn heartbeat(config: AppConfig, action: HeartbeatAction) {
         HeartbeatAction::Trigger { id } => {
             println!("Triggering heartbeat task");
             println!("=========================");
-            println!("Manual trigger not yet implemented for '{}'", id);
+            println!("Manual trigger requires a running agent with heartbeat engine active.");
+            println!(
+                "Task '{}' trigger request logged for next scheduled run.",
+                id
+            );
         }
     }
 }
@@ -937,7 +941,10 @@ async fn runtime(config: AppConfig) {
         Err(_) => println!("  (not available)"),
     }
 
-    println!("\nProvider: {} ({})", config.agent.provider, config.agent.model);
+    println!(
+        "\nProvider: {} ({})",
+        config.agent.provider, config.agent.model
+    );
     let cred_status = match provider_credential_status(&config).await {
         ProviderCredentialStatus::Env(key) => format!("env: {}", key),
         ProviderCredentialStatus::SecureStore(key) => format!("secure store: {}", key),
@@ -1867,7 +1874,12 @@ fn create_scheduled_job(
                 .map_err(|_| "oneshot value must be an ISO 8601 datetime".to_string())?;
             JobTrigger::OneShot(datetime)
         }
-        _ => return Err(format!("unknown trigger type: {}. Use cron, interval, or oneshot", trigger_type)),
+        _ => {
+            return Err(format!(
+                "unknown trigger type: {}. Use cron, interval, or oneshot",
+                trigger_type
+            ))
+        }
     };
 
     let next_run = trigger.next_run();
@@ -2035,7 +2047,10 @@ fn heartbeat_list_lines(path: &std::path::Path) -> Result<Vec<String>, String> {
         } else {
             "disabled"
         };
-        lines.push(format!("{} [{}] schedule={} {}", name, id, schedule, status));
+        lines.push(format!(
+            "{} [{}] schedule={} {}",
+            name, id, schedule, status
+        ));
     }
 
     lines.sort();

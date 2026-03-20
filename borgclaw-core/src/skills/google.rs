@@ -878,11 +878,7 @@ impl CalendarClient {
         CalendarEvent::try_from(event)
     }
 
-    pub async fn delete_event(
-        &self,
-        calendar_id: &str,
-        event_id: &str,
-    ) -> Result<(), GoogleError> {
+    pub async fn delete_event(&self, calendar_id: &str, event_id: &str) -> Result<(), GoogleError> {
         let token = self.auth.get_token().await?;
 
         let url = format!(

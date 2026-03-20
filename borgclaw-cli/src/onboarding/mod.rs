@@ -643,7 +643,7 @@ fn configure_memory(
     match idx {
         1 => {
             config.memory.vector_provider = "postgres".to_string();
-            let conn = build_postgres_connection(theme)?;
+            let _conn = build_postgres_connection(theme)?;
             config
                 .memory
                 .database_path
@@ -658,12 +658,6 @@ fn configure_memory(
                 .entry("memory".to_string())
                 .or_default()
                 .push("postgres".to_string());
-            config
-                .channels
-                .entry("memory".to_string())
-                .or_insert_with(ChannelConfig::default)
-                .extra
-                .insert("database_url".to_string(), toml::Value::String(conn));
         }
         2 => {
             config.memory.hybrid_search = false;
@@ -1731,6 +1725,7 @@ mod tests {
 
         let mut config = AppConfig::default();
         config.security.secrets_path = root.join("secrets.enc");
+        config.security.secrets_encryption = false;
         config.skills.github.token = "${GITHUB_TOKEN}".to_string();
         config.skills.google.client_id = "${GOOGLE_CLIENT_ID}".to_string();
         config.skills.google.client_secret = "${GOOGLE_CLIENT_SECRET}".to_string();
@@ -1774,6 +1769,9 @@ mod tests {
                 "yourls-secret",
             ))
             .unwrap();
+
+        std::env::remove_var("GITHUB_TOKEN");
+
         runtime
             .block_on(generate_env_file(&config, &HashMap::new(), &env_path))
             .unwrap();

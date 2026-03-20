@@ -220,11 +220,7 @@ impl ImageClient {
         }
     }
 
-    pub async fn analyze(
-        &self,
-        image_url: &str,
-        prompt: &str,
-    ) -> Result<String, ImageError> {
+    pub async fn analyze(&self, image_url: &str, prompt: &str) -> Result<String, ImageError> {
         let api_key = if let Some(api_key) = &self.openai_api_key {
             api_key.clone()
         } else {

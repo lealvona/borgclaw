@@ -126,7 +126,8 @@ impl Channel for TelegramChannel {
         // Load persisted state for restart recovery
         let state = self.load_state();
         *self.last_update_id.write().await = state.last_update_id;
-        self.msg_count.store(state.total_messages, Ordering::Relaxed);
+        self.msg_count
+            .store(state.total_messages, Ordering::Relaxed);
         if let Some(last_activity) = state.last_activity {
             self.status.write().await.last_activity = Some(last_activity);
         }
@@ -183,7 +184,11 @@ impl Channel for TelegramChannel {
                 async move {
                     // Check if user is allowed
                     if !allowed_users.is_empty() {
-                        let user_id = msg.from.as_ref().map(|u| u.id.to_string()).unwrap_or_default();
+                        let user_id = msg
+                            .from
+                            .as_ref()
+                            .map(|u| u.id.to_string())
+                            .unwrap_or_default();
                         if !allowed_users.contains(&user_id) {
                             log::warn!("Message from blocked user: {}", user_id);
                             return Ok(());
@@ -312,7 +317,6 @@ impl Channel for TelegramChannel {
         *self.bot.write().await = None;
         Ok(())
     }
-
 }
 
 impl TelegramChannel {
@@ -335,7 +339,9 @@ impl TelegramChannel {
                 }
             }
         } else {
-            Err(ChannelError::ConnectionFailed("Bot not initialized".to_string()))
+            Err(ChannelError::ConnectionFailed(
+                "Bot not initialized".to_string(),
+            ))
         }
     }
 

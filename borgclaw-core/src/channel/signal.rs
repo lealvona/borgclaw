@@ -257,8 +257,10 @@ impl SignalChannel {
                                             msg.envelope.source_name.clone().unwrap_or_default();
                                         let raw = serde_json::to_value(&msg)
                                             .unwrap_or(serde_json::json!({}));
-                                        let group_id =
-                                            data_msg.group_info.as_ref().map(|g| g.group_id.clone());
+                                        let group_id = data_msg
+                                            .group_info
+                                            .as_ref()
+                                            .map(|g| g.group_id.clone());
                                         let timestamp = chrono::DateTime::from_timestamp(
                                             data_msg.timestamp / 1000,
                                             0,
@@ -386,7 +388,8 @@ impl Channel for SignalChannel {
         // Load persisted state for restart recovery
         let state = self.load_state();
         *self.last_timestamp.write().await = state.last_timestamp;
-        self.msg_count.store(state.total_messages, Ordering::Relaxed);
+        self.msg_count
+            .store(state.total_messages, Ordering::Relaxed);
         if let Some(last_activity) = state.last_activity {
             self.status.write().await.last_activity = Some(last_activity);
         }

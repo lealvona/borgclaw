@@ -23,11 +23,11 @@ use borgclaw_core::{
 };
 use futures_util::StreamExt;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use std::{net::SocketAddr, path::PathBuf};
 use tokio::sync::mpsc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{error, info, warn};
 
@@ -248,7 +248,11 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
         .unwrap_or(true);
 
     state.metrics.increment_connections();
-    info!("New WebSocket connection: {} (active: {})", client_id, state.metrics.connections_active.load(Ordering::SeqCst));
+    info!(
+        "New WebSocket connection: {} (active: {})",
+        client_id,
+        state.metrics.connections_active.load(Ordering::SeqCst)
+    );
 
     let _ = send_event(
         &mut socket,
@@ -303,7 +307,11 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
     }
 
     state.metrics.decrement_connections();
-    info!("Connection closed: {} (active: {})", client_id, state.metrics.connections_active.load(Ordering::SeqCst));
+    info!(
+        "Connection closed: {} (active: {})",
+        client_id,
+        state.metrics.connections_active.load(Ordering::SeqCst)
+    );
 }
 
 async fn handle_ws_message(
@@ -837,42 +845,70 @@ async fn api_status(State(state): State<GatewayState>) -> impl IntoResponse {
 async fn api_health(State(state): State<GatewayState>) -> impl IntoResponse {
     let mut checks = serde_json::Map::new();
     checks.insert("gateway".to_string(), serde_json::json!("ok"));
-    
+
     let workspace_ok = state.config.agent.workspace.exists();
-    checks.insert("workspace".to_string(), serde_json::json!(if workspace_ok { "ok" } else { "error" }));
-    
-    let memory_db_ok = state.config.memory.database_path.parent()
+    checks.insert(
+        "workspace".to_string(),
+        serde_json::json!(if workspace_ok { "ok" } else { "error" }),
+    );
+
+    let memory_db_ok = state
+        .config
+        .memory
+        .database_path
+        .parent()
         .map(|p| p.exists())
         .unwrap_or(true);
-    checks.insert("memory_db".to_string(), serde_json::json!(if memory_db_ok { "ok" } else { "error" }));
-    
+    checks.insert(
+        "memory_db".to_string(),
+        serde_json::json!(if memory_db_ok { "ok" } else { "error" }),
+    );
+
     let healthy = workspace_ok && memory_db_ok;
     let body = serde_json::json!({
         "status": if healthy { "healthy" } else { "unhealthy" },
         "checks": checks,
     });
-    
-    let status = if healthy { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+
+    let status = if healthy {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
     (status, serde_json::to_string(&body).unwrap_or_default())
 }
 
 async fn api_ready(State(state): State<GatewayState>) -> impl IntoResponse {
     let mut checks = serde_json::Map::new();
-    
+
     let workspace_ready = state.config.agent.workspace.exists();
-    checks.insert("workspace".to_string(), serde_json::json!(if workspace_ready { "ready" } else { "not_ready" }));
-    
+    checks.insert(
+        "workspace".to_string(),
+        serde_json::json!(if workspace_ready {
+            "ready"
+        } else {
+            "not_ready"
+        }),
+    );
+
     let skills_path = &state.config.skills.skills_path;
     let skills_ready = skills_path.exists() || std::fs::create_dir_all(skills_path).is_ok();
-    checks.insert("skills_path".to_string(), serde_json::json!(if skills_ready { "ready" } else { "not_ready" }));
-    
+    checks.insert(
+        "skills_path".to_string(),
+        serde_json::json!(if skills_ready { "ready" } else { "not_ready" }),
+    );
+
     let ready = workspace_ready && skills_ready;
     let body = serde_json::json!({
         "ready": ready,
         "checks": checks,
     });
-    
-    let status = if ready { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+
+    let status = if ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
     (status, serde_json::to_string(&body).unwrap_or_default())
 }
 
