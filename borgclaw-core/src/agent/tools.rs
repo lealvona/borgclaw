@@ -378,6 +378,10 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
     let result = match call.name.as_str() {
         "memory_store" => memory_store(&call.arguments, runtime).await,
         "memory_recall" => memory_recall(&call.arguments, runtime).await,
+        "memory_delete" => memory_delete(&call.arguments, runtime).await,
+        "memory_keys" => memory_keys(runtime).await,
+        "memory_groups" => memory_groups(runtime).await,
+        "memory_clear_group" => memory_clear_group(&call.arguments, runtime).await,
         "execute_command" => execute_command(&call.arguments, runtime).await,
         "read_file" => read_file(&call.arguments, runtime).await,
         "list_directory" => list_directory(&call.arguments, runtime).await,
@@ -596,6 +600,52 @@ async fn memory_recall(
             }
             result
         }
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn memory_delete(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let id = match get_required_string(arguments, "id") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    match runtime.memory.delete(&id).await {
+        Ok(()) => ToolResult::ok(format!("deleted {}", id)),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn memory_keys(runtime: &ToolRuntime) -> ToolResult {
+    match runtime.memory.keys().await {
+        Ok(keys) if keys.is_empty() => ToolResult::ok("no memory keys"),
+        Ok(keys) => ToolResult::ok(keys.join("\n")),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn memory_groups(runtime: &ToolRuntime) -> ToolResult {
+    match runtime.memory.groups().await {
+        Ok(groups) if groups.is_empty() => ToolResult::ok("no groups"),
+        Ok(groups) => ToolResult::ok(groups.join("\n")),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn memory_clear_group(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let group_id = match get_required_string(arguments, "group_id") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    match runtime.memory.clear_group(&group_id).await {
+        Ok(()) => ToolResult::ok(format!("cleared group {}", group_id)),
         Err(err) => ToolResult::err(err.to_string()),
     }
 }
@@ -5314,6 +5364,44 @@ pub fn builtin_tools() -> Vec<Tool> {
                 .into(),
                 vec!["query".to_string()],
             ))
+            .with_tags(vec!["memory".to_string()]),
+        Tool::new("memory_delete", "Delete a memory entry by id")
+            .with_schema(ToolSchema::object(
+                [(
+                    "id".to_string(),
+                    PropertySchema {
+                        prop_type: "string".to_string(),
+                        description: Some("Memory entry id".to_string()),
+                        default: None,
+                        enum_values: None,
+                    },
+                )]
+                .into(),
+                vec!["id".to_string()],
+            ))
+            .with_approval(true)
+            .with_tags(vec!["memory".to_string()]),
+        Tool::new("memory_keys", "List all memory keys")
+            .with_schema(ToolSchema::object(HashMap::new(), Vec::new()))
+            .with_tags(vec!["memory".to_string()]),
+        Tool::new("memory_groups", "List all memory groups")
+            .with_schema(ToolSchema::object(HashMap::new(), Vec::new()))
+            .with_tags(vec!["memory".to_string()]),
+        Tool::new("memory_clear_group", "Clear all memories in a group")
+            .with_schema(ToolSchema::object(
+                [(
+                    "group_id".to_string(),
+                    PropertySchema {
+                        prop_type: "string".to_string(),
+                        description: Some("Group id to clear".to_string()),
+                        default: None,
+                        enum_values: None,
+                    },
+                )]
+                .into(),
+                vec!["group_id".to_string()],
+            ))
+            .with_approval(true)
             .with_tags(vec!["memory".to_string()]),
         Tool::new("execute_command", "Execute a shell command")
             .with_schema(ToolSchema::object(
