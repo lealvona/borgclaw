@@ -183,7 +183,7 @@ impl Channel for TelegramChannel {
                 async move {
                     // Check if user is allowed
                     if !allowed_users.is_empty() {
-                        let user_id = msg.from().map(|u| u.id.to_string()).unwrap_or_default();
+                        let user_id = msg.from.as_ref().map(|u| u.id.to_string()).unwrap_or_default();
                         if !allowed_users.contains(&user_id) {
                             log::warn!("Message from blocked user: {}", user_id);
                             return Ok(());
@@ -198,7 +198,7 @@ impl Channel for TelegramChannel {
                     };
 
                     // Create sender info
-                    let telegram_user = msg.from();
+                    let telegram_user = msg.from.as_ref();
                     let sender_info =
                         Sender::new(telegram_user.map(|u| u.id.to_string()).unwrap_or_default())
                             .with_name(
