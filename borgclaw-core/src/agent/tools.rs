@@ -197,6 +197,7 @@ pub struct ToolRuntime {
     pub skills: crate::config::SkillsConfig,
     pub mcp_servers: HashMap<String, crate::config::McpServerConfig>,
     pub security: Arc<SecurityLayer>,
+    pub audit: Arc<crate::security::AuditLogger>,
     pub invocation: Option<Arc<ToolInvocationContext>>,
 }
 
@@ -250,6 +251,7 @@ impl ToolRuntime {
             skills: skills_config.clone(),
             mcp_servers: mcp_config.servers.clone(),
             security: Arc::new(SecurityLayer::with_config(security_config.clone())),
+            audit: Arc::new(crate::security::AuditLogger::disabled()),
             invocation: None,
         };
 
@@ -455,6 +457,17 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "mcp_call_tool" => mcp_call_tool(&call.arguments, runtime).await,
         other => ToolResult::err(format!("unknown tool: {}", other)),
     };
+
+    // Log tool execution to audit log
+    let actor = runtime
+        .invocation
+        .as_ref()
+        .map(|i| i.sender.id.clone())
+        .unwrap_or_else(|| "system".to_string());
+    runtime
+        .audit
+        .log_tool_execution(&actor, &call.name, result.success, Some(&result.output))
+        .await;
 
     sanitize_tool_result(result, runtime)
 }
@@ -765,6 +778,15 @@ async fn execute_command(
 
     match runtime.security.check_command(&command) {
         CommandCheck::Blocked(pattern) => {
+            let actor = runtime
+                .invocation
+                .as_ref()
+                .map(|i| i.sender.id.clone())
+                .unwrap_or_else(|| "system".to_string());
+            runtime
+                .audit
+                .log_command(&actor, &command, true, false)
+                .await;
             return ToolResult::err(format!("blocked command by policy: {}", pattern));
         }
         CommandCheck::Allowed => {}
@@ -800,7 +822,18 @@ async fn execute_command(
         format!("{}\n{}", stdout, stderr)
     };
 
-    if output.status.success() {
+    let actor = runtime
+        .invocation
+        .as_ref()
+        .map(|i| i.sender.id.clone())
+        .unwrap_or_else(|| "system".to_string());
+    let success = output.status.success();
+    runtime
+        .audit
+        .log_command(&actor, &command, false, success)
+        .await;
+
+    if success {
         ToolResult::ok(truncate_output(&combined))
     } else {
         ToolResult::err(truncate_output(&combined))
@@ -4035,6 +4068,7 @@ file_write = ["/etc"]
             skills: crate::config::SkillsConfig::default(),
             mcp_servers: HashMap::new(),
             security: Arc::new(SecurityLayer::with_config(SecurityConfig::default())),
+            audit: Arc::new(crate::security::AuditLogger::disabled()),
             invocation: None,
         };
 
@@ -4067,6 +4101,7 @@ file_write = ["/etc"]
                 },
             )]),
             security: Arc::new(SecurityLayer::with_config(SecurityConfig::default())),
+            audit: Arc::new(crate::security::AuditLogger::disabled()),
             invocation: None,
         };
 
@@ -4100,6 +4135,7 @@ file_write = ["/etc"]
                 },
             )]),
             security: Arc::new(SecurityLayer::with_config(SecurityConfig::default())),
+            audit: Arc::new(crate::security::AuditLogger::disabled()),
             invocation: None,
         };
 
@@ -4136,6 +4172,7 @@ file_write = ["/etc"]
                 allowed_commands: vec!["^git status$".to_string()],
                 ..Default::default()
             })),
+            audit: Arc::new(crate::security::AuditLogger::disabled()),
             invocation: None,
         };
 
@@ -4178,6 +4215,7 @@ file_write = ["/etc"]
                 },
             )]),
             security,
+            audit: Arc::new(crate::security::AuditLogger::disabled()),
             invocation: None,
         };
 
