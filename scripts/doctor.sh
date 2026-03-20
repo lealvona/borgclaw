@@ -71,7 +71,7 @@ check_file "Cargo.toml" "Workspace manifest"
 check_file "borgclaw-core/Cargo.toml" "Core crate manifest"
 check_file "borgclaw-cli/Cargo.toml" "CLI crate manifest"
 check_file "borgclaw-gateway/Cargo.toml" "Gateway crate manifest"
-check_file "config.toml" "Configuration file"
+echo -e "\033[0;33m○\033[0m Runtime config: user-specific (created at ~/.config/borgclaw/config.toml)"
 
 echo ""
 echo "=== Build Status ==="
