@@ -9,6 +9,21 @@
 - **Storage**: SQLite + FTS5
 - **Security**: WASM sandbox, encrypted secrets, command blocklist
 
+## Skills
+
+Specialized skill files exist in `skills/` directory. Read relevant skills before working on those areas:
+
+| Skill | Purpose |
+|-------|---------|
+| `skills/git-workflow.md` | Git safety rules, NO_PUSH directive for unowned repos |
+| `skills/inspiration-study.md` | Studying upstream codebases, updating plans/roadmaps |
+| `skills/deployment-onboarding.md` | Deploying BorgClaw, guiding new users through setup |
+
+**Always read the relevant skill file before:**
+- Any git push operation (git-workflow.md)
+- Updating documentation or studying upstream (inspiration-study.md)
+- Deployment or user onboarding tasks (deployment-onboarding.md)
+
 ## Build Commands
 
 ```bash
@@ -235,4 +250,5 @@ cargo test
 cargo fmt --check
 cargo clippy -- -D warnings
 git status
+git remote -v  # Verify no push to wrong repo (see skills/git-workflow.md)
 ```
