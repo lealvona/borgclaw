@@ -163,6 +163,8 @@ async fn main() {
         .route("/health", get(api_status))
         .route("/ws", get(websocket_handler))
         .route("/api/status", get(api_status))
+        .route("/api/health", get(api_health))
+        .route("/api/ready", get(api_ready))
         .route("/api/metrics", get(api_metrics))
         .route("/api/config", get(api_config))
         .route("/api/chat", get(api_chat_get))
@@ -830,6 +832,48 @@ async fn api_status(State(state): State<GatewayState>) -> impl IntoResponse {
         StatusCode::OK,
         serde_json::to_string(&body).unwrap_or_default(),
     )
+}
+
+async fn api_health(State(state): State<GatewayState>) -> impl IntoResponse {
+    let mut checks = serde_json::Map::new();
+    checks.insert("gateway".to_string(), serde_json::json!("ok"));
+    
+    let workspace_ok = state.config.agent.workspace.exists();
+    checks.insert("workspace".to_string(), serde_json::json!(if workspace_ok { "ok" } else { "error" }));
+    
+    let memory_db_ok = state.config.memory.database_path.parent()
+        .map(|p| p.exists())
+        .unwrap_or(true);
+    checks.insert("memory_db".to_string(), serde_json::json!(if memory_db_ok { "ok" } else { "error" }));
+    
+    let healthy = workspace_ok && memory_db_ok;
+    let body = serde_json::json!({
+        "status": if healthy { "healthy" } else { "unhealthy" },
+        "checks": checks,
+    });
+    
+    let status = if healthy { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+    (status, serde_json::to_string(&body).unwrap_or_default())
+}
+
+async fn api_ready(State(state): State<GatewayState>) -> impl IntoResponse {
+    let mut checks = serde_json::Map::new();
+    
+    let workspace_ready = state.config.agent.workspace.exists();
+    checks.insert("workspace".to_string(), serde_json::json!(if workspace_ready { "ready" } else { "not_ready" }));
+    
+    let skills_path = &state.config.skills.skills_path;
+    let skills_ready = skills_path.exists() || std::fs::create_dir_all(skills_path).is_ok();
+    checks.insert("skills_path".to_string(), serde_json::json!(if skills_ready { "ready" } else { "not_ready" }));
+    
+    let ready = workspace_ready && skills_ready;
+    let body = serde_json::json!({
+        "ready": ready,
+        "checks": checks,
+    });
+    
+    let status = if ready { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+    (status, serde_json::to_string(&body).unwrap_or_default())
 }
 
 async fn api_metrics(State(state): State<GatewayState>) -> impl IntoResponse {
