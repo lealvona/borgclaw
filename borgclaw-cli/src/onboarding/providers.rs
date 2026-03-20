@@ -117,8 +117,63 @@ impl ProviderRegistry {
                 models_endpoint: "https://generativelanguage.googleapis.com/v1beta/models"
                     .to_string(),
                 api_key_env: Some("GOOGLE_API_KEY".to_string()),
-                default_model: "gemini-1.5-pro".to_string(),
-                static_models: vec!["gemini-1.5-pro".to_string(), "gemini-1.5-flash".to_string()],
+                default_model: "gemini-2.5-pro".to_string(),
+                static_models: vec![
+                    "gemini-2.5-pro".to_string(),
+                    "gemini-2.5-flash".to_string(),
+                    "gemini-2.0-flash".to_string(),
+                ],
+                requires_auth: true,
+            },
+        );
+        providers.insert(
+            "kimi".to_string(),
+            ProviderDef {
+                id: "kimi".to_string(),
+                display: "Kimi (Moonshot)".to_string(),
+                api_base: "https://api.moonshot.cn/v1".to_string(),
+                models_endpoint: "https://api.moonshot.cn/v1/models".to_string(),
+                api_key_env: Some("KIMI_API_KEY".to_string()),
+                default_model: "moonshot-v1-8k".to_string(),
+                static_models: vec![
+                    "moonshot-v1-8k".to_string(),
+                    "moonshot-v1-32k".to_string(),
+                    "moonshot-v1-128k".to_string(),
+                ],
+                requires_auth: true,
+            },
+        );
+        providers.insert(
+            "minimax".to_string(),
+            ProviderDef {
+                id: "minimax".to_string(),
+                display: "MiniMax".to_string(),
+                api_base: "https://api.minimax.chat/v1".to_string(),
+                models_endpoint: "https://api.minimax.chat/v1/models".to_string(),
+                api_key_env: Some("MINIMAX_API_KEY".to_string()),
+                default_model: "MiniMax-Text-01".to_string(),
+                static_models: vec![
+                    "MiniMax-Text-01".to_string(),
+                    "abab6.5s-chat".to_string(),
+                    "abab5.5s-chat".to_string(),
+                ],
+                requires_auth: true,
+            },
+        );
+        providers.insert(
+            "z".to_string(),
+            ProviderDef {
+                id: "z".to_string(),
+                display: "Z.ai".to_string(),
+                api_base: "https://api.z.ai/v1".to_string(),
+                models_endpoint: "https://api.z.ai/v1/models".to_string(),
+                api_key_env: Some("Z_API_KEY".to_string()),
+                default_model: "z-2-flash".to_string(),
+                static_models: vec![
+                    "z-2-flash".to_string(),
+                    "z-2-flash-thinking".to_string(),
+                    "z-2-pro".to_string(),
+                ],
                 requires_auth: true,
             },
         );
@@ -221,6 +276,9 @@ fn default_models_endpoint(id: &str, api_base: &str) -> String {
         "openai" => format!("{api_base}/models"),
         "anthropic" => format!("{api_base}/models"),
         "google" => "https://generativelanguage.googleapis.com/v1beta/models".to_string(),
+        "kimi" => "https://api.moonshot.cn/v1/models".to_string(),
+        "minimax" => "https://api.minimax.chat/v1/models".to_string(),
+        "z" => "https://api.z.ai/v1/models".to_string(),
         "ollama" => "http://localhost:11434/api/tags".to_string(),
         _ => format!("{}/models", api_base.trim_end_matches('/')),
     }
@@ -238,7 +296,26 @@ fn default_static_models(id: &str, default_model: &str) -> Vec<String> {
             "claude-3-5-sonnet-20240620".to_string(),
             "claude-3-opus-20240229".to_string(),
         ],
-        "google" => vec![default_model.to_string(), "gemini-1.5-flash".to_string()],
+        "google" => vec![
+            default_model.to_string(),
+            "gemini-2.5-flash".to_string(),
+            "gemini-2.0-flash".to_string(),
+        ],
+        "kimi" => vec![
+            default_model.to_string(),
+            "moonshot-v1-32k".to_string(),
+            "moonshot-v1-128k".to_string(),
+        ],
+        "minimax" => vec![
+            default_model.to_string(),
+            "abab6.5s-chat".to_string(),
+            "abab5.5s-chat".to_string(),
+        ],
+        "z" => vec![
+            default_model.to_string(),
+            "z-2-flash-thinking".to_string(),
+            "z-2-pro".to_string(),
+        ],
         "ollama" => vec![default_model.to_string(), "mistral".to_string()],
         _ => vec![default_model.to_string()],
     }
