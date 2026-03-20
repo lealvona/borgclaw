@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.6.0 - 2026-03-19
+
+### Features
+
+**Memory System Tools**
+- **Memory Management**: Full CRUD operations for memory entries
+  - memory_delete - Delete memory entries by ID
+  - memory_keys - List all memory keys
+  - memory_groups - List all memory groups
+  - memory_clear_group - Clear all memories in a group
+- **Solution Memory**: Store and find problem-solution patterns
+  - solution_store - Save problem-solution pairs with tags
+  - solution_find - Search solutions by query
+
+**Audio Processing**
+- **STT URL Support**: Transcribe audio directly from URLs
+- **TTS Streaming**: Stream large TTS outputs to files
+
+### Release Policy
+
+- `1.6.0` is the current release line
+- New work after `1.6.0` should continue on feature branches
+
 ## 1.5.0 - 2026-03-19
 
 ### Features
