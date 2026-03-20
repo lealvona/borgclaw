@@ -2,7 +2,7 @@
 
 This guide expands the short origin list in the README into an engineering reference.
 
-Last reviewed against upstream repositories: March 20, 2026
+Last reviewed against upstream repositories: March 21, 2026
 
 Status note:
 - Several gaps originally called out here are now partially or fully closed in BorgClaw.
@@ -13,6 +13,27 @@ Use it for two things:
 
 1. Understand which upstream project is the best model for a given BorgClaw subsystem.
 2. Cross-check BorgClaw roadmap items, stubs, and rough edges against upstream implementations that already solved similar problems well.
+
+## Upstream Follow-Up: March 21, 2026
+
+Recent upstream movement:
+
+- OpenClaw `v2026.3.20` added Grok 4.20 reasoning/non-reasoning models to xAI catalog, SSRF guard coverage for URL credential bypass vectors, LINE webhook hardening with verified raw body, and PAIRING setup codes bootstrap-token only.  
+  Source: [OpenClaw recent commits](https://github.com/openclaw/openclaw/commits/main)
+- ZeroClaw `v0.5.4` added mem0 (OpenMemory) backend integration with history(), recall_filtered(), store_procedural(), added Gemini vision support for prompt-guided tool calling, added OpenAI Codex as LLM provider, web search provider routing with alias fallback, Slack reaction support, and structured fallback deliverables for failed/stuck jobs.  
+  Source: [ZeroClaw recent commits](https://github.com/zeroclaw-labs/zeroclaw/commits/main)
+- PicoClaw `v0.2.4` added pico_client outbound WebSocket channel, Telegram streaming LLM responses via sendMessageDraft, TUI configuration and user management, gateway management page, and chat functionality in home page.  
+  Source: [PicoClaw recent commits](https://github.com/sipeed/picoclaw/commits/main)
+- TinyClaw `v0.0.16` streamlined CLI with single 'tinyagi' command, redesigned office with SSE events, and auto-migrate from ~/.tinyclaw to ~/.tinyagi.  
+  Source: [TinyClaw releases](https://github.com/TinyAGI/tinyclaw/releases)
+- NanoClaw improved Docker stop timeout for faster restarts.  
+  Source: [NanoClaw recent commits](https://github.com/qwibitai/nanoclaw/commits/main)
+
+**New "What BorgClaw should copy" items** (added per upstream findings, preserving all existing items):
+
+- OpenClaw: SSRF URL credential bypass protection via guard coverage
+- ZeroClaw: mem0/OpenMemory-style external memory backend integration pattern
+- ZeroClaw: Structured fallback deliverables for failed/stuck jobs
 
 ## Upstream Follow-Up: March 20, 2026
 
@@ -87,6 +108,7 @@ What BorgClaw should copy:
 - Treat backup/restore and destructive-flow verification as part of the operator contract, not as an afterthought.
 - Keep workspace/plugin bootstrap behavior explicit at compaction, scheduler, and subagent boundaries.
 - Tighten transport-specific SSRF/media policy enforcement and deployment-time secret handling, not just runtime prompt/tool defenses.
+- Add SSRF guard coverage for URL credential bypass vectors (ZeroClaw pattern).
 
 Best matches for current BorgClaw gaps:
 
@@ -120,6 +142,8 @@ What BorgClaw should copy:
 - Preserve richer provider transcript artifacts such as reasoning content when tools are involved, instead of flattening every turn to plain text.
 - Keep release and bootstrap paths reproducible and supply-chain-conscious.
 - Expand self-test/healthcheck and gateway-session persistence depth so runtime and operator UX stay aligned.
+- Consider mem0/OpenMemory-style external memory backend integration with history(), recall_filtered(), store_procedural() patterns.
+- Add structured fallback deliverables for failed/stuck jobs (ZeroClaw pattern).
 
 Best matches for current BorgClaw gaps:
 

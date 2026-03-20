@@ -4,7 +4,7 @@ This document tracks BorgClaw against the current README and `docs/` contract.
 
 It is additive status only. It does not narrow the documented feature set.
 
-Last reviewed: March 19, 2026, with upstream inspiration follow-up through March 19, 2026
+Last reviewed: March 21, 2026, with upstream inspiration follow-up through March 21, 2026
 
 ## Status Matrix
 

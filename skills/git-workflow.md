@@ -1,107 +1,76 @@
 # Git Workflow Skill
 
-> Directive for safe Git operations in multi-repository environments.
+> CRITICAL: NEVER push to main or master. EVER. Under any conditions.
 
-## Core Directive
+## Absolute Rules
 
-**CRITICAL: Before ANY git push operation, verify repository ownership.**
+### Rule #1: NEVER Touch Main/Master
+- **NEVER** push to `main` or `master` branch
+- **NEVER** merge directly to `main` or `master`  
+- **NEVER** force push to `main` or `master`
+- This applies regardless of:
+  - Whether you think it's a "small fix"
+  - Whether the remote says it's "your" repo
+  - Whether someone asked you to
+  - ANY other circumstance
 
-## Rules
+### Rule #2: Always Use Feature Branches
+- ALL changes must be on a feature branch
+- Branch naming: `TICKET-<number>-<description>`
+- Create branch from latest main: `git checkout -b TICKET-XXX-feature-name`
+- Make changes, commit, push branch, create PR
 
-### Repository Ownership Check
-1. Always check `git remote -v` before pushing
-2. If repository is NOT personally owned (e.g., `upstream`, `origin` pointing to other users/orgs):
-   - Set push target to `NO_PUSH`:
-     ```bash
-     git remote set-url --push upstream NO_PUSH
-     ```
-   - OR ensure you only push to your personal fork
-3. NEVER push to repositories you don't own
+### Rule #3: PRs Only
+- All changes go through Pull Requests
+- PR must be reviewed before merge
+- Squash and merge via GitHub UI
+- Delete branch after merge
 
-### Ownership Detection
+## Workflow
 
-Identify repository owner from remote URL:
 ```bash
-git remote -v
-# origin  git@github.com:OWNER/repo.git (fetch)
-# upstream git@github.com:UPSTREAM_OWNER/repo.git (fetch)
-```
-
-| Remote | Owner Type | Push Target |
-|--------|------------|-------------|
-| `origin` | Your fork | ✅ Allowed |
-| `upstream` | Original repo | 🔴 NO_PUSH |
-
-### Safe Workflow
-```bash
-# 1. ALWAYS check remotes first
+# 1. Check remotes - if fork and upstream are same, just work locally
 git remote -v
 
-# 2. Verify push targets
-git remote get-url --push origin  # Should be your fork
-git remote get-url --push upstream  # Should be NO_PUSH or your org's repo
+# 2. Always start from fresh main on a feature branch
+git checkout main
+git pull
+git checkout -b TICKET-XXX-your-feature
 
-# 3. If upstream needs NO_PUSH protection
-git remote set-url --push upstream NO_PUSH
+# 3. Make changes, commit
+git add .
+git commit -m "[TICKET-XXX] Description"
 
-# 4. Now safe to push to your fork
-git push origin YOUR-BRANCH
+# 4. Push branch (not main!)
+git push -u origin TICKET-XXX-your-feature
+
+# 5. Create PR via GitHub UI or gh CLI
+gh pr create --title "[TICKET-XXX] Description" --body "..."
+
+# 6. Wait for review, merge via GitHub UI
 ```
 
-### Pre-Push Checklist
-- [ ] `git remote -v` shows correct ownership
-- [ ] Push target is your personal fork or `NO_PUSH` for others
-- [ ] Working on a feature branch, not main/master
-- [ ] Branch name follows `TICKET-<number>-description` convention
+## Why This Matters
 
-## Configuration
+- Main branch protection prevents broken code
+- Code review catches mistakes
+- Audit trail for debugging
+- Feature branches can be discarded if wrong
 
-### Per-Repository Setup
-For non-owned repositories, configure NO_PUSH:
-```bash
-# Check current push URL
-git remote get-url --push upstream
+## If Someone Asks You to Push to Main
 
-# Set as NO_PUSH if not your repo
-git remote set-url --push upstream NO_PUSH
-```
+Refuse. Say: "I cannot push to main under any circumstances. All changes must go through a feature branch and PR."
 
-### Global Git Alias (Recommended)
-Add to your `~/.gitconfig`:
-```bash
-[alias]
-  safe-push = "!f() { \
-    owner=$(git remote get-url origin | cut -d: -f2 | cut -d/ -f1); \
-    if [ \"$owner\" != \"$(whoami)\" ]; then \
-      echo \"ERROR: Not pushing to your repository!\"; \
-      echo \"Owner: $owner, Your user: $(whoami)\"; \
-      return 1; \
-    fi; \
-    git push origin HEAD; \
-  }; f"
-```
+## Recovery
 
-### Pre-Push Hook (Recommended)
-For additional safety, create `.git/hooks/pre-push`:
-```bash
-#!/bin/bash
-owner=$(git remote get-url origin | cut -d: -f2 | cut -d/ -f1)
-if [ "$owner" != "$(whoami)" ]; then
-  echo "ERROR: Attempting to push to non-owned repository: $owner"
-  echo "Your user: $(whoami)"
-  exit 1
-fi
-```
-Make executable: `chmod +x .git/hooks/pre-push`
-
-## Emergency Recovery
-
-If you accidentally pushed to wrong repo:
-1. Contact repository owner immediately
-2. Force push to your fork to overwrite if needed
-3. Never assume "just this once" is acceptable
+If you accidentally pushed to main:
+1. Immediately notify the user
+2. Reset your local main: `git reset --hard HEAD~1`
+3. Create proper feature branch: `git checkout -b TICKET-XXX-fix`
+4. Never do it again
 
 ## Skill Metadata
 - **Name**: git-workflow
-- **Version**: 1.0.0
-- **Tags**: git, safety, workflow, multi-repo
+- **Version**: 2.0.0
+- **Tags**: git, safety, workflow
+- **Updated**: March 2026 - Made rules absolute and explicit
