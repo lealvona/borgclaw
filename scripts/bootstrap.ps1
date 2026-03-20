@@ -7,14 +7,14 @@ Set-Location $ROOT_DIR
 Write-Host ""
 Write-Host "╔═══════════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
 Write-Host "║                                                               ║" -ForegroundColor Magenta
-Write-Host "║   ██████╗ ██████╗  ██████╗ ██████╗ ███████╗                 ║" -ForegroundColor Cyan
-Write-Host "║   ██╔══██╗██╔══██╗██╔═══██╗██╔══██╗██╔════╝                 ║" -ForegroundColor Cyan
-Write-Host "║   ██████╔╝██████╔╝██║   ██║██████╔╝█████╗                   ║" -ForegroundColor Cyan
-Write-Host "║   ██╔══██╗██╔══██╗██║   ██║██╔══██╗██╔══╝                   ║" -ForegroundColor Cyan
-Write-Host "║   ██████╔╝██║  ██║╚██████╔╝██║  ██║███████╗                 ║" -ForegroundColor Cyan
-Write-Host "║   ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝                 ║" -ForegroundColor Cyan
+Write-Host "║                      ██████╗  ██████╗                      ║" -ForegroundColor Cyan
+Write-Host "║                      ██╔══██╗██╔════╝                      ║" -ForegroundColor Cyan
+Write-Host "║                      ██████╔╝██║                           ║" -ForegroundColor Cyan
+Write-Host "║                      ██╔══██╗██║                           ║" -ForegroundColor Cyan
+Write-Host "║                      ██████╔╝╚██████╗                      ║" -ForegroundColor Cyan
+Write-Host "║                      ╚═════╝  ╚═════╝                      ║" -ForegroundColor Cyan
 Write-Host "║                                                               ║" -ForegroundColor Magenta
-Write-Host "║          Personal AI Agent Framework                          ║" -ForegroundColor Magenta
+Write-Host "║                Personal AI Agent Framework                 ║" -ForegroundColor Magenta
 Write-Host "║                                                               ║" -ForegroundColor Magenta
 Write-Host "╚═══════════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
 Write-Host ""

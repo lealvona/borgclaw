@@ -107,6 +107,8 @@ BorgClaw enforces per-provider rate limits to prevent 429 "Too Many Requests" er
 | Z.ai | 30 | |
 | Ollama | 120 | Local provider |
 
+**Retry semantics**: When a provider returns 429 Too Many Requests, BorgClaw automatically waits and retries with exponential backoff (up to 3 retries). The `Retry-After` header is respected when provided.
+
 Override in your `config.toml`:
 
 ```toml
