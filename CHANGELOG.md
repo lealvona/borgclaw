@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.8.0 - 2026-03-19
+
+### Features
+
+**Image Analysis Tools**
+- **image_analyze** - Analyze images from URLs using GPT-4o-mini vision AI
+- **image_analyze_file** - Analyze local image files from workspace
+- Supports descriptive analysis, OCR, object identification
+- Requires OPENAI_API_KEY for vision model access
+
+### Release Policy
+
+- `1.8.0` is the current release line
+- New work after `1.8.0` should continue on feature branches
+
 ## 1.7.0 - 2026-03-19
 
 ### Features
