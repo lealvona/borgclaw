@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.10.0 - 2026-03-19
+
+### Features
+
+**Audit Logging Integration**
+- Audit logger fully integrated with ToolRuntime
+- All tool executions automatically logged with actor attribution
+- Command execution audit logging (blocked, allowed, success, failure)
+- Security events captured in real-time
+
+### Release Policy
+
+- `1.10.0` is the current release line
+- New work after `1.10.0` should continue on feature branches
+
 ## 1.9.0 - 2026-03-19
 
 ### Features
