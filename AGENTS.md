@@ -5,13 +5,13 @@
 ## Project Overview
 - **Language**: Rust (Edition 2021, MSRV 1.75+)
 - **Workspace**: 3 crates - `borgclaw-core`, `borgclaw-cli`, `borgclaw-gateway`
-- **Async**: Tokio runtime
-- **Storage**: SQLite + FTS5
-- **Security**: WASM sandbox, encrypted secrets, command blocklist
+- **Async**: Tokio runtime (`full` feature)
+- **Storage**: SQLite + FTS5 (via `sqlx`)
+- **Security**: WASM sandbox (`wasmtime`), encrypted secrets, command blocklist
 
 ## Skills
 
-Specialized skill files exist in `skills/` directory. Read relevant skills before working on those areas:
+Read the relevant skill file before working in these areas:
 
 | Skill | Purpose |
 |-------|---------|
@@ -19,236 +19,164 @@ Specialized skill files exist in `skills/` directory. Read relevant skills befor
 | `skills/inspiration-study.md` | Studying upstream codebases, updating plans/roadmaps |
 | `skills/deployment-onboarding.md` | Deploying BorgClaw, guiding new users through setup |
 
-**Always read the relevant skill file before:**
-- Any git push operation (git-workflow.md)
-- Updating documentation or studying upstream (inspiration-study.md)
-- Deployment or user onboarding tasks (deployment-onboarding.md)
-
 ## Build Commands
 
 ```bash
-# Build entire workspace
-cargo build
-
-# Build specific crate
-cargo build -p borgclaw-core
-cargo build -p borgclaw-cli
-cargo build -p borgclaw-gateway
-
-# Build release (optimized with LTO)
-cargo build --release
-
-# Clean build
-cargo clean && cargo build
+cargo build                          # entire workspace
+cargo build -p borgclaw-core         # specific crate
+cargo build --release                # optimized (LTO, codegen-units=1)
+cargo clean && cargo build           # clean build
 ```
 
 ## Test Commands
 
 ```bash
-# Run all tests
-cargo test
-
-# Run tests for specific crate
-cargo test -p borgclaw-core
-cargo test -p borgclaw-gateway
-
-# Run with output visible
-cargo test -- --nocapture
-
-# Run specific test (full path required)
-cargo test module_name::test_function_name
-
-# Run tests matching pattern
-cargo test security
-cargo test config_parses
+cargo test                           # all tests
+cargo test -p borgclaw-core          # single crate
+cargo test -- --nocapture            # show output
+cargo test module_name::test_fn      # single test (full path)
+cargo test security                  # pattern match
+cargo test config_parses             # pattern match
 ```
 
 ## Lint & Format
 
 ```bash
-# Check formatting
-cargo fmt --check
-
-# Format code
-cargo fmt
-
-# Run clippy lints
-cargo clippy
-
-# Clippy with strict warnings (CI standard)
-cargo clippy -- -D warnings
+cargo fmt --check                    # check formatting
+cargo fmt                            # format code
+cargo clippy                         # run clippy
+cargo clippy -- -D warnings          # CI standard (strict)
 ```
 
 ## Code Style
 
 ### Imports
-Use `use` statements for traits and types. Group imports:
-1. External crates (tokio, serde, thiserror, etc.)
-2. Standard library (std::*, core::*)
-3. Local modules (`crate::`, `super::`)
+Group imports: (1) local crate refs / external crates, (2) standard library, (3) logging:
+```rust
+use borgclaw_core::{Agent, Tool};
+use chrono::{Duration, Utc};
+use std::path::PathBuf;
+use tracing::{error, info};
+```
 
 ### Naming Conventions
 - **Modules**: `snake_case` (e.g., `channel/`, `security/`)
-- **Types**: `PascalCase` (e.g., `AppConfig`, `SecurityLayer`)
+- **Types/Traits**: `PascalCase` (e.g., `AppConfig`, `SecurityLayer`, `Agent`)
 - **Functions/Variables**: `snake_case` (e.g., `load_config`, `check_command`)
-- **Traits**: `PascalCase` (e.g., `Agent`, `Channel`, `Memory`)
-- **Constants**: `SCREAMING_SNAKE_CASE` or `PascalCase` for const functions
+- **Constants**: `SCREAMING_SNAKE_CASE` for values, `PascalCase` for const fns
+- **Newtypes**: `PascalCase` wrapping the inner type (e.g., `SessionId(pub String)`)
 
 ### Error Handling
-Use `thiserror` for custom errors with `#[derive(Error, Debug)]`:
+Use `thiserror` for domain errors with `String` payloads (NOT `#[from]`):
 ```rust
-#[derive(Error, Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ModuleError {
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
+    #[error("Storage error: {0}")]
+    StorageError(String),
     #[error("Invalid configuration: {0}")]
     Config(String),
 }
-pub type Result<T> = std::result::Result<T, ModuleError>;
 ```
-Use `anyhow::Result<()>` for application-level errors that don't need specific variants.
+Convert across boundaries with `.map_err(|e| ModuleError::Variant(e.to_string()))`.
+Use full `Result<T, ConcreteError>` types inline — do NOT define `pub type Result<T>` aliases.
 
 ### Async Traits
-Use `async_trait::async_trait`:
+Use `async_trait::async_trait` with `Send + Sync` bounds:
 ```rust
 #[async_trait]
-pub trait MyTrait {
-    async fn async_method(&self) -> Result<()>;
+pub trait Agent: Send + Sync {
+    async fn process(&mut self, ctx: &AgentContext) -> AgentResponse;
 }
 ```
+Shared state uses `Arc<RwLock<T>>` (prefer) or `Arc<Mutex<T>>`.
 
 ### Configuration Pattern
-Serializable structs with `#[serde(default)]` and `Default` impl:
+All config structs use `#[serde(default)]` + `Default` impl. Support legacy field names with `#[serde(alias = "old_name")]`:
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ComponentConfig {
     pub enabled: bool,
-    pub path: PathBuf,
+    #[serde(alias = "memory_path")]
+    pub database_path: PathBuf,
+    #[serde(skip_serializing)]
+    pub credentials: Option<String>,
+    #[serde(flatten)]
+    pub extra: HashMap<String, toml::Value>,
 }
 impl Default for ComponentConfig {
-    fn default() -> Self {
-        Self { enabled: true, path: PathBuf::from(".borgclaw/component") }
-    }
+    fn default() -> Self { Self { enabled: true, database_path: PathBuf::from(".borgclaw/db"), credentials: None, extra: HashMap::new() } }
 }
+```
+
+### Builder & Fluent API
+Constructors and builders accept `impl Into<String>` and return `Self`:
+```rust
+pub fn new(id: impl Into<String>) -> Self { ... }
+pub fn with_schema(mut self, schema: ToolSchema) -> Self { ... }
 ```
 
 ### Module Organization
 ```rust
-//! Module-level documentation
-
-pub mod submodule;
-pub use submodule::{Type, Trait};
+//! Module-level doc comment
 
 mod internal;
+pub use internal::{PublicType, PublicTrait};
+
+// public types and impls here
+
+#[cfg(test)]
+mod tests { ... }
 ```
+`lib.rs` selectively re-exports key types. `mod.rs` files re-export from submodules.
 
 ### Key Dependencies
-- **Async**: `tokio` with `full` feature
-- **Serialization**: `serde`, `serde_json`, `toml`
-- **Errors**: `thiserror`, `anyhow`
-- **Logging**: `tracing`, `tracing-subscriber`
-- **Web**: `axum`, `tokio-tungstenite`
-- **DB**: `sqlx` with sqlite feature
+- **Async**: `tokio` (full), `async-trait`, `futures-util`
+- **Serialization**: `serde` (derive), `serde_json`, `toml`
+- **Errors**: `thiserror`
+- **Logging**: `tracing`, `tracing-subscriber` (env-filter)
+- **Web**: `axum` (ws), `tokio-tungstenite`, `reqwest`
+- **DB**: `sqlx` (sqlite, runtime-tokio, chrono)
+- **CLI**: `clap` (derive, env)
+- **WASM**: `wasmtime`
 
 ## Testing Guidelines
-- Place tests in `#[cfg(test)]` modules within source files
-- Use descriptive test names: `fn security_config_parses_documented_contract_shape()`
-- Tests verify TOML contract shapes and behavior
+- Tests live in `#[cfg(test)] mod tests` at the bottom of source files
+- Use descriptive sentence-like names: `fn config_parses_documented_contract_shape()`
+- Config parsing tests embed TOML strings: `toml::from_str(r#"[section]..."#)`
+- Async tests use `#[tokio::test]`; sync tests needing async create their own `Runtime`
+- Integration tests in gateway bind to `127.0.0.1:0` with temp listeners
+- Temp dirs use UUID prefixes and clean up: `std::fs::remove_dir_all`
 
 ## Security Checklist
-- WASM sandbox for untrusted code
+- WASM sandbox for untrusted code execution
 - Command blocklist for dangerous operations
-- No hardcoded credentials (use `${VAR}` placeholder pattern)
-- File operations respect workspace policy
-- Secrets not logged or exposed in errors
+- No hardcoded credentials — use `${VAR}` placeholder pattern
+- Secret leak detection via regex on tool outputs
+- Secrets never logged or exposed in error messages
+- Audit logging after every tool execution
 
 ## Git Workflow
 
-### CRITICAL RULES - STRICTLY ENFORCED
-
-> **⚠️ IMPORTANT: NEVER push changes directly to main or master**
-> 
-> **ALL changes MUST go through feature branches and pull requests**
-> 
-> **NO exceptions. NO direct pushes. NO matter how small the fix.**
+> **NEVER push directly to main/master. ALL changes go through feature branches and PRs.**
 
 ### Branch Naming
-- Feature branches: `TICKET-<number>-<short-description>` (e.g., `TICKET-123-fix-backup-import`)
-- Use kebab-case for branch names
-- Bug fix branches: `TICKET-<number>-bugfix-<description>`
-- Hotfix branches: `hotfix-<description>`
+`TICKET-<number>-<short-description>` (e.g., `TICKET-123-fix-backup-import`)
 
 ### Commit Messages
 ```
 [AREA] Brief description (50 chars or less)
 
 - Detailed change explanation
-- Another change detail
 - Reference to issue/ticket
-```
-
-### Working with Feature Branches (REQUIRED WORKFLOW)
-
-```bash
-# 1. ALWAYS start from latest main
-git checkout main
-git pull origin main
-
-# 2. ALWAYS create a feature branch
-git checkout -b TICKET-<number>-<description>
-
-# 3. Make changes and commit frequently
-git add .
-git commit -m "[AREA] Your commit message"
-
-# 4. Push branch to remote
-git push -u origin TICKET-<number>-<description>
-
-# 5. Create PR via GitHub CLI
-gh pr create --title "[TICKET-<number>] Your PR title" --body "$(cat <<'EOF'
-## Summary
-- Bullet point of changes
-- Another bullet
-
-## Testing
-- [ ] Tests pass
-- [ ] Clippy passes
-- [ ] Format checked
-EOF
-)"
-```
-
-### PR and Merge Rules (STRICTLY ENFORCED)
-
-| Rule | Enforcement |
-|------|-------------|
-| **NEVER** push to main/master directly | 🔴 BLOCKED - Will not work |
-| **NEVER** force push to main/master | 🔴 BLOCKED |
-| **NEVER** skip CI or hooks | 🔴 BLOCKED |
-| **NEVER** amend pushed commits | 🔴 BLOCKED |
-| **ALWAYS** use feature branches | ✅ REQUIRED |
-| **ALWAYS** create PRs for all changes | ✅ REQUIRED |
-| **ALWAYS** get review before merge | ✅ REQUIRED |
-| Use "Squash and merge" for feature branches | ✅ RECOMMENDED |
-| Use "Merge commit" for release branches | ✅ RECOMMENDED |
-
-### Quick Fixes Workflow
-
-For even small one-line fixes:
-```bash
-git checkout -b TICKET-<number>-tiny-fix
-# make the fix
-git add . && git commit -m "[AREA] Fix typo in doc"
-git push origin TICKET-<number>-tiny-fix
-gh pr create --title "[TICKET-<number>] Fix typo" --body "Quick fix"
 ```
 
 ### Before Submitting
 ```bash
-cargo test
-cargo fmt --check
-cargo clippy -- -D warnings
-git status
-git remote -v  # Verify no push to wrong repo (see skills/git-workflow.md)
+cargo test && cargo fmt --check && cargo clippy -- -D warnings && git status
+git remote -v  # verify correct remote (see skills/git-workflow.md)
 ```
+
+## Additional References
+- `.codex/instructions/` — per-ticket instruction files with YAML frontmatter
+- `.codex/skills/` — progressive-loading agent skill definitions

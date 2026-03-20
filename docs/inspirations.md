@@ -2,7 +2,7 @@
 
 This guide expands the short origin list in the README into an engineering reference.
 
-Last reviewed against upstream repositories: March 19, 2026
+Last reviewed against upstream repositories: March 20, 2026
 
 Status note:
 - Several gaps originally called out here are now partially or fully closed in BorgClaw.
@@ -14,13 +14,13 @@ Use it for two things:
 1. Understand which upstream project is the best model for a given BorgClaw subsystem.
 2. Cross-check BorgClaw roadmap items, stubs, and rough edges against upstream implementations that already solved similar problems well.
 
-## Upstream Follow-Up: March 19, 2026
+## Upstream Follow-Up: March 20, 2026
 
 Recent upstream movement sharpened a few priorities for BorgClaw:
 
 - OpenClaw `v2026.3.13` pushed further on compaction correctness, Telegram media SSRF policy, session continuity after reset, cross-agent workspace resolution, gateway token leak prevention in Docker build context, and Signal config/schema expansion.  
   Source: [OpenClaw releases](https://github.com/openclaw/openclaw/releases)
-- ZeroClaw `v0.5.0` pushed further on runtime model switching, configurable sub-agent timeouts, self-test and healthcheck flows, rollback-capable updates, gateway device registry/pairing APIs, persisted WebSocket sessions, and more concrete plugin-host/Wasm execution plumbing.  
+- ZeroClaw `v0.5.4` added Avian as OpenAI-compatible provider, improved context window overflow handling, and continued security hardening.  
   Source: [ZeroClaw releases](https://github.com/zeroclaw-labs/zeroclaw/releases)
 - NanoClaw's latest work added host-level `/remote-control`, explicit read-only `/capabilities` and `/status` skills, and continued its bias toward deterministic local/bootstrap flows and docker sandbox dispatch.  
   Source: [NanoClaw recent commits](https://github.com/qwibitai/nanoclaw/commits/main/)
@@ -30,6 +30,10 @@ Recent upstream movement sharpened a few priorities for BorgClaw:
   Source: [PicoClaw releases](https://github.com/sipeed/picoclaw/releases)
 - TinyClaw `v0.0.14` moved fully onto an in-process persisted scheduler with schedule-management surfaces and stronger workspace-source-of-truth conventions for agent identity/system prompts.  
   Source: [TinyClaw releases](https://github.com/TinyAGI/tinyclaw/releases)
+
+**BorgClaw action taken**: Implemented provider rate-limit retry semantics (429 detection, Retry-After header respect, exponential backoff) per IronClaw pattern.
+
+Implication for BorgClaw:
 
 Implication for BorgClaw:
 
@@ -170,7 +174,7 @@ What BorgClaw should copy:
 - Gate webhook-triggerable tools on explicit capability declarations, not mere tool existence.
 - Keep approval semantics identical across immediate, deferred, and background tool execution paths.
 - Redact internal failure detail at transport boundaries while retaining richer internal diagnostics.
-- Tighten rate-limit semantics, deferred approval waiting coverage, and channel ownership/routing fallback tests as correctness work, not polish.
+- Rate-limit retry semantics (429 detection, Retry-After respect, exponential backoff) now implemented in BorgClaw provider layer.
 
 Best matches for current BorgClaw gaps:
 

@@ -79,10 +79,28 @@ impl RateLimiter {
 #[async_trait]
 impl ChatProvider for RateLimitedProvider {
     async fn complete(&self, request: &ProviderRequest) -> Result<String, ProviderError> {
-        let mut limiter = self.rate_limiter.write().await;
-        limiter.acquire().await?;
-        drop(limiter);
-        self.inner.complete(request).await
+        const MAX_RETRIES: u32 = 3;
+        let mut backoff_ms = 1000;
+
+        for attempt in 0..MAX_RETRIES {
+            {
+                let mut limiter = self.rate_limiter.write().await;
+                limiter.acquire().await?;
+            }
+
+            match self.inner.complete(request).await {
+                Ok(result) => return Ok(result),
+                Err(ProviderError::RateLimited(retry_after)) => {
+                    if attempt + 1 >= MAX_RETRIES {
+                        return Err(ProviderError::RateLimited(retry_after));
+                    }
+                    tokio::time::sleep(Duration::from_millis(retry_after * 1000)).await;
+                    backoff_ms = (backoff_ms * 2).min(30000);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        unreachable!()
     }
 }
 
@@ -129,6 +147,8 @@ pub enum ProviderError {
     Request(String),
     #[error("response parse failed: {0}")]
     Parse(String),
+    #[error("rate limited, retry after {0} seconds")]
+    RateLimited(u64),
 }
 
 struct OpenAiProvider {
@@ -186,6 +206,15 @@ impl ChatProvider for OpenAiProvider {
             .map_err(|e| ProviderError::Request(e.to_string()))?;
 
         if !response.status().is_success() {
+            if response.status().as_u16() == 429 {
+                let retry_after = response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(60);
+                return Err(ProviderError::RateLimited(retry_after));
+            }
             return Err(ProviderError::Request(format!(
                 "http {}",
                 response.status()
@@ -279,6 +308,15 @@ impl ChatProvider for AnthropicProvider {
             .map_err(|e| ProviderError::Request(e.to_string()))?;
 
         if !response.status().is_success() {
+            if response.status().as_u16() == 429 {
+                let retry_after = response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(60);
+                return Err(ProviderError::RateLimited(retry_after));
+            }
             return Err(ProviderError::Request(format!(
                 "http {}",
                 response.status()
@@ -438,6 +476,15 @@ impl ChatProvider for GoogleProvider {
             .map_err(|e| ProviderError::Request(e.to_string()))?;
 
         if !response.status().is_success() {
+            if response.status().as_u16() == 429 {
+                let retry_after = response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(60);
+                return Err(ProviderError::RateLimited(retry_after));
+            }
             return Err(ProviderError::Request(format!(
                 "http {}",
                 response.status()
@@ -524,6 +571,15 @@ impl ChatProvider for OllamaProvider {
             .map_err(|e| ProviderError::Request(e.to_string()))?;
 
         if !response.status().is_success() {
+            if response.status().as_u16() == 429 {
+                let retry_after = response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(1);
+                return Err(ProviderError::RateLimited(retry_after));
+            }
             return Err(ProviderError::Request(format!(
                 "http {}",
                 response.status()
