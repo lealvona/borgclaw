@@ -16,12 +16,17 @@ if [ -d "$WHISPER_DIR" ]; then
     cd "$WHISPER_DIR" && git pull
 else
     echo "[borgclaw] Cloning whisper.cpp..."
-    git clone "$WHISPER_REPO" "$WHISPER_DIR"
+    git clone --depth 1 "$WHISPER_REPO" "$WHISPER_DIR"
     cd "$WHISPER_DIR"
 fi
 
 echo "[borgclaw] Building whisper.cpp..."
-make -j$(nproc) whisper-cli
+cd "$WHISPER_DIR"
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release -j$(nproc)
+
+mkdir -p "${WHISPER_DIR}/build/bin"
+cp "${WHISPER_DIR}/build/bin/whisper-cli" "${WHISPER_DIR}/build/bin/main" 2>/dev/null || true
 
 echo "[borgclaw] Downloading base model (base.en)..."
 if [ ! -f "models/ggml-base.en.bin" ]; then
