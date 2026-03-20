@@ -445,6 +445,8 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "tts_speak_stream" => tts_speak_stream(&call.arguments, runtime).await,
         "tts_speak" => tts_speak(&call.arguments, runtime).await,
         "image_generate" => image_generate(&call.arguments, runtime).await,
+        "image_analyze" => image_analyze(&call.arguments, runtime).await,
+        "image_analyze_file" => image_analyze_file(&call.arguments, runtime).await,
         "qr_encode" => qr_encode(&call.arguments).await,
         "qr_encode_url" => qr_encode_url(&call.arguments).await,
         "url_shorten" => url_shorten(&call.arguments, runtime).await,
@@ -2560,6 +2562,67 @@ async fn image_generate(
             }
             result
         }
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn image_analyze(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let image_url = match get_required_string(arguments, "image_url") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let prompt = match get_required_string(arguments, "prompt") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    let mut client = ImageClient::new(runtime.skills.image.backend());
+    let openai_api_key = resolve_env_reference(&runtime.skills.image.dalle.api_key);
+    if !openai_api_key.is_empty() {
+        client = client.with_openai_api_key(openai_api_key);
+    }
+
+    match client.analyze(&image_url, &prompt).await {
+        Ok(analysis) => ToolResult::ok(analysis),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn image_analyze_file(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let path = match get_required_string(arguments, "path") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let prompt = match get_required_string(arguments, "prompt") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    let resolved =
+        match resolve_workspace_path(&runtime.workspace_root, &runtime.workspace_policy, &path) {
+            Ok(path) => path,
+            Err(err) => return ToolResult::err(err),
+        };
+
+    let image_bytes = match std::fs::read(&resolved) {
+        Ok(bytes) => bytes,
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
+
+    let mut client = ImageClient::new(runtime.skills.image.backend());
+    let openai_api_key = resolve_env_reference(&runtime.skills.image.dalle.api_key);
+    if !openai_api_key.is_empty() {
+        client = client.with_openai_api_key(openai_api_key);
+    }
+
+    match client.analyze_file(&image_bytes, &prompt).await {
+        Ok(analysis) => ToolResult::ok(analysis),
         Err(err) => ToolResult::err(err.to_string()),
     }
 }
@@ -6355,6 +6418,38 @@ pub fn builtin_tools() -> Vec<Tool> {
                 ]
                 .into(),
                 vec!["prompt".to_string()],
+            ))
+            .with_tags(vec!["image".to_string(), "integration".to_string()]),
+        Tool::new("image_analyze", "Analyze an image from URL using vision AI")
+            .with_schema(ToolSchema::object(
+                [
+                    (
+                        "image_url".to_string(),
+                        string_property("URL of the image to analyze"),
+                    ),
+                    (
+                        "prompt".to_string(),
+                        string_property("Question or prompt about the image"),
+                    ),
+                ]
+                .into(),
+                vec!["image_url".to_string(), "prompt".to_string()],
+            ))
+            .with_tags(vec!["image".to_string(), "integration".to_string()]),
+        Tool::new("image_analyze_file", "Analyze a local image file using vision AI")
+            .with_schema(ToolSchema::object(
+                [
+                    (
+                        "path".to_string(),
+                        string_property("Path to image file within workspace"),
+                    ),
+                    (
+                        "prompt".to_string(),
+                        string_property("Question or prompt about the image"),
+                    ),
+                ]
+                .into(),
+                vec!["path".to_string(), "prompt".to_string()],
             ))
             .with_tags(vec!["image".to_string(), "integration".to_string()]),
         Tool::new("qr_encode", "Generate a QR code")
