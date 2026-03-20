@@ -1,10 +1,14 @@
-//! Security module - WASM sandbox, pairing, secrets, blocklist
+//! Security module - WASM sandbox, pairing, secrets, blocklist, audit
 
+mod audit;
 mod pairing;
 mod secrets;
 mod vault;
 mod wasm;
 
+pub use audit::{
+    AuditConfig, AuditEntry, AuditError, AuditEventType, AuditLogger,
+};
 pub use pairing::PairingManager;
 pub use secrets::{SecretStore, SecretStoreConfig};
 pub use vault::{
