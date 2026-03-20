@@ -20,6 +20,8 @@ Recent upstream movement sharpened a few priorities for BorgClaw:
 
 - OpenClaw `v2026.3.13` pushed further on compaction correctness, Telegram media SSRF policy, session continuity after reset, cross-agent workspace resolution, gateway token leak prevention in Docker build context, and Signal config/schema expansion.  
   Source: [OpenClaw releases](https://github.com/openclaw/openclaw/releases)
+- ZeroClaw `v0.5.0` pushed further on runtime model switching, configurable sub-agent timeouts, self-test and healthcheck flows, rollback-capable updates, gateway device registry/pairing APIs, persisted WebSocket sessions, and more concrete plugin-host/Wasm execution plumbing.
+  Source: [ZeroClaw releases](https://github.com/zeroclaw-labs/zeroclaw/releases)
 - ZeroClaw `v0.5.4` added Avian as OpenAI-compatible provider, improved context window overflow handling, and continued security hardening.  
   Source: [ZeroClaw releases](https://github.com/zeroclaw-labs/zeroclaw/releases)
 - NanoClaw's latest work added host-level `/remote-control`, explicit read-only `/capabilities` and `/status` skills, and continued its bias toward deterministic local/bootstrap flows and docker sandbox dispatch.  
@@ -32,8 +34,6 @@ Recent upstream movement sharpened a few priorities for BorgClaw:
   Source: [TinyClaw releases](https://github.com/TinyAGI/tinyclaw/releases)
 
 **BorgClaw action taken**: Implemented provider rate-limit retry semantics (429 detection, Retry-After header respect, exponential backoff) per IronClaw pattern.
-
-Implication for BorgClaw:
 
 Implication for BorgClaw:
 
@@ -175,6 +175,7 @@ What BorgClaw should copy:
 - Keep approval semantics identical across immediate, deferred, and background tool execution paths.
 - Redact internal failure detail at transport boundaries while retaining richer internal diagnostics.
 - Rate-limit retry semantics (429 detection, Retry-After respect, exponential backoff) now implemented in BorgClaw provider layer.
+- Tighten deferred approval waiting coverage and channel ownership/routing fallback tests as correctness work, not polish.
 
 Best matches for current BorgClaw gaps:
 
