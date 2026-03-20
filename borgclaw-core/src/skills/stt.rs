@@ -106,6 +106,19 @@ impl SttClient {
         }
     }
 
+    pub async fn transcribe_url(&self, url: &str, format: AudioFormat) -> Result<String, SttError> {
+        let audio = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| SttError::RequestFailed(e.to_string()))?
+            .bytes()
+            .await
+            .map_err(|e| SttError::RequestFailed(e.to_string()))?;
+        self.transcribe(&audio, format).await
+    }
+
     async fn transcribe_openai(
         &self,
         audio: &[u8],
