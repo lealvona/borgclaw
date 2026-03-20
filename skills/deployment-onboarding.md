@@ -1,6 +1,6 @@
 # Deployment and Onboarding Skill
 
-> Directive for deploying BorgClaw and guiding new users through setup.
+> Directive for deploying YOUR_PROJECT and guiding new users through setup.
 
 ## Quick Start for New Users
 
@@ -24,8 +24,9 @@
 #### 1. Clone Repository
 
 ```bash
-git clone https://github.com/YOUR_FORK/borgclaw.git
-cd borgclaw
+# Clone the repository
+git clone https://github.com/YOUR_ORG/YOUR_PROJECT.git
+cd YOUR_PROJECT
 ```
 
 #### 2. Run Bootstrap
@@ -53,6 +54,7 @@ Bootstrap will:
 | Anthropic | [console.anthropic.com](https://console.anthropic.com) | Required for Claude |
 | OpenAI | [platform.openai.com](https://platform.openai.com) | For GPT models |
 | Google | [aistudio.google.com](https://aistudio.google.com) | For Gemini |
+| Ollama | [ollama.ai](https://ollama.ai) | Local models |
 
 **Channel Setup (Optional):**
 
@@ -75,10 +77,10 @@ Bootstrap will:
 ```
 
 Onboarding creates:
-- `~/.config/borgclaw/config.toml` - Main configuration
+- `~/.config/YOUR_PROJECT/config.toml` - Main configuration
 - `.env` - Environment variables with API keys
 
-### Starting BorgClaw
+### Starting Your Project
 
 ```bash
 # Start REPL (interactive terminal)
@@ -98,17 +100,17 @@ Onboarding creates:
 ```toml
 [agent]
 provider = "anthropic"        # or "openai", "google", "ollama"
-model = "claude-sonnet-4-20250514"
-workspace = ".borgclaw/workspace"
+model = "your-preferred-model"
+workspace = ".project/workspace"
 
 [security]
 wasm_sandbox = true           # Enable WASM sandboxing
 docker_sandbox = true         # Enable Docker isolation
 command_blocklist = true      # Block dangerous commands
-secrets_encryption = true     # Encrypt stored secrets
+secrets_encryption = true    # Encrypt stored secrets
 
 [memory]
-database_path = ".borgclaw/memory"
+database_path = ".project/memory"
 hybrid_search = true
 vector_provider = "sqlite"
 
@@ -146,8 +148,7 @@ GOOGLE_CLIENT_SECRET=...
 | Problem | Solution |
 |---------|----------|
 | "API key not found" | Run onboarding or check `.env` exists |
-| "whisper.cpp not found" | Run `./scripts/install-whisper.sh` |
-| "Playwright not installed" | Run `./scripts/install-playwright.sh` |
+| "Tool not found" | Run `./scripts/install-TOOL.sh` |
 | "Permission denied" | `chmod +x scripts/*.sh` |
 
 ### Doctor Script
@@ -158,22 +159,6 @@ Always check system health first:
 ./scripts/doctor.sh
 ```
 
-Expected output:
-```
-=== Required Tools ===
-✓ Rust compiler
-✓ Cargo build tool
-✓ Git
-
-=== Optional Tools ===
-○ Signal CLI (optional)
-○ Bitwarden CLI (optional)
-
-=== Project Files ===
-✓ Workspace manifest
-✓ Configuration file
-```
-
 ### Verbose Debugging
 
 ```bash
@@ -181,7 +166,7 @@ Expected output:
 RUST_LOG=debug ./scripts/repl.sh
 
 # Check config loading
-cargo run --bin borgclaw -- init --help
+cargo run --bin YOUR_PROJECT -- init --help
 ```
 
 ## For Operators
@@ -190,47 +175,46 @@ cargo run --bin borgclaw -- init --help
 
 ```bash
 # Export state
-cargo run --bin borgclaw -- backup export /path/to/backup.json
+cargo run --bin YOUR_PROJECT -- backup export /path/to/backup.json
 
 # Import state
-cargo run --bin borgclaw -- backup import /path/to/backup.json --force
+cargo run --bin YOUR_PROJECT -- backup import /path/to/backup.json --force
 
 # Verify backup without importing
-cargo run --bin borgclaw -- backup verify /path/to/backup.json
+cargo run --bin YOUR_PROJECT -- backup verify /path/to/backup.json
 ```
 
 ### Scheduler Management
 
 ```bash
 # List scheduled jobs
-cargo run --bin borgclaw -- schedules list
+cargo run --bin YOUR_PROJECT -- schedules list
 
 # Create job
-cargo run --bin borgclaw -- schedules create \
+cargo run --bin YOUR_PROJECT -- schedules create \
   --name "daily-report" \
   --trigger "cron:0 9 * * *"
 
 # Delete job
-cargo run --bin borgclaw -- schedules delete <job-id>
+cargo run --bin YOUR_PROJECT -- schedules delete <job-id>
 
 # Pause/Resume
-cargo run --bin borgclaw -- schedules pause <job-id>
-cargo run --bin borgclaw -- schedules resume <job-id>
+cargo run --bin YOUR_PROJECT -- schedules pause <job-id>
+cargo run --bin YOUR_PROJECT -- schedules resume <job-id>
 ```
 
 ### Heartbeat Tasks
 
 ```bash
 # List heartbeat tasks
-cargo run --bin borgclaw -- heartbeat list
+cargo run --bin YOUR_PROJECT -- heartbeat list
 
 # Enable/Disable task
-cargo run --bin borgclaw -- heartbeat enable <task-id>
-cargo run --bin borgclaw -- heartbeat disable <task-id>
+cargo run --bin YOUR_PROJECT -- heartbeat enable <task-id>
+cargo run --bin YOUR_PROJECT -- heartbeat disable <task-id>
 ```
 
 ## Skill Metadata
 - **Name**: deployment-onboarding
 - **Version**: 1.0.0
-- **Author**: BorgClaw Team
 - **Tags**: deployment, onboarding, setup, operators, new-users
