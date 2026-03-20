@@ -417,6 +417,10 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "google_list_events" => google_list_events(&call.arguments, runtime).await,
         "google_upload_file" => google_upload_file(&call.arguments, runtime).await,
         "google_create_event" => google_create_event(&call.arguments, runtime).await,
+        "google_delete_email" => google_delete_email(&call.arguments, runtime).await,
+        "google_trash_email" => google_trash_email(&call.arguments, runtime).await,
+        "google_update_event" => google_update_event(&call.arguments, runtime).await,
+        "google_delete_event" => google_delete_event(&call.arguments, runtime).await,
         "browser_navigate" => browser_navigate(&call.arguments, runtime).await,
         "browser_click" => browser_click(&call.arguments, runtime).await,
         "browser_fill" => browser_fill(&call.arguments, runtime).await,
@@ -426,6 +430,9 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "browser_get_url" => browser_get_url(runtime).await,
         "browser_eval_js" => browser_eval_js(&call.arguments, runtime).await,
         "browser_screenshot" => browser_screenshot(&call.arguments, runtime).await,
+        "browser_go_back" => browser_go_back(runtime).await,
+        "browser_go_forward" => browser_go_forward(runtime).await,
+        "browser_reload" => browser_reload(runtime).await,
         "stt_transcribe" => stt_transcribe(&call.arguments, runtime).await,
         "tts_list_voices" => tts_list_voices(runtime).await,
         "tts_speak" => tts_speak(&call.arguments, runtime).await,
@@ -1954,6 +1961,106 @@ async fn google_create_event(
     }
 }
 
+async fn google_delete_email(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = google_client(runtime);
+    let message_id = match get_required_string(arguments, "message_id") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    match client.delete_email(&message_id).await {
+        Ok(()) => ToolResult::ok(format!("deleted {}", message_id)),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn google_trash_email(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = google_client(runtime);
+    let message_id = match get_required_string(arguments, "message_id") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    match client.trash_email(&message_id).await {
+        Ok(()) => ToolResult::ok(format!("trashed {}", message_id)),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn google_update_event(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = google_client(runtime);
+    let event_id = match get_required_string(arguments, "event_id") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let summary = match get_required_string(arguments, "summary") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let start = match get_required_string(arguments, "start") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let end = match get_required_string(arguments, "end") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let start = match chrono::DateTime::parse_from_rfc3339(&start) {
+        Ok(value) => value.with_timezone(&chrono::Utc),
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
+    let end = match chrono::DateTime::parse_from_rfc3339(&end) {
+        Ok(value) => value.with_timezone(&chrono::Utc),
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
+    let description = arguments
+        .get("description")
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string);
+
+    match client
+        .update_event(
+            &event_id,
+            crate::skills::CalendarEvent {
+                summary,
+                start,
+                end,
+                description,
+                ..Default::default()
+            },
+        )
+        .await
+    {
+        Ok(event) => ToolResult::ok(format!("{} | {}", event.id, event.summary)),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn google_delete_event(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = google_client(runtime);
+    let event_id = match get_required_string(arguments, "event_id") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    match client.delete_event(&event_id).await {
+        Ok(()) => ToolResult::ok(format!("deleted {}", event_id)),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
 async fn browser_navigate(
     arguments: &HashMap<String, serde_json::Value>,
     runtime: &ToolRuntime,
@@ -2084,6 +2191,30 @@ async fn browser_eval_js(
     with_browser(runtime, |browser| async move {
         let value = browser.eval_js(&script).await?;
         Ok(ToolResult::ok(value.to_string()))
+    })
+    .await
+}
+
+async fn browser_go_back(runtime: &ToolRuntime) -> ToolResult {
+    with_browser(runtime, |browser| async move {
+        browser.eval_js("history.back()").await?;
+        Ok(ToolResult::ok("navigated back"))
+    })
+    .await
+}
+
+async fn browser_go_forward(runtime: &ToolRuntime) -> ToolResult {
+    with_browser(runtime, |browser| async move {
+        browser.eval_js("history.forward()").await?;
+        Ok(ToolResult::ok("navigated forward"))
+    })
+    .await
+}
+
+async fn browser_reload(runtime: &ToolRuntime) -> ToolResult {
+    with_browser(runtime, |browser| async move {
+        browser.eval_js("location.reload()").await?;
+        Ok(ToolResult::ok("reloaded page"))
     })
     .await
 }
@@ -5717,6 +5848,47 @@ pub fn builtin_tools() -> Vec<Tool> {
                 ],
             ))
             .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new("google_delete_email", "Permanently delete a Gmail message")
+            .with_schema(ToolSchema::object(
+                [("message_id".to_string(), string_property("Gmail message id"))].into(),
+                vec!["message_id".to_string()],
+            ))
+            .with_approval(true)
+            .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new("google_trash_email", "Move a Gmail message to trash")
+            .with_schema(ToolSchema::object(
+                [("message_id".to_string(), string_property("Gmail message id"))].into(),
+                vec!["message_id".to_string()],
+            ))
+            .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new("google_update_event", "Update a Google Calendar event")
+            .with_schema(ToolSchema::object(
+                [
+                    ("event_id".to_string(), string_property("Event id to update")),
+                    ("summary".to_string(), string_property("New event summary")),
+                    (
+                        "description".to_string(),
+                        string_property("Optional event description"),
+                    ),
+                    ("start".to_string(), string_property("RFC3339 start time")),
+                    ("end".to_string(), string_property("RFC3339 end time")),
+                ]
+                .into(),
+                vec![
+                    "event_id".to_string(),
+                    "summary".to_string(),
+                    "start".to_string(),
+                    "end".to_string(),
+                ],
+            ))
+            .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new("google_delete_event", "Delete a Google Calendar event")
+            .with_schema(ToolSchema::object(
+                [("event_id".to_string(), string_property("Event id to delete"))].into(),
+                vec!["event_id".to_string()],
+            ))
+            .with_approval(true)
+            .with_tags(vec!["google".to_string(), "integration".to_string()]),
         Tool::new("browser_navigate", "Navigate the browser to a URL")
             .with_schema(ToolSchema::object(
                 [("url".to_string(), string_property("Target URL"))].into(),
@@ -5798,6 +5970,15 @@ pub fn builtin_tools() -> Vec<Tool> {
             Vec::new(),
         ))
         .with_tags(vec!["browser".to_string(), "integration".to_string()]),
+        Tool::new("browser_go_back", "Navigate back in browser history")
+            .with_schema(ToolSchema::object(HashMap::new(), Vec::new()))
+            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
+        Tool::new("browser_go_forward", "Navigate forward in browser history")
+            .with_schema(ToolSchema::object(HashMap::new(), Vec::new()))
+            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
+        Tool::new("browser_reload", "Reload the current page")
+            .with_schema(ToolSchema::object(HashMap::new(), Vec::new()))
+            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
         Tool::new("stt_transcribe", "Transcribe audio to text")
             .with_schema(ToolSchema::object(
                 [

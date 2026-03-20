@@ -326,6 +326,26 @@ impl GoogleClient {
     pub async fn create_event(&self, event: CalendarEvent) -> Result<CalendarEvent, GoogleError> {
         self.calendar.create_event("primary", event).await
     }
+
+    pub async fn delete_email(&self, message_id: &str) -> Result<(), GoogleError> {
+        self.gmail.delete_message(message_id).await
+    }
+
+    pub async fn trash_email(&self, message_id: &str) -> Result<(), GoogleError> {
+        self.gmail.trash_message(message_id).await
+    }
+
+    pub async fn update_event(
+        &self,
+        event_id: &str,
+        event: CalendarEvent,
+    ) -> Result<CalendarEvent, GoogleError> {
+        self.calendar.update_event("primary", event_id, event).await
+    }
+
+    pub async fn delete_event(&self, event_id: &str) -> Result<(), GoogleError> {
+        self.calendar.delete_event("primary", event_id).await
+    }
 }
 
 #[derive(Clone)]
@@ -512,6 +532,60 @@ impl GmailClient {
         body: &str,
     ) -> Result<String, GoogleError> {
         self.send_message(to, subject, body).await
+    }
+
+    pub async fn delete_message(&self, id: &str) -> Result<(), GoogleError> {
+        let token = self.auth.get_token().await?;
+        let url = format!(
+            "{}/gmail/v1/users/me/messages/{}",
+            self.auth.config.gmail_base_url.trim_end_matches('/'),
+            id
+        );
+
+        let response = self
+            .auth
+            .http
+            .delete(&url)
+            .bearer_auth(&token.access_token)
+            .send()
+            .await
+            .map_err(|e| GoogleError::RequestFailed(e.to_string()))?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(GoogleError::RequestFailed(format!(
+                "Failed to delete message: {}",
+                response.status()
+            )))
+        }
+    }
+
+    pub async fn trash_message(&self, id: &str) -> Result<(), GoogleError> {
+        let token = self.auth.get_token().await?;
+        let url = format!(
+            "{}/gmail/v1/users/me/messages/{}/trash",
+            self.auth.config.gmail_base_url.trim_end_matches('/'),
+            id
+        );
+
+        let response = self
+            .auth
+            .http
+            .post(&url)
+            .bearer_auth(&token.access_token)
+            .send()
+            .await
+            .map_err(|e| GoogleError::RequestFailed(e.to_string()))?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(GoogleError::RequestFailed(format!(
+                "Failed to trash message: {}",
+                response.status()
+            )))
+        }
     }
 }
 
@@ -764,6 +838,79 @@ impl CalendarClient {
             .map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
 
         CalendarEvent::try_from(event)
+    }
+
+    pub async fn update_event(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+        event: CalendarEvent,
+    ) -> Result<CalendarEvent, GoogleError> {
+        let token = self.auth.get_token().await?;
+
+        let url = format!(
+            "{}/calendar/v3/calendars/{}/events/{}",
+            self.auth.config.calendar_base_url.trim_end_matches('/'),
+            urlencoding::encode(calendar_id),
+            urlencoding::encode(event_id)
+        );
+
+        let body = serde_json::json!({
+            "summary": event.summary,
+            "description": event.description,
+            "start": { "dateTime": event.start.to_rfc3339() },
+            "end": { "dateTime": event.end.to_rfc3339() }
+        });
+
+        let response = self
+            .auth
+            .http
+            .put(&url)
+            .bearer_auth(&token.access_token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| GoogleError::RequestFailed(e.to_string()))?;
+
+        let event: ApiCalendarEvent = response
+            .json()
+            .await
+            .map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
+
+        CalendarEvent::try_from(event)
+    }
+
+    pub async fn delete_event(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+    ) -> Result<(), GoogleError> {
+        let token = self.auth.get_token().await?;
+
+        let url = format!(
+            "{}/calendar/v3/calendars/{}/events/{}",
+            self.auth.config.calendar_base_url.trim_end_matches('/'),
+            urlencoding::encode(calendar_id),
+            urlencoding::encode(event_id)
+        );
+
+        let response = self
+            .auth
+            .http
+            .delete(&url)
+            .bearer_auth(&token.access_token)
+            .send()
+            .await
+            .map_err(|e| GoogleError::RequestFailed(e.to_string()))?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(GoogleError::RequestFailed(format!(
+                "Failed to delete event: {}",
+                response.status()
+            )))
+        }
     }
 }
 
