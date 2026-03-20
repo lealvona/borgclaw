@@ -9,15 +9,14 @@
 - **Storage**: SQLite + FTS5 (via `sqlx`)
 - **Security**: WASM sandbox (`wasmtime`), encrypted secrets, command blocklist
 
-## Skills
+## Critical Directives
 
-Read the relevant skill file before working in these areas:
+**READ `/home/lvona/.config/opencode/AGENTS.md` FIRST** - contains universal rules including:
+- NEVER push to main/master (absolute rule)
+- Preserve unimplemented inspiration items
+- All skill references
 
-| Skill | Purpose |
-|-------|---------|
-| `skills/git-workflow.md` | Git safety rules, NO_PUSH directive for unowned repos |
-| `skills/inspiration-study.md` | Studying upstream codebases, updating plans/roadmaps |
-| `skills/deployment-onboarding.md` | Deploying BorgClaw, guiding new users through setup |
+This file contains BorgClaw-specific instructions only.
 
 ## Build Commands
 
@@ -158,23 +157,11 @@ mod tests { ... }
 
 ## Git Workflow
 
-> **NEVER push directly to main/master. ALL changes go through feature branches and PRs.**
-
-### Branch Naming
-`TICKET-<number>-<short-description>` (e.g., `TICKET-123-fix-backup-import`)
-
-### Commit Messages
-```
-[AREA] Brief description (50 chars or less)
-
-- Detailed change explanation
-- Reference to issue/ticket
-```
+See `/home/lvona/.config/opencode/AGENTS.md` for universal git rules.
 
 ### Before Submitting
 ```bash
 cargo test && cargo fmt --check && cargo clippy -- -D warnings && git status
-git remote -v  # verify correct remote (see skills/git-workflow.md)
 ```
 
 ## Additional References
