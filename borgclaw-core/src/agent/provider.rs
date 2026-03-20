@@ -2,6 +2,9 @@ use super::session::{Message, MessageRole};
 use crate::{config::SecurityConfig, security::SecurityLayer};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use tokio::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -37,6 +40,52 @@ pub trait ChatProvider: Send + Sync {
     async fn complete(&self, request: &ProviderRequest) -> Result<String, ProviderError>;
 }
 
+struct RateLimitedProvider {
+    inner: Box<dyn ChatProvider>,
+    rate_limiter: Arc<RwLock<RateLimiter>>,
+}
+
+struct RateLimiter {
+    requests_per_minute: u32,
+    request_times: Vec<std::time::Instant>,
+}
+
+impl RateLimiter {
+    fn new(requests_per_minute: u32) -> Self {
+        Self {
+            requests_per_minute,
+            request_times: Vec::new(),
+        }
+    }
+
+    async fn acquire(&mut self) -> Result<(), ProviderError> {
+        let now = std::time::Instant::now();
+        let window = Duration::from_secs(60);
+
+        self.request_times.retain(|&t| now.duration_since(t) < window);
+
+        if self.request_times.len() >= self.requests_per_minute as usize {
+            let oldest = self.request_times.first().unwrap();
+            let wait_time = window - now.duration_since(*oldest);
+            tokio::time::sleep(wait_time).await;
+            self.request_times.retain(|&t| std::time::Instant::now().duration_since(t) < window);
+        }
+
+        self.request_times.push(std::time::Instant::now());
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl ChatProvider for RateLimitedProvider {
+    async fn complete(&self, request: &ProviderRequest) -> Result<String, ProviderError> {
+        let mut limiter = self.rate_limiter.write().await;
+        limiter.acquire().await?;
+        drop(limiter);
+        self.inner.complete(request).await
+    }
+}
+
 pub struct ProviderFactory;
 
 impl ProviderFactory {
@@ -44,19 +93,29 @@ impl ProviderFactory {
         config: &crate::config::AgentConfig,
         security_config: &SecurityConfig,
     ) -> Result<Box<dyn ChatProvider>, ProviderError> {
-        match config.provider.as_str() {
-            "openai" => Ok(Box::new(
-                OpenAiProvider::from_security(security_config).await?,
-            )),
-            "anthropic" => Ok(Box::new(
-                AnthropicProvider::from_security(security_config).await?,
-            )),
-            "google" => Ok(Box::new(
-                GoogleProvider::from_security(security_config).await?,
-            )),
-            "ollama" => Ok(Box::new(OllamaProvider::default())),
-            other => Err(ProviderError::UnsupportedProvider(other.to_string())),
-        }
+        let provider: Box<dyn ChatProvider> = match config.provider.as_str() {
+            "openai" => Box::new(OpenAiProvider::from_security(security_config).await?),
+            "anthropic" => Box::new(AnthropicProvider::from_security(security_config).await?),
+            "google" => Box::new(GoogleProvider::from_security(security_config).await?),
+            "ollama" => Box::new(OllamaProvider::default()),
+            other => return Err(ProviderError::UnsupportedProvider(other.to_string())),
+        };
+
+        let rate_limit_rpm = config.rate_limit_rpm.unwrap_or(match config.provider.as_str() {
+            "openai" => 60,
+            "anthropic" => 50,
+            "google" => 15,
+            "kimi" => 30,
+            "minimax" => 30,
+            "z" => 30,
+            "ollama" => 120,
+            _ => 60,
+        });
+
+        Ok(Box::new(RateLimitedProvider {
+            inner: provider,
+            rate_limiter: Arc::new(RwLock::new(RateLimiter::new(rate_limit_rpm))),
+        }))
     }
 }
 
