@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.10.1 - 2026-03-19
+
+### Fixes
+
+**Deprecation Warnings**
+- Fixed teloxide `Message::from()` deprecation warning → use `.from` field
+- Fixed unused variable warnings in WASM security and STT modules
+
+### Release Policy
+
+- `1.10.1` is the current release line
+- New work after `1.10.1` should continue on feature branches
+
 ## 1.10.0 - 2026-03-19
 
 ### Features
