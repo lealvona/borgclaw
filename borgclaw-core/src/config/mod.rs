@@ -78,6 +78,8 @@ pub struct AgentConfig {
     pub workspace: PathBuf,
     /// Heartbeat interval in minutes
     pub heartbeat_interval: u32,
+    /// Rate limit: requests per minute (default: provider-specific)
+    pub rate_limit_rpm: Option<u32>,
 }
 
 impl Default for AgentConfig {
@@ -90,6 +92,7 @@ impl Default for AgentConfig {
             soul_path: None,
             workspace: PathBuf::from(".borgclaw/workspace"),
             heartbeat_interval: 30,
+            rate_limit_rpm: None,
         }
     }
 }

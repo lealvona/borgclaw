@@ -347,6 +347,7 @@ async fn configure_provider_and_model(
         .map_err(|e| e.to_string())?;
     let provider = providers[selection];
     config.agent.provider = provider.id.clone();
+    config.agent.rate_limit_rpm = provider.rate_limit_rpm;
 
     let resolved_api_key = resolve_provider_api_key(config, provider).await;
     let models = fetch_models(provider, resolved_api_key.as_deref())
@@ -1275,6 +1276,7 @@ fn apply_component_action(
                 ("provider", provider) if config.agent.provider == provider => {
                     config.agent.provider = AppConfig::default().agent.provider;
                     config.agent.model = AppConfig::default().agent.model;
+                    config.agent.rate_limit_rpm = AppConfig::default().agent.rate_limit_rpm;
                 }
                 _ => {}
             }
@@ -1342,6 +1344,7 @@ fn apply_component_action(
                     config.agent.provider = provider.to_string();
                     if let Some(def) = registry.providers.get(provider) {
                         config.agent.model = def.default_model.clone();
+                        config.agent.rate_limit_rpm = def.rate_limit_rpm;
                     }
                 }
                 _ => {}
@@ -1698,6 +1701,7 @@ mod tests {
             default_model: "claude-sonnet-4-20250514".to_string(),
             static_models: vec![],
             requires_auth: true,
+            ..Default::default()
         };
 
         let runtime = tokio::runtime::Runtime::new().unwrap();

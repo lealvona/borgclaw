@@ -24,6 +24,44 @@ pub struct ProviderDef {
     pub static_models: Vec<String>,
     #[serde(default = "default_requires_auth")]
     pub requires_auth: bool,
+    #[serde(default)]
+    pub rate_limit_rpm: Option<u32>,
+}
+
+impl Default for ProviderDef {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            display: String::new(),
+            api_base: String::new(),
+            models_endpoint: String::new(),
+            api_key_env: None,
+            default_model: String::new(),
+            static_models: Vec::new(),
+            requires_auth: true,
+            rate_limit_rpm: None,
+        }
+    }
+}
+
+impl ProviderDef {
+    pub fn rate_limit_rpm_with_default(&self) -> u32 {
+        self.rate_limit_rpm
+            .unwrap_or_else(|| default_rate_limit_for_provider(&self.id))
+    }
+}
+
+fn default_rate_limit_for_provider(id: &str) -> u32 {
+    match id {
+        "openai" => 60,
+        "anthropic" => 50,
+        "google" => 15,
+        "kimi" => 30,
+        "minimax" => 30,
+        "z" => 30,
+        "ollama" => 120,
+        _ => 30,
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -89,6 +127,7 @@ impl ProviderRegistry {
                     "gpt-4o-mini".to_string(),
                 ],
                 requires_auth: true,
+                ..Default::default()
             },
         );
         providers.insert(
@@ -106,6 +145,7 @@ impl ProviderRegistry {
                     "claude-3-opus-20240229".to_string(),
                 ],
                 requires_auth: true,
+                ..Default::default()
             },
         );
         providers.insert(
@@ -124,6 +164,7 @@ impl ProviderRegistry {
                     "gemini-2.0-flash".to_string(),
                 ],
                 requires_auth: true,
+                ..Default::default()
             },
         );
         providers.insert(
@@ -137,6 +178,7 @@ impl ProviderRegistry {
                 default_model: "k2".to_string(),
                 static_models: vec!["k2".to_string(), "k2.5".to_string()],
                 requires_auth: true,
+                ..Default::default()
             },
         );
         providers.insert(
@@ -150,6 +192,7 @@ impl ProviderRegistry {
                 default_model: "m2.5".to_string(),
                 static_models: vec!["m2.5".to_string(), "m2.77".to_string()],
                 requires_auth: true,
+                ..Default::default()
             },
         );
         providers.insert(
@@ -163,6 +206,7 @@ impl ProviderRegistry {
                 default_model: "GLM-5".to_string(),
                 static_models: vec!["GLM-5".to_string(), "GLM-5-Flash".to_string()],
                 requires_auth: true,
+                ..Default::default()
             },
         );
         providers.insert(
@@ -176,6 +220,7 @@ impl ProviderRegistry {
                 default_model: "llama3".to_string(),
                 static_models: vec!["llama3".to_string(), "mistral".to_string()],
                 requires_auth: false,
+                ..Default::default()
             },
         );
         providers.insert(
@@ -189,6 +234,7 @@ impl ProviderRegistry {
                 default_model: "custom-model".to_string(),
                 static_models: vec!["custom-model".to_string()],
                 requires_auth: false,
+                ..Default::default()
             },
         );
         Self { providers }

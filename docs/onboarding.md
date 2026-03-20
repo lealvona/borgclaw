@@ -69,24 +69,51 @@ name = "OpenAI"
 api_base = "https://api.openai.com/v1"
 env_key = "OPENAI_API_KEY"
 default_model = "gpt-4o"
+rate_limit_rpm = 60  # Requests per minute (uses sensible defaults if not set)
 
 [anthropic]
 name = "Anthropic"
 api_base = "https://api.anthropic.com/v1"
 env_key = "ANTHROPIC_API_KEY"
 default_model = "claude-sonnet-4-20250514"
+rate_limit_rpm = 50
 
 [google]
 name = "Google AI"
 api_base = "https://generativelanguage.googleapis.com/v1"
 env_key = "GOOGLE_API_KEY"
 default_model = "gemini-1.5-pro"
+rate_limit_rpm = 15  # Conservative for free tier
 
 [ollama]
 name = "Ollama (Local)"
 api_base = "http://localhost:11434/api"
 env_key = ""
 default_model = "llama3"
+rate_limit_rpm = 120  # Local provider allows higher limits
+```
+
+## Rate Limiting
+
+BorgClaw enforces per-provider rate limits to prevent 429 "Too Many Requests" errors. Each provider has sensible defaults:
+
+| Provider | Default RPM | Notes |
+|----------|-------------|-------|
+| OpenAI | 60 | |
+| Anthropic | 50 | |
+| Google AI | 15 | Conservative for free tier |
+| Kimi | 30 | |
+| MiniMax | 30 | |
+| Z.ai | 30 | |
+| Ollama | 120 | Local provider |
+
+Override in your `config.toml`:
+
+```toml
+[agent]
+provider = "google"
+model = "gemini-2.0-flash"
+rate_limit_rpm = 30  # Override provider default
 ```
 
 ## Environment Variables
@@ -115,6 +142,7 @@ model = "claude-sonnet-4-20250514"
 provider = "anthropic"
 workspace = ".borgclaw/workspace"
 heartbeat_interval = 30
+rate_limit_rpm = 50  # Optional override (uses provider defaults if unset)
 
 [security]
 wasm_sandbox = true
