@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.9.0 - 2026-03-19
+
+### Features
+
+**Security Audit Logging**
+- Comprehensive audit logging system for security monitoring
+- AuditLogger with buffered async JSONL output
+- Event types: tool execution, approvals, commands, MCP, secrets, pairing
+- Configurable log path (.local/logs/audit.jsonl)
+- Helper methods for common security events
+
+### Release Policy
+
+- `1.9.0` is the current release line
+- New work after `1.9.0` should continue on feature branches
+
 ## 1.8.0 - 2026-03-19
 
 ### Features
