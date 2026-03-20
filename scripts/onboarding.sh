@@ -29,6 +29,7 @@ FEATURES:
     telegram            Telegram channel
     signal              Signal channel
     webhook             Webhook channel
+    websocket           WebSocket channel (default: enabled)
 
 EXAMPLES:
     # Minimal onboarding (skip integrations)
