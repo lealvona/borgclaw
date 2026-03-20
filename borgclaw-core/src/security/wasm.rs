@@ -42,7 +42,7 @@ impl WasmSandbox {
         let wasm_bytes = wasm_bytes.clone();
         drop(modules);
 
-        let module_name = module_name.to_string();
+        let _module_name = module_name.to_string();
         let function = function.to_string();
         let input = input.to_string();
 
@@ -70,7 +70,7 @@ impl WasmSandbox {
             super::SecurityError::WasmError(format!("Module compilation failed: {}", e))
         })?;
 
-        let mut linker = Linker::new(&engine);
+        let linker = Linker::new(&engine);
 
         let mut store = Store::new(&engine, ());
 
