@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.5.0 - 2026-03-19
+
+### Features
+
+**Skills Operational Completeness**
+- **Google Workspace**: Added delete_email, trash_email, update_event, delete_event operations
+- **Browser**: Added go_back, go_forward, reload navigation tools
+- **Memory Management**: Exposed missing memory operations as agent tools
+  - memory_delete - Delete a memory entry by id
+  - memory_keys - List all memory keys
+  - memory_groups - List all memory groups
+  - memory_clear_group - Clear all memories in a group
+
+**GitHub Tools Expansion**
+- Added update_file, delete_file, and close_issue operations
+
+**Transport Restart Recovery**
+- Telegram channel with last_update_id tracking for message catch-up
+- Signal channel with last_timestamp tracking for deduplication
+
+### Release Policy
+
+- `1.5.0` is the current release line
+- New work after `1.5.0` should continue on feature branches
+
 ## 1.4.0 - 2026-03-19
 
 ### Features
