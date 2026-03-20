@@ -134,12 +134,8 @@ impl ProviderRegistry {
                 api_base: "https://api.moonshot.cn/v1".to_string(),
                 models_endpoint: "https://api.moonshot.cn/v1/models".to_string(),
                 api_key_env: Some("KIMI_API_KEY".to_string()),
-                default_model: "moonshot-v1-8k".to_string(),
-                static_models: vec![
-                    "moonshot-v1-8k".to_string(),
-                    "moonshot-v1-32k".to_string(),
-                    "moonshot-v1-128k".to_string(),
-                ],
+                default_model: "k2".to_string(),
+                static_models: vec!["k2".to_string(), "k2.5".to_string()],
                 requires_auth: true,
             },
         );
@@ -151,12 +147,8 @@ impl ProviderRegistry {
                 api_base: "https://api.minimax.chat/v1".to_string(),
                 models_endpoint: "https://api.minimax.chat/v1/models".to_string(),
                 api_key_env: Some("MINIMAX_API_KEY".to_string()),
-                default_model: "MiniMax-Text-01".to_string(),
-                static_models: vec![
-                    "MiniMax-Text-01".to_string(),
-                    "abab6.5s-chat".to_string(),
-                    "abab5.5s-chat".to_string(),
-                ],
+                default_model: "m2.5".to_string(),
+                static_models: vec!["m2.5".to_string(), "m2.77".to_string()],
                 requires_auth: true,
             },
         );
@@ -168,12 +160,8 @@ impl ProviderRegistry {
                 api_base: "https://api.z.ai/v1".to_string(),
                 models_endpoint: "https://api.z.ai/v1/models".to_string(),
                 api_key_env: Some("Z_API_KEY".to_string()),
-                default_model: "z-2-flash".to_string(),
-                static_models: vec![
-                    "z-2-flash".to_string(),
-                    "z-2-flash-thinking".to_string(),
-                    "z-2-pro".to_string(),
-                ],
+                default_model: "GLM-5".to_string(),
+                static_models: vec!["GLM-5".to_string(), "GLM-5-Flash".to_string()],
                 requires_auth: true,
             },
         );
@@ -301,21 +289,9 @@ fn default_static_models(id: &str, default_model: &str) -> Vec<String> {
             "gemini-2.5-flash".to_string(),
             "gemini-2.0-flash".to_string(),
         ],
-        "kimi" => vec![
-            default_model.to_string(),
-            "moonshot-v1-32k".to_string(),
-            "moonshot-v1-128k".to_string(),
-        ],
-        "minimax" => vec![
-            default_model.to_string(),
-            "abab6.5s-chat".to_string(),
-            "abab5.5s-chat".to_string(),
-        ],
-        "z" => vec![
-            default_model.to_string(),
-            "z-2-flash-thinking".to_string(),
-            "z-2-pro".to_string(),
-        ],
+        "kimi" => vec![default_model.to_string(), "k2.5".to_string()],
+        "minimax" => vec![default_model.to_string(), "m2.77".to_string()],
+        "z" => vec![default_model.to_string(), "GLM-5-Flash".to_string()],
         "ollama" => vec![default_model.to_string(), "mistral".to_string()],
         _ => vec![default_model.to_string()],
     }
