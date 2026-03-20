@@ -206,13 +206,7 @@ impl AuditLogger {
     }
 
     /// Log command execution
-    pub async fn log_command(
-        &self,
-        actor: &str,
-        command: &str,
-        blocked: bool,
-        success: bool,
-    ) {
+    pub async fn log_command(&self, actor: &str, command: &str, blocked: bool, success: bool) {
         let entry = AuditEntry::new(
             if blocked {
                 AuditEventType::CommandBlocked
@@ -260,7 +254,8 @@ impl AuditLogger {
             .map_err(|e| AuditError::IoError(e.to_string()))?;
 
         for entry in buffer.drain(..) {
-            let line = serde_json::to_string(&entry).map_err(|e| AuditError::SerializeError(e.to_string()))?;
+            let line = serde_json::to_string(&entry)
+                .map_err(|e| AuditError::SerializeError(e.to_string()))?;
             file.write_all(line.as_bytes())
                 .await
                 .map_err(|e| AuditError::IoError(e.to_string()))?;

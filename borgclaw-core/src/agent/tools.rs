@@ -1905,10 +1905,7 @@ async fn github_close_issue(
         None => return ToolResult::err("missing issue_number argument"),
     };
 
-    match client
-        .close_issue(&owner, &repo, issue_number)
-        .await
-    {
+    match client.close_issue(&owner, &repo, issue_number).await {
         Ok(()) => ToolResult::ok(format!("closed issue #{}", issue_number))
             .with_metadata("owner", owner)
             .with_metadata("repo", repo),
@@ -3110,8 +3107,8 @@ fn parse_duckduckgo_results(body: &str, limit: usize) -> Vec<SearchResult> {
     let result_re = Regex::new(
         r#"(?s)<a[^>]*class="result__a"[^>]*href="(?P<url>[^"]+)"[^>]*>(?P<title>.*?)</a>.*?(?:<a[^>]*class="result__snippet"[^>]*>|<div[^>]*class="result__snippet"[^>]*>)(?P<snippet>.*?)(?:</a>|</div>)"#,
     )
-    .expect("valid regex");
-    let tag_re = Regex::new(r"<[^>]+>").expect("valid regex");
+    .unwrap();
+    let tag_re = Regex::new(r"<[^>]+>").unwrap();
 
     result_re
         .captures_iter(body)
@@ -6128,7 +6125,10 @@ pub fn builtin_tools() -> Vec<Tool> {
                     ("path".to_string(), string_property("Repository file path")),
                     ("content".to_string(), string_property("New file content")),
                     ("message".to_string(), string_property("Commit message")),
-                    ("sha".to_string(), string_property("File SHA (required for update)")),
+                    (
+                        "sha".to_string(),
+                        string_property("File SHA (required for update)"),
+                    ),
                     ("branch".to_string(), string_property("Target branch")),
                 ]
                 .into(),
@@ -6142,32 +6142,41 @@ pub fn builtin_tools() -> Vec<Tool> {
                 ],
             ))
             .with_tags(vec!["github".to_string(), "integration".to_string()]),
-        Tool::new("github_delete_file", "Delete a file from a GitHub repository")
-            .with_schema(ToolSchema::object(
-                [
-                    ("owner".to_string(), string_property("Repository owner")),
-                    ("repo".to_string(), string_property("Repository name")),
-                    ("path".to_string(), string_property("Repository file path")),
-                    ("message".to_string(), string_property("Commit message")),
-                    ("sha".to_string(), string_property("File SHA (required for deletion)")),
-                    ("branch".to_string(), string_property("Target branch")),
-                ]
-                .into(),
-                vec![
-                    "owner".to_string(),
-                    "repo".to_string(),
-                    "path".to_string(),
-                    "message".to_string(),
+        Tool::new(
+            "github_delete_file",
+            "Delete a file from a GitHub repository",
+        )
+        .with_schema(ToolSchema::object(
+            [
+                ("owner".to_string(), string_property("Repository owner")),
+                ("repo".to_string(), string_property("Repository name")),
+                ("path".to_string(), string_property("Repository file path")),
+                ("message".to_string(), string_property("Commit message")),
+                (
                     "sha".to_string(),
-                ],
-            ))
-            .with_tags(vec!["github".to_string(), "integration".to_string()]),
+                    string_property("File SHA (required for deletion)"),
+                ),
+                ("branch".to_string(), string_property("Target branch")),
+            ]
+            .into(),
+            vec![
+                "owner".to_string(),
+                "repo".to_string(),
+                "path".to_string(),
+                "message".to_string(),
+                "sha".to_string(),
+            ],
+        ))
+        .with_tags(vec!["github".to_string(), "integration".to_string()]),
         Tool::new("github_close_issue", "Close a GitHub issue")
             .with_schema(ToolSchema::object(
                 [
                     ("owner".to_string(), string_property("Repository owner")),
                     ("repo".to_string(), string_property("Repository name")),
-                    ("issue_number".to_string(), number_property("Issue number to close", serde_json::json!(1))),
+                    (
+                        "issue_number".to_string(),
+                        number_property("Issue number to close", serde_json::json!(1)),
+                    ),
                 ]
                 .into(),
                 vec![
@@ -6270,21 +6279,32 @@ pub fn builtin_tools() -> Vec<Tool> {
             .with_tags(vec!["google".to_string(), "integration".to_string()]),
         Tool::new("google_delete_email", "Permanently delete a Gmail message")
             .with_schema(ToolSchema::object(
-                [("message_id".to_string(), string_property("Gmail message id"))].into(),
+                [(
+                    "message_id".to_string(),
+                    string_property("Gmail message id"),
+                )]
+                .into(),
                 vec!["message_id".to_string()],
             ))
             .with_approval(true)
             .with_tags(vec!["google".to_string(), "integration".to_string()]),
         Tool::new("google_trash_email", "Move a Gmail message to trash")
             .with_schema(ToolSchema::object(
-                [("message_id".to_string(), string_property("Gmail message id"))].into(),
+                [(
+                    "message_id".to_string(),
+                    string_property("Gmail message id"),
+                )]
+                .into(),
                 vec!["message_id".to_string()],
             ))
             .with_tags(vec!["google".to_string(), "integration".to_string()]),
         Tool::new("google_update_event", "Update a Google Calendar event")
             .with_schema(ToolSchema::object(
                 [
-                    ("event_id".to_string(), string_property("Event id to update")),
+                    (
+                        "event_id".to_string(),
+                        string_property("Event id to update"),
+                    ),
                     ("summary".to_string(), string_property("New event summary")),
                     (
                         "description".to_string(),
@@ -6304,7 +6324,11 @@ pub fn builtin_tools() -> Vec<Tool> {
             .with_tags(vec!["google".to_string(), "integration".to_string()]),
         Tool::new("google_delete_event", "Delete a Google Calendar event")
             .with_schema(ToolSchema::object(
-                [("event_id".to_string(), string_property("Event id to delete"))].into(),
+                [(
+                    "event_id".to_string(),
+                    string_property("Event id to delete"),
+                )]
+                .into(),
                 vec!["event_id".to_string()],
             ))
             .with_approval(true)
@@ -6474,22 +6498,25 @@ pub fn builtin_tools() -> Vec<Tool> {
                 vec!["image_url".to_string(), "prompt".to_string()],
             ))
             .with_tags(vec!["image".to_string(), "integration".to_string()]),
-        Tool::new("image_analyze_file", "Analyze a local image file using vision AI")
-            .with_schema(ToolSchema::object(
-                [
-                    (
-                        "path".to_string(),
-                        string_property("Path to image file within workspace"),
-                    ),
-                    (
-                        "prompt".to_string(),
-                        string_property("Question or prompt about the image"),
-                    ),
-                ]
-                .into(),
-                vec!["path".to_string(), "prompt".to_string()],
-            ))
-            .with_tags(vec!["image".to_string(), "integration".to_string()]),
+        Tool::new(
+            "image_analyze_file",
+            "Analyze a local image file using vision AI",
+        )
+        .with_schema(ToolSchema::object(
+            [
+                (
+                    "path".to_string(),
+                    string_property("Path to image file within workspace"),
+                ),
+                (
+                    "prompt".to_string(),
+                    string_property("Question or prompt about the image"),
+                ),
+            ]
+            .into(),
+            vec!["path".to_string(), "prompt".to_string()],
+        ))
+        .with_tags(vec!["image".to_string(), "integration".to_string()]),
         Tool::new("qr_encode", "Generate a QR code")
             .with_schema(ToolSchema::object(
                 [

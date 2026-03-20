@@ -209,7 +209,6 @@ impl SttClient {
         config: &WhisperCppConfig,
     ) -> Result<String, SttError> {
         let temp_dir = std::env::temp_dir();
-        let _temp_file = temp_dir.join(format!("stt_{}.", temp_dir.to_string_lossy().len()));
 
         let ext = match format {
             AudioFormat::Wav => "wav",
