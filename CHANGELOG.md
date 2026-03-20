@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.7.0 - 2026-03-19
+
+### Features
+
+**Gateway Health Endpoints**
+- **GET /api/health** - Health status with dependency checks
+  - Returns workspace and memory database status
+  - HTTP 200 when healthy, 503 when unhealthy
+- **GET /api/ready** - Readiness probe for load balancers
+  - Returns workspace and skills path readiness
+  - HTTP 200 when ready, 503 when not ready
+- Kubernetes-compatible health check format
+
+### Release Policy
+
+- `1.7.0` is the current release line
+- New work after `1.7.0` should continue on feature branches
+
 ## 1.6.0 - 2026-03-19
 
 ### Features
