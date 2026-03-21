@@ -34,6 +34,7 @@ pub struct StdioTransportConfig {
 #[derive(Debug, Clone)]
 pub struct SseTransportConfig {
     pub url: String,
+    pub post_url: String,
     pub headers: HashMap<String, String>,
 }
 
@@ -182,7 +183,23 @@ impl McpTransport for SseTransport {
         Ok(())
     }
 
-    async fn send(&mut self, _message: &str) -> Result<(), TransportError> {
+    async fn send(&mut self, message: &str) -> Result<(), TransportError> {
+        let response = self
+            .client
+            .post(&self.config.post_url)
+            .header("Content-Type", "application/json")
+            .body(message.to_string())
+            .send()
+            .await
+            .map_err(|e| TransportError::SendFailed(e.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(TransportError::SendFailed(format!(
+                "Server returned status: {}",
+                response.status()
+            )));
+        }
+
         Ok(())
     }
 
@@ -266,4 +283,32 @@ pub enum TransportError {
     ReceiveFailed(String),
     #[error("Close failed: {0}")]
     CloseFailed(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn sse_transport_send_posts_to_post_url() {
+        let config = SseTransportConfig {
+            url: "http://localhost:8080/events".to_string(),
+            post_url: "http://localhost:8080/messages".to_string(),
+            headers: HashMap::new(),
+        };
+        let mut transport = SseTransport::new(config);
+
+        let result = transport.send(r#"{"jsonrpc":"2.0","method":"test","params":{}}"#).await;
+        assert!(result.is_ok(), "SSE send should succeed when post_url is configured");
+    }
+
+    #[test]
+    fn sse_transport_config_requires_post_url() {
+        let config = SseTransportConfig {
+            url: "http://localhost:8080/events".to_string(),
+            post_url: "http://localhost:8080/messages".to_string(),
+            headers: HashMap::new(),
+        };
+        assert_eq!(config.post_url, "http://localhost:8080/messages");
+    }
 }
