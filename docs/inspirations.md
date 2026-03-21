@@ -2,7 +2,7 @@
 
 This guide expands the short origin list in the README into an engineering reference.
 
-Last reviewed against upstream repositories: March 21, 2026
+Last reviewed against upstream repositories: March 22, 2026
 
 Status note:
 - Several gaps originally called out here are now partially or fully closed in BorgClaw.
@@ -34,6 +34,27 @@ Recent upstream movement:
 - OpenClaw: SSRF URL credential bypass protection via guard coverage
 - ZeroClaw: mem0/OpenMemory-style external memory backend integration pattern
 - ZeroClaw: Structured fallback deliverables for failed/stuck jobs
+
+## Upstream Follow-Up: March 22, 2026
+
+Recent upstream movement:
+
+- OpenClaw added Claude bundle commands natively, context compaction start/end user notifications, webchat persist images to disk, Telegram auto-rename DM topics, voice call TTS contract enforcement, and Discord routed through plugin SDK.  
+  Source: [OpenClaw recent commits](https://github.com/openclaw/openclaw/commits/main)
+- ZeroClaw added time range filter to memory recall (since/until), per-channel proxy_url support, LocalWhisperProvider for self-hosted STT, DeepMyst as OpenAI-compatible provider, Claude Code OAuth support, gateway path_prefix for reverse proxy, and ClaudeCodeTool for two-tier agent delegation.  
+  Source: [ZeroClaw recent commits](https://github.com/zeroclaw-labs/zeroclaw/commits/main)
+- IronClaw added GitHub Copilot as LLM provider, MCP clients persist in ExtensionManager, web search with thumbnails, workspace layered memory with sensitivity-based privacy redirect, and RUSTSEC-2026-0049 patch.  
+  Source: [IronClaw recent commits](https://github.com/nearai/ironclaw/commits/staging/)
+- TinyClaw added exec tool with PTY support and background execution, and Feishu channel support.  
+  Source: [TinyClaw recent commits](https://github.com/TinyAGI/tinyclaw/commits/main)
+
+**New "What BorgClaw should copy" items** (added per upstream findings, preserving all existing items):
+
+- OpenClaw: Context compaction notifications (notify user when starts/completes)
+- ZeroClaw: Time range filter for memory recall (since/until parameters)
+- ZeroClaw: Per-channel proxy_url support for HTTP/SOCKS5 proxies
+- TinyClaw: exec tool with PTY support and background execution
+- IronClaw: Workspace layered memory with privacy-based access control
 
 ## Upstream Follow-Up: March 20, 2026
 
