@@ -337,6 +337,12 @@ impl ToolRuntime {
             .await
             .map_err(|err| err.to_string())
     }
+
+    pub async fn shutdown(&self) {
+        let _ = self.heartbeat.stop().await;
+        let scheduler = self.scheduler.lock().await;
+        let _ = scheduler.stop().await;
+    }
 }
 
 fn canonical_or_current(path: &Path) -> PathBuf {

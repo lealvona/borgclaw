@@ -96,6 +96,7 @@ pub enum AgentState {
     Processing,
     WaitingForApproval,
     Error(String),
+    ShutDown,
 }
 
 /// Agent events for monitoring
@@ -473,7 +474,15 @@ impl Agent for SimpleAgent {
     }
 
     async fn shutdown(&mut self) -> Result<(), AgentError> {
-        self.state = AgentState::Idle;
+        self.sessions.clear();
+
+        if let Some(mut runtime) = self.tool_runtime.take() {
+            let _ = runtime.shutdown().await;
+        }
+
+        self.provider = None;
+
+        self.state = AgentState::ShutDown;
         Ok(())
     }
 }
