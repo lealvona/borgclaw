@@ -109,6 +109,10 @@ pub struct Session {
     pub message_count: usize,
     /// Max messages to keep
     max_messages: usize,
+    /// Compaction pass (incremented each time session is summarized)
+    pub compaction_pass: u32,
+    /// Running summary from previous conversation context
+    pub running_summary: Option<String>,
 }
 
 impl Session {
@@ -123,6 +127,8 @@ impl Session {
             last_activity: now,
             message_count: 0,
             max_messages,
+            compaction_pass: 0,
+            running_summary: None,
         }
     }
 
@@ -230,6 +236,56 @@ impl Session {
         for msg in preserved {
             self.messages.push_back(msg);
         }
+    }
+
+    pub fn count_tokens(&self, text: &str) -> usize {
+        text.split_whitespace().count().max(1) * 4 / 3
+    }
+
+    pub fn total_tokens(&self) -> usize {
+        self.messages
+            .iter()
+            .map(|m| self.count_tokens(&m.content))
+            .sum()
+    }
+
+    pub fn needs_compaction(&self, token_threshold: usize) -> bool {
+        self.total_tokens() > token_threshold
+    }
+
+    pub fn get_history_for_summary(&self) -> String {
+        self.messages
+            .iter()
+            .filter(|m| m.role != MessageRole::System)
+            .map(|m| format!("{}: {}", m.role.as_str(), m.content))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    pub fn get_context_for_llm(&self) -> Vec<(MessageRole, String)> {
+        let mut context = Vec::new();
+
+        if let Some(ref summary) = self.running_summary {
+            context.push((
+                MessageRole::System,
+                format!(
+                    "[Previous conversation summary (pass {}): {}]",
+                    self.compaction_pass, summary
+                ),
+            ));
+        }
+
+        for msg in self.messages.iter().filter(|m| m.role != MessageRole::System) {
+            context.push((msg.role, msg.content.clone()));
+        }
+
+        context
+    }
+
+    pub fn apply_compaction(&mut self, summary: String, keep_recent: usize, keep_important: bool) {
+        self.running_summary = Some(summary);
+        self.compaction_pass += 1;
+        self.compact_with_recent_and_important("", keep_recent, keep_important);
     }
 }
 
