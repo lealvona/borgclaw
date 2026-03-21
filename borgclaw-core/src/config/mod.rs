@@ -52,6 +52,58 @@ impl Default for AppConfig {
     }
 }
 
+impl AppConfig {
+    pub fn validate(&self) -> Result<(), config::ValidationError> {
+        let mut error = config::ValidationError::default();
+
+        for (name, server) in &self.mcp.servers {
+            if server.url.is_empty()
+                || !(server.url.starts_with("http://") || server.url.starts_with("https://"))
+            {
+                error
+                    .mcp_servers
+                    .push(format!("{}: invalid URL '{}'", name, server.url));
+            }
+        }
+
+        if let Some(ref path) = self.agent.soul_path {
+            if !path.exists() {
+                error.soul_path = Some(path.display().to_string());
+            }
+        }
+
+        if let Some(ref path) = self.agent.workspace.parent() {
+            if !path.exists() {
+                if let Err(e) = std::fs::create_dir_all(path) {
+                    error.workspace = Some(format!("{}: {}", path.display(), e));
+                }
+            }
+        }
+
+        if let Some(rpm) = self.agent.rate_limit_rpm {
+            if rpm == 0 {
+                error.rate_limit = Some("rate_limit_rpm must be greater than 0".to_string());
+            }
+        }
+
+        if self.heartbeat.check_interval_seconds == 0 {
+            error.heartbeat_interval =
+                Some("heartbeat check_interval_seconds must be greater than 0".to_string());
+        }
+
+        if error.mcp_servers.is_empty()
+            && error.soul_path.is_none()
+            && error.workspace.is_none()
+            && error.rate_limit.is_none()
+            && error.heartbeat_interval.is_none()
+        {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    }
+}
+
 /// Onboarding registrar for component title/chapter mapping
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -770,7 +822,42 @@ mod config {
         Parse(#[from] toml::de::Error),
         #[error("TOML serialize error: {0}")]
         Serialize(#[from] toml::ser::Error),
+        #[error("Validation error: {0}")]
+        Validation(String),
     }
+
+    #[derive(Debug, Default)]
+    pub struct ValidationError {
+        pub mcp_servers: Vec<String>,
+        pub soul_path: Option<String>,
+        pub workspace: Option<String>,
+        pub rate_limit: Option<String>,
+        pub heartbeat_interval: Option<String>,
+    }
+
+    impl std::fmt::Display for ValidationError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let mut errors = Vec::new();
+            for server in &self.mcp_servers {
+                errors.push(format!("MCP server URL '{}' is not a valid URL", server));
+            }
+            if let Some(ref path) = self.soul_path {
+                errors.push(format!("soul_path '{}' does not exist", path));
+            }
+            if let Some(ref path) = self.workspace {
+                errors.push(format!("workspace '{}' cannot be created", path));
+            }
+            if let Some(ref msg) = self.rate_limit {
+                errors.push(msg.clone());
+            }
+            if let Some(ref msg) = self.heartbeat_interval {
+                errors.push(msg.clone());
+            }
+            write!(f, "{}", errors.join("; "))
+        }
+    }
+
+    impl std::error::Error for ValidationError {}
 }
 
 #[cfg(test)]
@@ -1075,5 +1162,45 @@ mod tests {
             config.skills.url_shortener.yourls.base_url,
             "https://your-domain.com/yourls-api.php"
         );
+    }
+
+    #[test]
+    fn config_validation_rejects_invalid_mcp_urls() {
+        let mut config = AppConfig::default();
+        config.mcp.servers.insert(
+            "test".to_string(),
+            crate::config::McpServerConfig {
+                url: "not-a-valid-url".to_string(),
+                transport: crate::config::McpTransportConfig::Stdio(
+                    crate::config::StdioTransportConfig {
+                        command: "echo".to_string(),
+                        args: Vec::new(),
+                        env: std::collections::HashMap::new(),
+                    },
+                ),
+            },
+        );
+
+        let result = config.validate();
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(!error.mcp_servers.is_empty());
+    }
+
+    #[test]
+    fn config_validation_rejects_zero_heartbeat_interval() {
+        let mut config = AppConfig::default();
+        config.heartbeat.check_interval_seconds = 0;
+
+        let result = config.validate();
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.heartbeat_interval.is_some());
+    }
+
+    #[test]
+    fn config_validation_accepts_valid_config() {
+        let config = AppConfig::default();
+        assert!(config.validate().is_ok());
     }
 }
