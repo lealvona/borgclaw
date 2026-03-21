@@ -11,15 +11,9 @@
 
 ## Critical Directives
 
-**READ `/home/lvona/.config/opencode/AGENTS.md` FIRST** - contains universal rules including:
-- NEVER push to main/master (absolute rule)
-- Preserve unimplemented inspiration items
-- All skill references
-
-This file contains BorgClaw-specific instructions only.
+**READ `/home/lvona/.config/opencode/AGENTS.md` FIRST** - contains universal rules including NEVER push to main/master and all skill references.
 
 ## Build Commands
-
 ```bash
 cargo build                          # entire workspace
 cargo build -p borgclaw-core         # specific crate
@@ -28,29 +22,29 @@ cargo clean && cargo build           # clean build
 ```
 
 ## Test Commands
-
 ```bash
 cargo test                           # all tests
 cargo test -p borgclaw-core          # single crate
-cargo test -- --nocapture            # show output
+cargo test -- --nocapture            # show print statements
 cargo test module_name::test_fn      # single test (full path)
-cargo test security                  # pattern match
-cargo test config_parses             # pattern match
+cargo test security                  # pattern match filter
+cargo test -p borgclaw-core security::tests::blocklist_rejects_dangerous  # specific test
+cargo test --test-threads=1          # deterministic parallel execution
+cargo test -- --include-ignored      # run ignored tests
 ```
 
 ## Lint & Format
-
 ```bash
 cargo fmt --check                    # check formatting
 cargo fmt                            # format code
 cargo clippy                         # run clippy
-cargo clippy -- -D warnings          # CI standard (strict)
+cargo clippy -- -D warnings          # CI strict mode
 ```
 
 ## Code Style
 
 ### Imports
-Group imports: (1) local crate refs / external crates, (2) standard library, (3) logging:
+Group order: (1) local/external crates, (2) std library, (3) logging:
 ```rust
 use borgclaw_core::{Agent, Tool};
 use chrono::{Duration, Utc};
@@ -59,11 +53,13 @@ use tracing::{error, info};
 ```
 
 ### Naming Conventions
-- **Modules**: `snake_case` (e.g., `channel/`, `security/`)
-- **Types/Traits**: `PascalCase` (e.g., `AppConfig`, `SecurityLayer`, `Agent`)
-- **Functions/Variables**: `snake_case` (e.g., `load_config`, `check_command`)
-- **Constants**: `SCREAMING_SNAKE_CASE` for values, `PascalCase` for const fns
-- **Newtypes**: `PascalCase` wrapping the inner type (e.g., `SessionId(pub String)`)
+| Element | Convention | Example |
+|---------|------------|---------|
+| Modules | `snake_case` | `channel/`, `security/` |
+| Types/Traits | `PascalCase` | `AppConfig`, `SecurityLayer` |
+| Functions/Variables | `snake_case` | `load_config`, `check_command` |
+| Constants | `SCREAMING_SNAKE_CASE` | `MAX_RETRY_COUNT` |
+| Newtypes | `PascalCase` | `SessionId(pub String)` |
 
 ### Error Handling
 Use `thiserror` for domain errors with `String` payloads (NOT `#[from]`):
@@ -76,8 +72,7 @@ pub enum ModuleError {
     Config(String),
 }
 ```
-Convert across boundaries with `.map_err(|e| ModuleError::Variant(e.to_string()))`.
-Use full `Result<T, ConcreteError>` types inline — do NOT define `pub type Result<T>` aliases.
+Convert across boundaries with `.map_err(|e| ModuleError::Variant(e.to_string()))`. Use full `Result<T, ConcreteError>` types inline — no `pub type Result<T>` aliases.
 
 ### Async Traits
 Use `async_trait::async_trait` with `Send + Sync` bounds:
@@ -87,10 +82,10 @@ pub trait Agent: Send + Sync {
     async fn process(&mut self, ctx: &AgentContext) -> AgentResponse;
 }
 ```
-Shared state uses `Arc<RwLock<T>>` (prefer) or `Arc<Mutex<T>>`.
+Shared state: `Arc<RwLock<T>>` (preferred) or `Arc<Mutex<T>>`.
 
 ### Configuration Pattern
-All config structs use `#[serde(default)]` + `Default` impl. Support legacy field names with `#[serde(alias = "old_name")]`:
+Config structs use `#[serde(default)]` + `Default` impl. Support legacy names with `#[serde(alias = "old_name")]`:
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -109,7 +104,7 @@ impl Default for ComponentConfig {
 ```
 
 ### Builder & Fluent API
-Constructors and builders accept `impl Into<String>` and return `Self`:
+Accept `impl Into<String>` and return `Self`:
 ```rust
 pub fn new(id: impl Into<String>) -> Self { ... }
 pub fn with_schema(mut self, schema: ToolSchema) -> Self { ... }
@@ -127,7 +122,7 @@ pub use internal::{PublicType, PublicTrait};
 #[cfg(test)]
 mod tests { ... }
 ```
-`lib.rs` selectively re-exports key types. `mod.rs` files re-export from submodules.
+`lib.rs` selectively re-exports. `mod.rs` re-exports from submodules.
 
 ### Key Dependencies
 - **Async**: `tokio` (full), `async-trait`, `futures-util`
@@ -140,12 +135,13 @@ mod tests { ... }
 - **WASM**: `wasmtime`
 
 ## Testing Guidelines
-- Tests live in `#[cfg(test)] mod tests` at the bottom of source files
-- Use descriptive sentence-like names: `fn config_parses_documented_contract_shape()`
-- Config parsing tests embed TOML strings: `toml::from_str(r#"[section]..."#)`
-- Async tests use `#[tokio::test]`; sync tests needing async create their own `Runtime`
-- Integration tests in gateway bind to `127.0.0.1:0` with temp listeners
-- Temp dirs use UUID prefixes and clean up: `std::fs::remove_dir_all`
+- Tests in `#[cfg(test)] mod tests` at bottom of source files
+- Descriptive names: `fn config_parses_documented_contract_shape()`
+- TOML config tests: `toml::from_str(r#"[section]..."#)`
+- Async tests: `#[tokio::test]`; sync needing async create own `Runtime`
+- Integration tests: bind to `127.0.0.1:0` with temp listeners
+- Temp dirs: UUID prefixes, cleanup with `std::fs::remove_dir_all`
+- Slow tests: `#[ignore]`, run with `cargo test -- --include-ignored`
 
 ## Security Checklist
 - WASM sandbox for untrusted code execution
@@ -156,12 +152,16 @@ mod tests { ... }
 - Audit logging after every tool execution
 
 ## Git Workflow
-
 See `/home/lvona/.config/opencode/AGENTS.md` for universal git rules.
 
 ### Before Submitting
 ```bash
 cargo test && cargo fmt --check && cargo clippy -- -D warnings && git status
+```
+
+### Safety Verification
+```bash
+git remote -v | grep "upstream.*NO_PUSH"  # Verify upstream push protection
 ```
 
 ## Additional References
