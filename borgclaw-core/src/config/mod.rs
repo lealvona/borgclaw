@@ -57,12 +57,17 @@ impl AppConfig {
         let mut error = config::ValidationError::default();
 
         for (name, server) in &self.mcp.servers {
-            if server.url.is_empty()
-                || !(server.url.starts_with("http://") || server.url.starts_with("https://"))
-            {
+            if let Some(url) = &server.url {
+                if !url.is_empty() && (url.starts_with("http://") || url.starts_with("https://")) {
+                    continue;
+                }
                 error
                     .mcp_servers
-                    .push(format!("{}: invalid URL '{}'", name, server.url));
+                    .push(format!("{}: invalid URL '{}'", name, url));
+            } else {
+                error
+                    .mcp_servers
+                    .push(format!("{}: missing URL", name));
             }
         }
 

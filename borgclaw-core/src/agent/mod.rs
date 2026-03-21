@@ -236,69 +236,12 @@ impl SimpleAgent {
         Ok(self.provider.as_deref().expect("provider initialized"))
     }
 
-    async fn compact_session_if_needed(
-        &mut self,
-        memory_config: &super::config::MemoryConfig,
-        session: &mut Session,
-    ) {
-        let threshold = memory_config.session_max_entries.max(4);
-        if session.len() <= threshold {
-            return;
-        }
-
-        let non_system: Vec<_> = session
-            .messages()
-            .iter()
-            .filter(|msg| msg.role != MessageRole::System)
-            .cloned()
-            .collect();
-        if non_system.len() <= 4 {
-            return;
-        }
-
-        let keep_recent = memory_config.session_keep_recent.max(2);
-        let removed = non_system.len().saturating_sub(keep_recent);
-        if removed == 0 {
-            return;
-        }
-
-        let history = session.get_history_for_summary();
-
-        let summary = match self.generate_session_summary(&history, session.compaction_pass).await {
-            Ok(summary) => summary,
-            Err(_) => {
-                format!(
-                    "{} prior messages summarized. Recent topics: {}",
-                    removed,
-                    non_system
-                        .iter()
-                        .take(3)
-                        .map(|msg| msg
-                            .content
-                            .split_whitespace()
-                            .take(6)
-                            .collect::<Vec<_>>()
-                            .join(" "))
-                        .filter(|topic| !topic.is_empty())
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                )
-            }
-        };
-
-        session.apply_compaction(
-            summary,
-            keep_recent,
-            memory_config.session_keep_important,
-        );
-    }
-
     async fn generate_session_summary(
-        &self,
+        provider: &dyn ChatProvider,
+        model: &str,
         history: &str,
         pass: u32,
     ) -> Result<String, AgentError> {
-        let provider = self.ensure_provider().await?;
 
         let system_prompt = "You are a summarizing assistant. You take a long conversation and summarize it. \
             Pay special attention to the details. Names, places, times and recurring objects or themes are important. \
@@ -326,7 +269,7 @@ impl SimpleAgent {
         ];
 
         let request = crate::agent::provider::ProviderRequest {
-            model: self.config.model.clone(),
+            model: model.to_string(),
             temperature: 0.3,
             max_tokens: 1024,
             messages,
@@ -417,9 +360,56 @@ impl Agent for SimpleAgent {
 
         {
             let memory_config = self.memory_config.clone();
-            let session =
-                self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
-            self.compact_session_if_needed(&memory_config, session).await;
+            let model = self.config.model.clone();
+            let session_id = ctx.session_id.clone();
+            let group_id = ctx.metadata.get("group_id").cloned();
+
+            let (needs_compaction, history, pass, keep_recent, keep_important) = {
+                let session = self.ensure_session(&session_id, group_id.clone());
+                let threshold = memory_config.session_max_entries.max(4);
+                if session.len() <= threshold {
+                    (false, String::new(), 0, 0, false)
+                } else {
+                    let non_system: Vec<_> = session
+                        .messages()
+                        .iter()
+                        .filter(|msg| msg.role != MessageRole::System)
+                        .cloned()
+                        .collect();
+                    if non_system.len() <= 4 {
+                        (false, String::new(), 0, 0, false)
+                    } else {
+                        let keep = memory_config.session_keep_recent.max(2);
+                        let removed = non_system.len().saturating_sub(keep);
+                        if removed == 0 {
+                            (false, String::new(), 0, 0, false)
+                        } else {
+                            let history = session.get_history_for_summary();
+                            let pass = session.compaction_pass;
+                            (true, history, pass, keep, memory_config.session_keep_important)
+                        }
+                    }
+                }
+            };
+
+            if needs_compaction {
+                let summary = match self.ensure_provider().await {
+                    Ok(provider) => {
+                        match Self::generate_session_summary(provider, &model, &history, pass).await {
+                            Ok(s) => s,
+                            Err(_) => {
+                                format!("{} prior messages summarized.", history.len() / 4)
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        format!("{} prior messages summarized.", history.len() / 4)
+                    }
+                };
+
+                let session = self.ensure_session(&session_id, group_id);
+                session.apply_compaction(summary, keep_recent, keep_important);
+            }
         }
         let request_messages = self
             .ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned())
@@ -476,7 +466,7 @@ impl Agent for SimpleAgent {
     async fn shutdown(&mut self) -> Result<(), AgentError> {
         self.sessions.clear();
 
-        if let Some(mut runtime) = self.tool_runtime.take() {
+        if let Some(runtime) = self.tool_runtime.take() {
             let _ = runtime.shutdown().await;
         }
 

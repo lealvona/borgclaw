@@ -2335,6 +2335,10 @@ fn mcp_transport_config(
                 .url
                 .clone()
                 .ok_or_else(|| "missing url".to_string())?,
+            post_url: server
+                .url
+                .clone()
+                .ok_or_else(|| "missing url".to_string())?,
             headers: server.headers.clone(),
         })),
         "websocket" => Ok(McpTransportConfig::WebSocket(WebSocketTransportConfig {
