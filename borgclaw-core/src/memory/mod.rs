@@ -121,6 +121,71 @@ pub enum MemoryError {
     QueryError(String),
     #[error("Compaction error: {0}")]
     CompactionError(String),
+    #[error("Embedding error: {0}")]
+    EmbeddingError(String),
+}
+
+/// Embedding provider for vector search
+#[async_trait]
+pub trait EmbeddingProvider: Send + Sync {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>, MemoryError>;
+}
+
+/// HTTP-based embedding provider
+pub struct HttpEmbeddingProvider {
+    endpoint: String,
+    client: reqwest::Client,
+}
+
+impl HttpEmbeddingProvider {
+    pub fn new(endpoint: impl Into<String>) -> Self {
+        Self {
+            endpoint: endpoint.into(),
+            client: reqwest::Client::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl EmbeddingProvider for HttpEmbeddingProvider {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>, MemoryError> {
+        #[derive(serde::Deserialize)]
+        struct EmbedResponse {
+            embedding: Vec<f32>,
+        }
+
+        let response = self
+            .client
+            .post(&self.endpoint)
+            .json(&serde_json::json!({ "text": text }))
+            .send()
+            .await
+            .map_err(|e| MemoryError::EmbeddingError(e.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(MemoryError::EmbeddingError(format!(
+                "Embedding service returned status: {}",
+                response.status()
+            )));
+        }
+
+        let EmbedResponse { embedding } = response
+            .json()
+            .await
+            .map_err(|e| MemoryError::EmbeddingError(e.to_string()))?;
+
+        Ok(embedding)
+    }
+}
+
+/// No-op embedding provider for when hybrid search is disabled
+pub struct NoOpEmbeddingProvider;
+
+#[async_trait]
+impl EmbeddingProvider for NoOpEmbeddingProvider {
+    async fn embed(&self, _text: &str) -> Result<Vec<f32>, MemoryError> {
+        Ok(Vec::new())
+    }
 }
 
 /// Create a new memory entry
