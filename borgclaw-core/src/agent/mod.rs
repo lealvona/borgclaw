@@ -235,7 +235,8 @@ impl SimpleAgent {
         Ok(self.provider.as_deref().expect("provider initialized"))
     }
 
-    fn compact_session_if_needed(
+    async fn compact_session_if_needed(
+        &mut self,
         memory_config: &super::config::MemoryConfig,
         session: &mut Session,
     ) {
@@ -260,28 +261,77 @@ impl SimpleAgent {
             return;
         }
 
-        let summary = format!(
-            "{} prior messages summarized. Recent topics: {}",
-            removed,
-            non_system
-                .iter()
-                .take(3)
-                .map(|msg| msg
-                    .content
-                    .split_whitespace()
-                    .take(6)
-                    .collect::<Vec<_>>()
-                    .join(" "))
-                .filter(|topic| !topic.is_empty())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
+        let history = session.get_history_for_summary();
 
-        session.compact_with_recent_and_important(
-            &summary,
+        let summary = match self.generate_session_summary(&history, session.compaction_pass).await {
+            Ok(summary) => summary,
+            Err(_) => {
+                format!(
+                    "{} prior messages summarized. Recent topics: {}",
+                    removed,
+                    non_system
+                        .iter()
+                        .take(3)
+                        .map(|msg| msg
+                            .content
+                            .split_whitespace()
+                            .take(6)
+                            .collect::<Vec<_>>()
+                            .join(" "))
+                        .filter(|topic| !topic.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )
+            }
+        };
+
+        session.apply_compaction(
+            summary,
             keep_recent,
             memory_config.session_keep_important,
         );
+    }
+
+    async fn generate_session_summary(
+        &self,
+        history: &str,
+        pass: u32,
+    ) -> Result<String, AgentError> {
+        let provider = self.ensure_provider().await?;
+
+        let system_prompt = "You are a summarizing assistant. You take a long conversation and summarize it. \
+            Pay special attention to the details. Names, places, times and recurring objects or themes are important. \
+            Pay attention to verbs and actions. Lists are important. Summaries you create will be used to retain \
+            context in ongoing conversations with an AI chat bot, so format the response in a way that is useful \
+            for that purpose. Do not use the word 'summary' in your response.";
+
+        let user_prompt = format!(
+            "Please summarize everything we've discussed so far in pass {}. \
+             Just give me the summary with no preamble. Sterile tone. Include any and all specific details. \
+             Lists are important. Do not include any references to me giving you summaries. \
+             Make sure that every question I have asked is reflected in the summary.\n\n{}",
+            pass, history
+        );
+
+        let messages = vec![
+            crate::agent::provider::ChatMessage {
+                role: "system".to_string(),
+                content: system_prompt.to_string(),
+            },
+            crate::agent::provider::ChatMessage {
+                role: "user".to_string(),
+                content: user_prompt,
+            },
+        ];
+
+        let request = crate::agent::provider::ProviderRequest {
+            model: self.config.model.clone(),
+            temperature: 0.3,
+            max_tokens: 1024,
+            messages,
+        };
+
+        provider.complete(&request).await.map_err(|e| AgentError::ProviderError(e.to_string()))
     }
 }
 
@@ -368,7 +418,7 @@ impl Agent for SimpleAgent {
             let memory_config = self.memory_config.clone();
             let session =
                 self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
-            Self::compact_session_if_needed(&memory_config, session);
+            self.compact_session_if_needed(&memory_config, session).await;
         }
         let request_messages = self
             .ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned())
@@ -431,10 +481,11 @@ impl Agent for SimpleAgent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{McpConfig, MemoryConfig, SecurityConfig, SkillsConfig};
+    use crate::agent::session::Session;
+    use crate::agent::{Message, MessageRole, ToolCall};
 
     #[test]
-    fn compaction_keeps_recent_messages_and_summary() {
+    fn session_compaction_keeps_recent_messages_and_summary() {
         let mut session = Session::new(None, 64);
         session.add_message(Message::system("system"));
         for index in 0..8 {
@@ -442,14 +493,11 @@ mod tests {
             session.add_message(Message::assistant(format!("assistant {}", index)));
         }
 
-        let memory_config = MemoryConfig {
-            session_max_entries: 6,
-            session_keep_recent: 4,
-            session_keep_important: false,
-            ..MemoryConfig::default()
-        };
-
-        SimpleAgent::compact_session_if_needed(&memory_config, &mut session);
+        session.apply_compaction(
+            "test summary of old conversation".to_string(),
+            4,
+            false,
+        );
 
         let messages = session.messages().iter().collect::<Vec<_>>();
         assert!(messages
@@ -458,10 +506,12 @@ mod tests {
         assert!(messages.iter().any(|msg| msg.content == "assistant 7"));
         assert!(messages.iter().any(|msg| msg.content == "user 7"));
         assert!(!messages.iter().any(|msg| msg.content == "user 0"));
+        assert_eq!(session.compaction_pass, 1);
+        assert!(session.running_summary.is_some());
     }
 
     #[test]
-    fn compaction_preserves_important_tool_messages_when_enabled() {
+    fn session_compaction_preserves_important_tool_messages_when_enabled() {
         let mut session = Session::new(None, 64);
         session.add_message(Message::system("system"));
         session.add_message(Message::assistant("tool result").with_tool_call(ToolCall {
@@ -476,14 +526,11 @@ mod tests {
             session.add_message(Message::assistant(format!("assistant {}", index)));
         }
 
-        let memory_config = MemoryConfig {
-            session_max_entries: 6,
-            session_keep_recent: 2,
-            session_keep_important: true,
-            ..MemoryConfig::default()
-        };
-
-        SimpleAgent::compact_session_if_needed(&memory_config, &mut session);
+        session.apply_compaction(
+            "test summary".to_string(),
+            2,
+            true,
+        );
 
         let messages = session.messages().iter().collect::<Vec<_>>();
         assert!(messages.iter().any(|msg| msg.content == "tool result"));
@@ -491,6 +538,14 @@ mod tests {
         assert!(messages
             .iter()
             .any(|msg| msg.content.contains("summarized")));
+    }
+
+    #[test]
+    fn session_token_counting_works() {
+        let session = Session::new(None, 64);
+        let text = "hello world this is a test";
+        let tokens = session.count_tokens(text);
+        assert!(tokens > 0);
     }
 
     #[tokio::test]
