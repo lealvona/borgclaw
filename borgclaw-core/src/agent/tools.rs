@@ -2958,6 +2958,10 @@ async fn mcp_transport_config_for_server(
                 .url
                 .clone()
                 .ok_or_else(|| "missing MCP url".to_string())?,
+            post_url: config
+                .url
+                .clone()
+                .ok_or_else(|| "missing MCP url".to_string())?,
             headers: config.headers.clone(),
         }),
         "websocket" => McpTransportConfig::WebSocket(WebSocketTransportConfig {

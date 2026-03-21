@@ -198,6 +198,34 @@ impl Memory for SqliteMemory {
         }
         self.recall_fts(query).await
     }
+
+    async fn get(&self, id: &str) -> Result<Option<MemoryEntry>, MemoryError> {
+        self.get(id).await
+    }
+
+    async fn delete(&self, id: &str) -> Result<(), MemoryError> {
+        self.delete(id).await
+    }
+
+    async fn update(&self, entry: &MemoryEntry) -> Result<(), MemoryError> {
+        self.update(entry).await
+    }
+
+    async fn keys(&self) -> Result<Vec<String>, MemoryError> {
+        self.keys().await
+    }
+
+    async fn clear(&self) -> Result<(), MemoryError> {
+        self.clear().await
+    }
+
+    async fn clear_group(&self, group_id: &str) -> Result<(), MemoryError> {
+        self.clear_group(group_id).await
+    }
+
+    async fn groups(&self) -> Result<Vec<String>, MemoryError> {
+        self.groups().await
+    }
 }
 
 impl SqliteMemory {
