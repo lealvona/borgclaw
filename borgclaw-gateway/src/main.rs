@@ -13,6 +13,7 @@ use axum::{
     Router,
 };
 use borgclaw_core::{
+    agent::builtin_tools,
     channel::{
         ChannelType, InboundMessage, MessagePayload, MessageRouter, Sender, WebhookChannel,
         WebhookError, WebhookTrigger,
@@ -27,7 +28,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use std::{net::SocketAddr, path::PathBuf};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{error, info, warn};
 
@@ -117,12 +118,23 @@ struct MetricsSnapshot {
     uptime_seconds: u64,
 }
 
+/// Tracked information about an active WebSocket connection
+#[derive(Debug, Clone, serde::Serialize)]
+struct ConnectionInfo {
+    client_id: String,
+    connected_at: chrono::DateTime<chrono::Utc>,
+    authenticated: bool,
+    messages_received: u64,
+    messages_sent: u64,
+}
+
 #[derive(Clone)]
 struct GatewayState {
     config: Arc<AppConfig>,
     router: Arc<MessageRouter>,
     webhook: Option<Arc<WebhookChannel>>,
     metrics: Arc<GatewayMetrics>,
+    connections: Arc<RwLock<HashMap<String, ConnectionInfo>>>,
 }
 
 #[tokio::main]
@@ -150,6 +162,7 @@ async fn main() {
         router,
         webhook,
         metrics,
+        connections: Arc::new(RwLock::new(HashMap::new())),
     };
 
     // CORS layer
@@ -167,7 +180,12 @@ async fn main() {
         .route("/api/ready", get(api_ready))
         .route("/api/metrics", get(api_metrics))
         .route("/api/config", get(api_config))
-        .route("/api/chat", get(api_chat_get))
+        .route("/api/chat", get(api_chat_get).post(api_chat_post))
+        .route("/api/tools", get(api_tools))
+        .route("/api/connections", get(api_connections))
+        .route("/api/schedules", get(api_schedules))
+        .route("/api/heartbeat/tasks", get(api_heartbeat_tasks))
+        .route("/api/doctor", get(api_doctor))
         .layer(cors.clone())
         .with_state(state.clone());
     let webhook_app = Router::new()
@@ -248,6 +266,16 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
         .unwrap_or(true);
 
     state.metrics.increment_connections();
+    {
+        let mut conns = state.connections.write().await;
+        conns.insert(client_id.clone(), ConnectionInfo {
+            client_id: client_id.clone(),
+            connected_at: chrono::Utc::now(),
+            authenticated: !requires_pairing,
+            messages_received: 0,
+            messages_sent: 0,
+        });
+    }
     info!(
         "New WebSocket connection: {} (active: {})",
         client_id,
@@ -307,6 +335,10 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
     }
 
     state.metrics.decrement_connections();
+    {
+        let mut conns = state.connections.write().await;
+        conns.remove(&client_id);
+    }
     info!(
         "Connection closed: {} (active: {})",
         client_id,
@@ -958,6 +990,222 @@ async fn api_chat_get() -> impl IntoResponse {
     (StatusCode::METHOD_NOT_ALLOWED, "Use POST for chat")
 }
 
+async fn api_chat_post(
+    State(state): State<GatewayState>,
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let content = body
+        .get("content")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let group_id = body
+        .get("group_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let sender_id = body
+        .get("sender_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("http-client");
+
+    if content.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({"error": "content is required"})),
+        );
+    }
+
+    let inbound = InboundMessage {
+        channel: ChannelType::websocket(),
+        sender: Sender::new(sender_id).with_name("HTTP Client"),
+        content: MessagePayload::text(content),
+        group_id,
+        timestamp: chrono::Utc::now(),
+        raw: body,
+    };
+
+    match state.router.route(inbound).await {
+        Ok(outcome) => (
+            StatusCode::OK,
+            axum::Json(serde_json::json!({
+                "session_id": outcome.session_id.0,
+                "text": outcome.response.text,
+                "tool_calls": outcome.response.tool_calls,
+                "metadata": outcome.response.metadata,
+            })),
+        ),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({"error": err.to_string()})),
+        ),
+    }
+}
+
+async fn api_tools() -> impl IntoResponse {
+    let tools = builtin_tools();
+    let tool_list: Vec<serde_json::Value> = tools
+        .iter()
+        .map(|t| {
+            serde_json::json!({
+                "name": t.name,
+                "description": t.description,
+                "requires_approval": t.requires_approval,
+                "tags": t.tags,
+            })
+        })
+        .collect();
+
+    axum::Json(serde_json::json!({
+        "tools": tool_list,
+        "count": tool_list.len(),
+    }))
+}
+
+async fn api_connections(State(state): State<GatewayState>) -> impl IntoResponse {
+    let conns = state.connections.read().await;
+    let connections: Vec<&ConnectionInfo> = conns.values().collect();
+
+    axum::Json(serde_json::json!({
+        "connections": connections,
+        "count": connections.len(),
+    }))
+}
+
+async fn api_schedules(State(state): State<GatewayState>) -> impl IntoResponse {
+    let path = state.config.agent.workspace.join("scheduler.json");
+    if !path.exists() {
+        return axum::Json(serde_json::json!({
+            "jobs": [],
+            "count": 0,
+            "message": "No scheduler state found"
+        }));
+    }
+
+    match std::fs::read_to_string(&path) {
+        Ok(content) => {
+            if let Ok(state) = serde_json::from_str::<serde_json::Value>(&content) {
+                let jobs = state.get("jobs").cloned().unwrap_or(serde_json::json!([]));
+                let count = jobs.as_array().map(|a| a.len()).unwrap_or(0);
+                axum::Json(serde_json::json!({
+                    "jobs": jobs,
+                    "count": count,
+                }))
+            } else {
+                axum::Json(serde_json::json!({
+                    "jobs": [],
+                    "count": 0,
+                    "error": "Failed to parse scheduler state"
+                }))
+            }
+        }
+        Err(e) => axum::Json(serde_json::json!({
+            "jobs": [],
+            "count": 0,
+            "error": e.to_string()
+        })),
+    }
+}
+
+async fn api_heartbeat_tasks(State(state): State<GatewayState>) -> impl IntoResponse {
+    let path = state.config.agent.workspace.join("heartbeat.json");
+    if !path.exists() {
+        return axum::Json(serde_json::json!({
+            "tasks": [],
+            "count": 0,
+            "message": "No heartbeat state found"
+        }));
+    }
+
+    match std::fs::read_to_string(&path) {
+        Ok(content) => {
+            if let Ok(state) = serde_json::from_str::<serde_json::Value>(&content) {
+                let tasks = state
+                    .get("tasks")
+                    .cloned()
+                    .unwrap_or(serde_json::json!([]));
+                let count = tasks.as_array().map(|a| a.len()).unwrap_or(0);
+                axum::Json(serde_json::json!({
+                    "tasks": tasks,
+                    "count": count,
+                }))
+            } else {
+                axum::Json(serde_json::json!({
+                    "tasks": [],
+                    "count": 0,
+                    "error": "Failed to parse heartbeat state"
+                }))
+            }
+        }
+        Err(e) => axum::Json(serde_json::json!({
+            "tasks": [],
+            "count": 0,
+            "error": e.to_string()
+        })),
+    }
+}
+
+async fn api_doctor(State(state): State<GatewayState>) -> impl IntoResponse {
+    let mut checks = Vec::new();
+
+    // Workspace check
+    if state.config.agent.workspace.exists() {
+        checks.push(serde_json::json!({"name": "workspace", "status": "ok"}));
+    } else {
+        checks.push(serde_json::json!({"name": "workspace", "status": "error", "message": "Workspace directory does not exist"}));
+    }
+
+    // Memory database check
+    if let Some(parent) = state.config.memory.database_path.parent() {
+        if parent.exists() || parent == std::path::Path::new("") {
+            checks.push(serde_json::json!({"name": "memory_db", "status": "ok"}));
+        } else {
+            checks.push(serde_json::json!({"name": "memory_db", "status": "error", "message": "Memory database parent directory missing"}));
+        }
+    }
+
+    // Security check
+    let security = SecurityLayer::new();
+    let blocklist_works = matches!(
+        security.check_command("rm -rf /"),
+        borgclaw_core::security::CommandCheck::Blocked(_)
+    );
+    checks.push(serde_json::json!({
+        "name": "command_blocklist",
+        "status": if blocklist_works { "ok" } else { "error" }
+    }));
+
+    // Skills path check
+    if state.config.skills.skills_path.exists() {
+        checks.push(serde_json::json!({"name": "skills_path", "status": "ok"}));
+    } else {
+        checks.push(serde_json::json!({"name": "skills_path", "status": "warning", "message": "Skills path does not exist"}));
+    }
+
+    // Scheduler state check
+    let scheduler_path = state.config.agent.workspace.join("scheduler.json");
+    if scheduler_path.exists() {
+        checks.push(serde_json::json!({"name": "scheduler_state", "status": "ok"}));
+    } else {
+        checks.push(serde_json::json!({"name": "scheduler_state", "status": "info", "message": "No persisted scheduler state"}));
+    }
+
+    // Heartbeat state check
+    let heartbeat_path = state.config.agent.workspace.join("heartbeat.json");
+    if heartbeat_path.exists() {
+        checks.push(serde_json::json!({"name": "heartbeat_state", "status": "ok"}));
+    } else {
+        checks.push(serde_json::json!({"name": "heartbeat_state", "status": "info", "message": "No persisted heartbeat state"}));
+    }
+
+    let all_ok = checks
+        .iter()
+        .all(|c| c.get("status").and_then(|s| s.as_str()) != Some("error"));
+
+    axum::Json(serde_json::json!({
+        "status": if all_ok { "healthy" } else { "unhealthy" },
+        "checks": checks,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1051,6 +1299,7 @@ mod tests {
             router: Arc::new(MessageRouter::from_config(&AppConfig::default())),
             webhook: None,
             metrics,
+            connections: Arc::new(RwLock::new(HashMap::new())),
         };
 
         let response = api_status(State(state)).await.into_response();
@@ -1149,6 +1398,7 @@ mod tests {
             router: Arc::new(MessageRouter::from_config(&config)),
             webhook: None,
             metrics,
+            connections: Arc::new(RwLock::new(HashMap::new())),
         };
 
         let app = Router::new()
@@ -1252,6 +1502,7 @@ mod tests {
             router: Arc::new(MessageRouter::from_config(&config)),
             webhook: None,
             metrics,
+            connections: Arc::new(RwLock::new(HashMap::new())),
         };
 
         let app = Router::new()
@@ -1293,6 +1544,7 @@ mod tests {
             router: Arc::new(MessageRouter::from_config(&config)),
             webhook: configured_webhook_channel(&config).await.map(Arc::new),
             metrics,
+            connections: Arc::new(RwLock::new(HashMap::new())),
         };
 
         let app = Router::new()
@@ -1387,6 +1639,7 @@ mod tests {
             router: Arc::new(MessageRouter::from_config(&config)),
             webhook: configured_webhook_channel(&config).await.map(Arc::new),
             metrics,
+            connections: Arc::new(RwLock::new(HashMap::new())),
         };
 
         let app = Router::new()
