@@ -390,13 +390,6 @@ fn set_config_key(config: &mut AppConfig, key: &str, value: &str) -> bool {
                 return false;
             }
         }
-        "security.docker_sandbox" => {
-            if let Ok(v) = value.parse::<bool>() {
-                config.security.docker_sandbox = v;
-            } else {
-                return false;
-            }
-        }
         _ => return false,
     }
     true
@@ -516,8 +509,8 @@ async fn status(config: AppConfig) {
         }
     );
     println!(
-        "Security: wasm={}, docker={}, approval={:?}",
-        config.security.wasm_sandbox, config.security.docker_sandbox, config.security.approval_mode
+        "Security: wasm_sandbox={}, approval={:?}",
+        config.security.wasm_sandbox, config.security.approval_mode
     );
     println!("Security policy: {}", security_policy_status(&config));
     println!(
