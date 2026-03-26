@@ -348,3 +348,59 @@ pub enum UrlError {
     #[error("Invalid URL: {0}")]
     InvalidUrl(String),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_url_rejects_localhost() {
+        assert!(UrlShortener::validate_url("http://localhost/admin").is_err());
+        assert!(UrlShortener::validate_url("http://127.0.0.1/api").is_err());
+        assert!(UrlShortener::validate_url("http://127.0.0.2:8080/api").is_err());
+    }
+
+    #[test]
+    fn validate_url_rejects_private_10() {
+        assert!(UrlShortener::validate_url("http://10.0.0.1/api").is_err());
+        assert!(UrlShortener::validate_url("http://10.255.255.255/api").is_err());
+    }
+
+    #[test]
+    fn validate_url_rejects_private_172() {
+        assert!(UrlShortener::validate_url("http://172.16.0.1/api").is_err());
+        assert!(UrlShortener::validate_url("http://172.31.255.255/api").is_err());
+    }
+
+    #[test]
+    fn validate_url_rejects_private_192_168() {
+        assert!(UrlShortener::validate_url("http://192.168.0.1/api").is_err());
+        assert!(UrlShortener::validate_url("http://192.168.1.100/api").is_err());
+    }
+
+    #[test]
+    fn validate_url_rejects_link_local() {
+        assert!(UrlShortener::validate_url("http://169.254.169.254/meta-data").is_err());
+    }
+
+    #[test]
+    fn validate_url_allows_external_urls() {
+        assert!(UrlShortener::validate_url("https://example.com/page").is_ok());
+        assert!(UrlShortener::validate_url("https://api.github.com/repos").is_ok());
+        assert!(UrlShortener::validate_url("http://8.8.8.8/dns").is_ok());
+    }
+
+    #[test]
+    fn validate_url_rejects_invalid_urls() {
+        assert!(UrlShortener::validate_url("not-a-url").is_err());
+        assert!(UrlShortener::validate_url("").is_err());
+    }
+
+    #[test]
+    fn validate_url_allows_172_outside_private_range() {
+        // 172.15.x.x is NOT private
+        assert!(UrlShortener::validate_url("http://172.15.0.1/api").is_ok());
+        // 172.32.x.x is NOT private
+        assert!(UrlShortener::validate_url("http://172.32.0.1/api").is_ok());
+    }
+}

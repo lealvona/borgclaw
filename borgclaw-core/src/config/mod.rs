@@ -1212,4 +1212,46 @@ mod tests {
         let config = AppConfig::default();
         assert!(config.validate().is_ok());
     }
+
+    #[test]
+    fn security_config_ssrf_defaults_are_correct() {
+        let config = SecurityConfig::default();
+        assert!(config.ssrf_protection);
+        assert!(config.ssrf_allowlist.is_empty());
+        assert!(config.ssrf_blocklist.is_empty());
+    }
+
+    #[test]
+    fn security_config_parses_ssrf_options() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [security]
+            ssrf_protection = true
+            ssrf_allowlist = ["^trusted\\.internal\\.example\\.com$"]
+            ssrf_blocklist = ["^evil\\.example\\.com$", "^malware\\.example\\.com$"]
+            "#,
+        )
+        .unwrap();
+
+        assert!(config.security.ssrf_protection);
+        assert_eq!(config.security.ssrf_allowlist.len(), 1);
+        assert_eq!(
+            config.security.ssrf_allowlist[0],
+            "^trusted\\.internal\\.example\\.com$"
+        );
+        assert_eq!(config.security.ssrf_blocklist.len(), 2);
+    }
+
+    #[test]
+    fn security_config_parses_ssrf_disabled() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [security]
+            ssrf_protection = false
+            "#,
+        )
+        .unwrap();
+
+        assert!(!config.security.ssrf_protection);
+    }
 }

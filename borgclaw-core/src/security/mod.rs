@@ -958,4 +958,176 @@ mod tests {
             .redact("token ghp_abcdefghijklmnopqrstuvwxyz1234567890")
             .contains("[REDACTED_SECRET]"));
     }
+
+    // SSRF Protection Tests (TICKET-055)
+
+    #[test]
+    fn ssrf_blocks_localhost_127() {
+        let guard = SsrfGuard::new();
+        assert!(guard.validate_url("http://127.0.0.1/admin").is_err());
+        assert!(guard.validate_url("http://127.0.0.2:8080/api").is_err());
+        assert!(guard.validate_url("https://127.0.0.1/secrets").is_err());
+    }
+
+    #[test]
+    fn ssrf_blocks_localhost_name() {
+        let guard = SsrfGuard::new();
+        assert!(guard.validate_url("http://localhost/admin").is_err());
+        assert!(guard.validate_url("http://localhost:8080/api").is_err());
+    }
+
+    #[test]
+    fn ssrf_blocks_ipv6_loopback() {
+        // IPv6 loopback is blocked via is_ip_private when parsed as IpAddr
+        let guard = SsrfGuard::new();
+        assert!(SsrfGuard::is_ip_private(&"::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn ssrf_blocks_private_10_range() {
+        let guard = SsrfGuard::new();
+        assert!(guard.validate_url("http://10.0.0.1/api").is_err());
+        assert!(guard.validate_url("http://10.255.255.255/secret").is_err());
+    }
+
+    #[test]
+    fn ssrf_blocks_private_172_range() {
+        let guard = SsrfGuard::new();
+        assert!(guard.validate_url("http://172.16.0.1/api").is_err());
+        assert!(guard.validate_url("http://172.31.255.255/api").is_err());
+        // 172.15.x.x is NOT private
+        assert!(guard.validate_url("http://172.15.0.1/api").is_ok());
+        // 172.32.x.x is NOT private
+        assert!(guard.validate_url("http://172.32.0.1/api").is_ok());
+    }
+
+    #[test]
+    fn ssrf_blocks_private_192_168_range() {
+        let guard = SsrfGuard::new();
+        assert!(guard.validate_url("http://192.168.0.1/router").is_err());
+        assert!(guard.validate_url("http://192.168.1.100/api").is_err());
+    }
+
+    #[test]
+    fn ssrf_blocks_link_local() {
+        let guard = SsrfGuard::new();
+        // AWS metadata endpoint
+        assert!(guard.validate_url("http://169.254.169.254/latest/meta-data").is_err());
+        assert!(guard.validate_url("http://169.254.0.1/api").is_err());
+    }
+
+    #[test]
+    fn ssrf_allows_external_urls() {
+        let guard = SsrfGuard::new();
+        assert!(guard.validate_url("https://example.com/api").is_ok());
+        assert!(guard.validate_url("https://api.github.com/repos").is_ok());
+        assert!(guard.validate_url("https://www.google.com/search").is_ok());
+        assert!(guard.validate_url("http://8.8.8.8/dns").is_ok());
+    }
+
+    #[test]
+    fn ssrf_rejects_invalid_urls() {
+        let guard = SsrfGuard::new();
+        assert!(guard.validate_url("not-a-url").is_err());
+        assert!(guard.validate_url("").is_err());
+    }
+
+    #[test]
+    fn ssrf_allowlist_overrides_blocks() {
+        let mut guard = SsrfGuard::new();
+        guard.allow_host("^trusted\\.internal\\.example\\.com$").unwrap();
+
+        // Allowed by allowlist
+        assert!(guard.validate_url("http://trusted.internal.example.com/api").is_ok());
+
+        // Not allowed (not in allowlist)
+        assert!(guard.validate_url("http://localhost/admin").is_err());
+    }
+
+    #[test]
+    fn ssrf_blocklist_blocks_additional_hosts() {
+        let mut guard = SsrfGuard::new();
+        guard.block_host("^evil\\.example\\.com$").unwrap();
+
+        // Blocked by blocklist
+        assert!(guard.validate_url("http://evil.example.com/attack").is_err());
+
+        // Not blocked
+        assert!(guard.validate_url("http://good.example.com/api").is_ok());
+    }
+
+    #[test]
+    fn ssrf_blocklist_checked_before_allowlist() {
+        let mut guard = SsrfGuard::new();
+        guard.block_host("^malicious\\.example\\.com$").unwrap();
+        guard.allow_host("^malicious\\.example\\.com$").unwrap();
+
+        // Blocklist is checked first, so this should be blocked
+        assert!(guard.validate_url("http://malicious.example.com/api").is_err());
+    }
+
+    #[test]
+    fn ssrf_with_localhost_allowed() {
+        // with_localhost(true) skips the localhost name check, but 127.x.x.x
+        // is also caught by is_private_ip. Need both flags for full localhost access.
+        let guard = SsrfGuard::new().with_localhost(true).with_private_ips(true);
+        assert!(guard.validate_url("http://localhost/api").is_ok());
+        assert!(guard.validate_url("http://127.0.0.1/api").is_ok());
+    }
+
+    #[test]
+    fn ssrf_with_private_ips_allowed() {
+        let guard = SsrfGuard::new().with_private_ips(true);
+        assert!(guard.validate_url("http://10.0.0.1/api").is_ok());
+        assert!(guard.validate_url("http://192.168.1.1/api").is_ok());
+    }
+
+    #[test]
+    fn ssrf_security_layer_validate_url_works() {
+        let security = SecurityLayer::new();
+        assert!(security.validate_url("http://localhost/admin").is_err());
+        assert!(security.validate_url("https://example.com/api").is_ok());
+    }
+
+    #[test]
+    fn ssrf_security_layer_respects_config_disabled() {
+        let security = SecurityLayer::with_config(SecurityConfig {
+            ssrf_protection: false,
+            ..Default::default()
+        });
+        // When disabled, localhost should be allowed
+        assert!(security.validate_url("http://localhost/admin").is_ok());
+    }
+
+    #[test]
+    fn ssrf_security_layer_applies_config_allowlist() {
+        let security = SecurityLayer::with_config(SecurityConfig {
+            ssrf_allowlist: vec!["^internal\\.mycompany\\.com$".to_string()],
+            ..Default::default()
+        });
+        assert!(security.validate_url("http://internal.mycompany.com/api").is_ok());
+        // Regular private IPs still blocked
+        assert!(security.validate_url("http://10.0.0.1/api").is_err());
+    }
+
+    #[test]
+    fn ssrf_security_layer_applies_config_blocklist() {
+        let security = SecurityLayer::with_config(SecurityConfig {
+            ssrf_blocklist: vec!["^blocked\\.example\\.com$".to_string()],
+            ..Default::default()
+        });
+        assert!(security.validate_url("http://blocked.example.com/api").is_err());
+        assert!(security.validate_url("https://example.com/api").is_ok());
+    }
+
+    #[test]
+    fn ssrf_invalid_allowlist_pattern_does_not_panic() {
+        // Invalid regex should be silently skipped with a warning
+        let security = SecurityLayer::with_config(SecurityConfig {
+            ssrf_allowlist: vec!["[invalid-regex".to_string()],
+            ..Default::default()
+        });
+        // Should still work, just without the invalid pattern
+        assert!(security.validate_url("https://example.com/api").is_ok());
+    }
 }
