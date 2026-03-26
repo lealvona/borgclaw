@@ -368,3 +368,184 @@ WASM plugins run in sandboxed wasmtime environment with:
 - No filesystem access (unless permitted)
 - No network access (unless permitted)
 - No shell access (unless permitted)
+
+## Skill Packaging and Publishing
+
+BorgClaw provides a complete skill lifecycle management system including packaging and publishing capabilities.
+
+### Packaging Skills
+
+Package a local skill directory into a distributable `.tar.gz` archive:
+
+```bash
+# Package a skill from current directory
+borgclaw skills package ./my-skill
+
+# Package with custom output path
+borgclaw skills package ./my-skill --output ./my-skill-1.0.0.tar.gz
+```
+
+The package will include:
+- `SKILL.md` - The skill manifest and instructions
+- All files in the skill directory
+- `borgclaw-package.json` - Metadata including name, version, and packaging timestamp
+
+**Requirements:**
+- Directory must contain a valid `SKILL.md` file
+- `SKILL.md` must have a `name` field in the frontmatter
+
+**Package Structure:**
+```
+my-skill-1.0.0.tar.gz
+├── borgclaw-package.json    # Metadata (auto-generated)
+├── SKILL.md                 # Skill manifest
+├── src/                     # Source files (if any)
+│   ├── main.rs
+│   └── lib.rs
+└── README.md               # Documentation
+```
+
+### Publishing Skills
+
+Publish a packaged skill to a skill registry:
+
+```bash
+# Publish to default registry
+borgclaw skills publish ./my-skill-1.0.0.tar.gz
+
+# Publish to specific registry
+borgclaw skills publish ./my-skill-1.0.0.tar.gz --registry https://borgclaw.io/registry
+
+# Publish without confirmation prompt
+borgclaw skills publish ./my-skill-1.0.0.tar.gz --force
+```
+
+**Publishing Process:**
+1. Validates the package format (.tar.gz extension)
+2. Extracts and validates package metadata
+3. Confirms with user (unless `--force` is used)
+4. Uploads to registry via multipart form POST
+5. Returns package ID and public URL
+
+**Registry Configuration:**
+
+Set the default registry in your config:
+
+```toml
+[skills]
+registry_url = "https://github.com/openclaw/clawhub"
+```
+
+### Skill Registry
+
+Skills can be discovered and installed from registries:
+
+```bash
+# List available skills
+borgclaw skills list
+
+# Search for skills
+borgclaw skills list weather
+
+# Install from registry
+borgclaw skills install openclaw/weather
+
+# Install from GitHub
+borgclaw skills install owner/repo
+
+# Install from URL
+borgclaw skills install https://example.com/skills/weather/SKILL.md
+
+# Install from local package
+borgclaw skills install ./my-skill-1.0.0.tar.gz
+```
+
+**Registry Format:**
+
+Registries are GitHub repositories containing skill directories, each with a `SKILL.md` file:
+
+```
+clawhub/
+├── openclaw/
+│   ├── weather/
+│   │   └── SKILL.md
+│   └── calendar/
+│       └── SKILL.md
+└── community/
+    └── todo/
+        └── SKILL.md
+```
+
+### SKILL.md Format
+
+The skill manifest defines the skill's capabilities:
+
+```markdown
+---
+name: weather
+version: 1.0.0
+description: Get weather information for any location
+author: BorgClaw Team
+---
+
+## Commands
+
+- `/weather <location>` - Get current weather
+- `/forecast <location> [days]` - Get weather forecast
+
+## Environment
+
+- `OPENWEATHER_API_KEY` - Required API key
+
+## Examples
+
+### Get current weather
+
+Input: `/weather London`
+
+Output: `Current weather in London: 15°C, partly cloudy`
+
+### Get 5-day forecast
+
+Input: `/forecast London 5`
+
+Output: `London 5-day forecast: ...`
+```
+
+### Complete Workflow Example
+
+```bash
+# 1. Create a skill directory
+mkdir my-skill && cd my-skill
+
+# 2. Create SKILL.md
+cat > SKILL.md << 'EOF'
+---
+name: my-skill
+version: 1.0.0
+description: A custom skill
+description: Developer Name
+---
+
+## Commands
+
+- `/my-command` - Do something useful
+
+## Instructions
+
+Use this skill to perform custom operations.
+EOF
+
+# 3. Add any additional files
+mkdir src
+echo '// Skill implementation' > src/main.rs
+
+# 4. Package the skill
+borgclaw skills package . --output my-skill-1.0.0.tar.gz
+
+# 5. Publish to registry
+borgclaw skills publish my-skill-1.0.0.tar.gz
+
+# 6. Others can now install it
+borgclaw skills install my-skill
+```

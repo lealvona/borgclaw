@@ -386,3 +386,182 @@ level = "info"  # "debug", "info", "warn", "error"
 format = "json"  # "json", "pretty"
 file = ".local/logs/borgclaw.log"
 ```
+
+## Skill Registry and Publishing
+
+### Overview
+
+BorgClaw provides a complete skill packaging and publishing system that allows you to:
+- Package skills into distributable archives
+- Publish skills to public or private registries
+- Install skills from various sources (registry, GitHub, URL, local file)
+
+### Packaging
+
+Skills are packaged as `.tar.gz` archives containing:
+- `SKILL.md` - The skill manifest (required)
+- `borgclaw-package.json` - Auto-generated metadata
+- Any additional files (source code, documentation, etc.)
+
+```bash
+# Package a skill directory
+borgclaw skill package ./my-skill
+
+# Package with specific output
+borgclaw skill package ./my-skill --output my-skill-1.0.0.tar.gz
+```
+
+### Publishing
+
+Skills can be published to a registry for others to install:
+
+```bash
+# Publish to default registry
+borgclaw skill publish ./my-skill-1.0.0.tar.gz
+
+# Publish to specific registry
+borgclaw skill publish ./my-skill-1.0.0.tar.gz --registry https://registry.example.com
+
+# Force publish without confirmation
+borgclaw skill publish ./my-skill-1.0.0.tar.gz --force
+```
+
+### Registry Configuration
+
+Configure your default registry in `config.toml`:
+
+```toml
+[skills]
+registry_url = "https://github.com/openclaw/clawhub"
+```
+
+### Registry API
+
+When implementing a custom registry, it must support:
+
+**Upload Endpoint:**
+```
+POST /api/v1/skills/upload
+Content-Type: multipart/form-data
+
+Fields:
+- name: Skill name
+- package: The .tar.gz file
+
+Response:
+{
+  "id": "skill-id",
+  "url": "https://registry.example.com/skills/skill-name"
+}
+```
+
+**List Endpoint:**
+```
+GET /api/v1/skills
+
+Response:
+[
+  {
+    "id": "skill-id",
+    "name": "Skill Name",
+    "version": "1.0.0",
+    "description": "Skill description"
+  }
+]
+```
+
+### GitHub Registry
+
+For GitHub-based registries (like `clawhub`), the registry is a repository with the structure:
+
+```
+clawhub/
+├── skill-name/
+│   └── SKILL.md
+└── another-skill/
+    └── SKILL.md
+```
+
+Skills are accessed via raw GitHub URLs:
+```
+https://raw.githubusercontent.com/owner/repo/main/skill-name/SKILL.md
+```
+
+### Skill Installation Sources
+
+Skills can be installed from multiple sources:
+
+```bash
+# From registry (configured in config.toml)
+borgclaw skills install skill-name
+
+# From GitHub (owner/repo format)
+borgclaw skills install openclaw/weather
+
+# From direct URL
+borgclaw skills install https://example.com/skills/weather/SKILL.md
+
+# From local package
+borgclaw skills install ./my-skill-1.0.0.tar.gz
+
+# From local directory (development)
+borgclaw skills install ./my-skill
+```
+
+### Registry Implementation Example
+
+Here's a minimal registry server implementation in Rust:
+
+```rust
+use axum::{
+    extract::Multipart,
+    response::Json,
+    routing::post,
+    Router,
+};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+#[derive(Serialize)]
+struct UploadResponse {
+    id: String,
+    url: String,
+}
+
+async fn upload_skill(mut multipart: Multipart) -> Json<UploadResponse> {
+    let mut skill_name = String::new();
+    let mut package_data: Option<Vec<u8>> = None;
+
+    while let Some(field) = multipart.next_field().await.unwrap() {
+        let name = field.name().unwrap().to_string();
+        if name == "name" {
+            skill_name = field.text().await.unwrap();
+        } else if name == "package" {
+            package_data = Some(field.bytes().await.unwrap().to_vec());
+        }
+    }
+
+    // Save package to storage
+    if let Some(data) = package_data {
+        let path = PathBuf::from(format!("./skills/{}.tar.gz", skill_name));
+        tokio::fs::write(&path, data).await.unwrap();
+
+        Json(UploadResponse {
+            id: skill_name.clone(),
+            url: format!("https://registry.example.com/skills/{}", skill_name),
+        })
+    } else {
+        panic!("No package data");
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new()
+        .route("/api/v1/skills/upload", post(upload_skill));
+
+    axum::serve(tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap(), app)
+        .await
+        .unwrap();
+}
+```
