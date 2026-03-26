@@ -55,7 +55,7 @@ cargo run --bin borgclaw -- init --component channel --chapter signal --action d
 
 Available components:
 - `channel` - telegram, signal, webhook, websocket
-- `sandbox` - wasm, docker
+- `sandbox` - wasm
 - `memory` - sqlite, vector
 - `provider` - openai, anthropic, google, ollama
 

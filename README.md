@@ -128,9 +128,43 @@ cargo run --bin borgclaw -- init
 ```bash
 ./scripts/doctor.sh    # Verify all components
 cargo run --bin borgclaw -- self-test   # Exit 0 on pass, 1 on failure
-cargo run --bin borgclaw -- schedules list   # Inspect persisted scheduled tasks
-cargo run --bin borgclaw -- schedules show <job-id>   # Inspect one persisted task in detail
-cargo run --bin borgclaw -- backup export ./.local/data/backup.json   # Snapshot persisted runtime state
+cargo run --bin borgclaw -- runtime     # Show comprehensive runtime status
+```
+
+### Managing Scheduled Tasks
+
+```bash
+cargo run --bin borgclaw -- schedules list              # List all scheduled tasks
+cargo run --bin borgclaw -- schedules show <job-id>     # Show task details
+cargo run --bin borgclaw -- schedules create --name "backup" --trigger "cron:0 2 * * *" --action "message:backup"
+cargo run --bin borgclaw -- schedules pause <job-id>    # Pause a task
+cargo run --bin borgclaw -- schedules resume <job-id>   # Resume a paused task
+```
+
+### Managing Heartbeat Tasks
+
+```bash
+cargo run --bin borgclaw -- heartbeat list              # List all heartbeat tasks
+cargo run --bin borgclaw -- heartbeat show <id>         # Show task details
+cargo run --bin borgclaw -- heartbeat enable <id>       # Enable a task
+cargo run --bin borgclaw -- heartbeat disable <id>      # Disable a task
+```
+
+### Managing Secrets
+
+```bash
+cargo run --bin borgclaw -- secrets list                # List stored secrets
+cargo run --bin borgclaw -- secrets set MY_API_KEY      # Store a secret
+cargo run --bin borgclaw -- secrets check MY_API_KEY    # Verify secret exists
+cargo run --bin borgclaw -- secrets delete MY_API_KEY   # Remove a secret
+```
+
+### Backup and Recovery
+
+```bash
+cargo run --bin borgclaw -- backup export ./backup.json              # Export runtime state
+cargo run --bin borgclaw -- backup import ./backup.json --force      # Import state
+cargo run --bin borgclaw -- backup verify ./backup.json              # Verify backup
 ```
 
 ## Configuration
