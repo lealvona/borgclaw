@@ -183,6 +183,24 @@ enum HeartbeatAction {
     List,
     /// Show persisted details for one heartbeat task
     Show { id: String },
+    /// Create a new heartbeat task
+    Create {
+        /// Task name
+        name: String,
+        /// Cron schedule expression
+        schedule: String,
+        /// Optional description
+        #[arg(short, long)]
+        description: Option<String>,
+        /// Maximum retry attempts
+        #[arg(long, default_value = "0")]
+        retries: u32,
+        /// Retry delay in seconds
+        #[arg(long, default_value = "60")]
+        retry_delay: u64,
+    },
+    /// Delete a heartbeat task
+    Delete { id: String },
     /// Enable a heartbeat task
     Enable { id: String },
     /// Disable a heartbeat task
@@ -866,6 +884,41 @@ fn heartbeat(config: AppConfig, action: HeartbeatAction) {
                     }
                 }
                 Err(err) => println!("Could not read {}: {}", path.display(), err),
+            }
+        }
+        HeartbeatAction::Create {
+            name,
+            schedule,
+            description,
+            retries,
+            retry_delay,
+        } => {
+            println!("Creating heartbeat task");
+            println!("=======================");
+            // Validate cron schedule
+            if schedule.parse::<cron::Schedule>().is_err() {
+                println!("Invalid cron schedule: '{}'", schedule);
+                return;
+            }
+            match create_heartbeat_task(
+                &path,
+                &name,
+                &schedule,
+                description.as_deref().unwrap_or(""),
+                retries,
+                retry_delay,
+            ) {
+                Ok(id) => println!("Created heartbeat task '{}' ({})", name, id),
+                Err(err) => println!("Failed to create heartbeat task: {}", err),
+            }
+        }
+        HeartbeatAction::Delete { id } => {
+            println!("Deleting heartbeat task");
+            println!("=======================");
+            match delete_heartbeat_task(&path, &id) {
+                Ok(true) => println!("Deleted heartbeat task '{}'", id),
+                Ok(false) => println!("No heartbeat task '{}' found", id),
+                Err(err) => println!("Failed to delete heartbeat task: {}", err),
             }
         }
         HeartbeatAction::Enable { id } => {
@@ -2081,6 +2134,14 @@ fn heartbeat_list_lines(path: &std::path::Path) -> Result<Vec<String>, String> {
             .get("schedule")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
+        let run_count = task
+            .get("run_count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let next_run = task
+            .get("next_run")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
         let dead_lettered = task.get("dead_lettered_at").and_then(|v| v.as_str());
         let status = if dead_lettered.is_some() {
             "dead-lettered"
@@ -2090,8 +2151,8 @@ fn heartbeat_list_lines(path: &std::path::Path) -> Result<Vec<String>, String> {
             "disabled"
         };
         lines.push(format!(
-            "{} [{}] schedule={} {}",
-            name, id, schedule, status
+            "{} [{}] schedule={} runs={} next={} {}",
+            name, id, schedule, run_count, next_run, status
         ));
     }
 
@@ -2144,11 +2205,127 @@ fn heartbeat_detail_lines(path: &std::path::Path, id: &str) -> Result<Vec<String
         lines.push(format!("run_count: {}", run_count));
     }
 
+    if let Some(max_retries) = task.get("max_retries").and_then(|v| v.as_u64()) {
+        let retry_count = task.get("retry_count").and_then(|v| v.as_u64()).unwrap_or(0);
+        let retry_delay = task
+            .get("retry_delay_seconds")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(60);
+        lines.push(format!(
+            "retries: {}/{} (delay: {}s)",
+            retry_count, max_retries, retry_delay
+        ));
+    }
+
     if let Some(dead_lettered) = task.get("dead_lettered_at").and_then(|v| v.as_str()) {
         lines.push(format!("dead_lettered_at: {}", dead_lettered));
     }
 
+    if let Some(description) = task.get("description").and_then(|v| v.as_str()) {
+        if !description.is_empty() {
+            lines.push(format!("description: {}", description));
+        }
+    }
+
+    if let Some(last_result) = task.get("last_result") {
+        if !last_result.is_null() {
+            let success = last_result
+                .get("success")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let message = last_result
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            lines.push(format!(
+                "last_result: {} - {}",
+                if success { "ok" } else { "failed" },
+                message
+            ));
+        }
+    }
+
+    if let Some(metadata) = task.get("metadata").and_then(|v| v.as_object()) {
+        if !metadata.is_empty() {
+            lines.push("metadata:".to_string());
+            for (k, v) in metadata {
+                lines.push(format!("  {}: {}", k, v));
+            }
+        }
+    }
+
     Ok(lines)
+}
+
+fn create_heartbeat_task(
+    path: &std::path::Path,
+    name: &str,
+    schedule: &str,
+    description: &str,
+    max_retries: u32,
+    retry_delay: u64,
+) -> Result<String, String> {
+    let mut tasks: std::collections::HashMap<String, serde_json::Value> = if path.exists() {
+        let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&contents).map_err(|e| e.to_string())?
+    } else {
+        std::collections::HashMap::new()
+    };
+
+    let id = uuid::Uuid::new_v4().to_string();
+
+    // Compute next_run from cron schedule
+    let next_run = schedule
+        .parse::<cron::Schedule>()
+        .ok()
+        .and_then(|s| s.upcoming(chrono::Utc).next())
+        .map(|dt| dt.to_rfc3339());
+
+    let task = serde_json::json!({
+        "id": id,
+        "name": name,
+        "description": description,
+        "schedule": schedule,
+        "enabled": true,
+        "last_run": null,
+        "next_run": next_run,
+        "run_count": 0,
+        "max_retries": max_retries,
+        "retry_count": 0,
+        "retry_delay_seconds": retry_delay,
+        "dead_lettered_at": null,
+        "last_result": null,
+        "metadata": {}
+    });
+
+    tasks.insert(id.clone(), task);
+
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let serialized = serde_json::to_string_pretty(&tasks).map_err(|e| e.to_string())?;
+    std::fs::write(path, serialized).map_err(|e| e.to_string())?;
+
+    Ok(id)
+}
+
+fn delete_heartbeat_task(path: &std::path::Path, id: &str) -> Result<bool, String> {
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut tasks: std::collections::HashMap<String, serde_json::Value> =
+        serde_json::from_str(&contents).map_err(|e| e.to_string())?;
+
+    if tasks.remove(id).is_none() {
+        return Ok(false);
+    }
+
+    let serialized = serde_json::to_string_pretty(&tasks).map_err(|e| e.to_string())?;
+    std::fs::write(path, serialized).map_err(|e| e.to_string())?;
+
+    Ok(true)
 }
 
 fn update_heartbeat_task_status(

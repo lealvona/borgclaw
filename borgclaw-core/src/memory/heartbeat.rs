@@ -25,6 +25,8 @@ pub struct HeartbeatEngine {
 pub struct HeartbeatTask {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub description: String,
     pub schedule: String,
     pub enabled: bool,
     pub last_run: Option<DateTime<Utc>>,
@@ -69,6 +71,7 @@ impl HeartbeatTask {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             name: name.into(),
+            description: String::new(),
             schedule: schedule.into(),
             enabled: true,
             last_run: None,
@@ -98,6 +101,11 @@ impl HeartbeatTask {
 
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
+        self
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
         self
     }
 
@@ -304,6 +312,49 @@ impl HeartbeatEngine {
             .filter(|t| t.enabled && t.next_run.map(|nr| nr <= now).unwrap_or(false))
             .cloned()
             .collect()
+    }
+
+    /// List all dead-lettered tasks
+    pub async fn list_dead_lettered(&self) -> Vec<HeartbeatTask> {
+        let tasks = self.tasks.read().await;
+        tasks
+            .values()
+            .filter(|t| t.dead_lettered_at.is_some())
+            .cloned()
+            .collect()
+    }
+
+    /// Reset a dead-lettered task, clearing dead-letter state and retry count
+    pub async fn reset_dead_letter(&self, id: &str) -> bool {
+        let mut tasks = self.tasks.write().await;
+        if let Some(task) = tasks.get_mut(id) {
+            if task.dead_lettered_at.is_some() {
+                task.dead_lettered_at = None;
+                task.retry_count = 0;
+                task.enabled = true;
+                task.calculate_next_run();
+                self.persist_state(&tasks);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Update a task's cron schedule
+    pub async fn update_schedule(&self, id: &str, schedule: impl Into<String>) -> bool {
+        let new_schedule = schedule.into();
+        // Validate schedule before applying
+        if new_schedule.parse::<Schedule>().is_err() {
+            return false;
+        }
+        let mut tasks = self.tasks.write().await;
+        if let Some(task) = tasks.get_mut(id) {
+            task.schedule = new_schedule;
+            task.calculate_next_run();
+            self.persist_state(&tasks);
+            return true;
+        }
+        false
     }
 
     pub async fn start(&self) -> Result<(), String> {
