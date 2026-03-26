@@ -13,7 +13,7 @@ use crate::skills::{
 };
 
 /// Main application configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
     /// Agent configuration
@@ -36,22 +36,6 @@ pub struct AppConfig {
     pub registrar: RegistrarConfig,
 }
 
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            agent: AgentConfig::default(),
-            channels: HashMap::new(),
-            security: SecurityConfig::default(),
-            memory: MemoryConfig::default(),
-            heartbeat: HeartbeatConfig::default(),
-            scheduler: SchedulerConfig::default(),
-            skills: SkillsConfig::default(),
-            mcp: McpConfig::default(),
-            registrar: RegistrarConfig::default(),
-        }
-    }
-}
-
 impl AppConfig {
     pub fn validate(&self) -> Result<(), config::ValidationError> {
         let mut error = config::ValidationError::default();
@@ -65,9 +49,7 @@ impl AppConfig {
                     .mcp_servers
                     .push(format!("{}: invalid URL '{}'", name, url));
             } else {
-                error
-                    .mcp_servers
-                    .push(format!("{}: missing URL", name));
+                error.mcp_servers.push(format!("{}: missing URL", name));
             }
         }
 
@@ -750,7 +732,7 @@ impl UrlShortenerSkillConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DocumentedYourlsConfig {
     #[serde(alias = "api_url")]
@@ -758,17 +740,6 @@ pub struct DocumentedYourlsConfig {
     pub signature: String,
     pub username: String,
     pub password: String,
-}
-
-impl Default for DocumentedYourlsConfig {
-    fn default() -> Self {
-        Self {
-            base_url: String::new(),
-            signature: String::new(),
-            username: String::new(),
-            password: String::new(),
-        }
-    }
 }
 
 impl DocumentedYourlsConfig {

@@ -193,7 +193,7 @@ impl SimpleAgent {
     fn system_prompt(&self) -> Option<String> {
         let path = self.config.soul_path.as_ref()?;
         let base_prompt = std::fs::read_to_string(path).ok()?;
-        
+
         // Inject current date/time to prevent stale session errors
         // This is dynamic and not cached - critical for accurate time-based responses
         let now = chrono::Local::now();
@@ -201,7 +201,7 @@ impl SimpleAgent {
         let date_str = now.format("%Y-%m-%d").to_string();
         let time_str = now.format("%H:%M:%S").to_string();
         let timezone_str = now.format("%Z").to_string();
-        
+
         let injected = format!(
             "{}\n\n[SYSTEM CONTEXT - CURRENT TIME]\nCurrent date and time: {}\nDate: {}\nTime: {}\nTimezone: {}\n[END SYSTEM CONTEXT]",
             base_prompt,
@@ -210,7 +210,7 @@ impl SimpleAgent {
             time_str,
             timezone_str
         );
-        
+
         Some(injected)
     }
 
@@ -261,7 +261,6 @@ impl SimpleAgent {
         history: &str,
         pass: u32,
     ) -> Result<String, AgentError> {
-
         let system_prompt = "You are a summarizing assistant. You take a long conversation and summarize it. \
             Pay special attention to the details. Names, places, times and recurring objects or themes are important. \
             Pay attention to verbs and actions. Lists are important. Summaries you create will be used to retain \
@@ -294,7 +293,10 @@ impl SimpleAgent {
             messages,
         };
 
-        provider.complete(&request).await.map_err(|e| AgentError::ProviderError(e.to_string()))
+        provider
+            .complete(&request)
+            .await
+            .map_err(|e| AgentError::ProviderError(e.to_string()))
     }
 }
 
@@ -405,7 +407,13 @@ impl Agent for SimpleAgent {
                         } else {
                             let history = session.get_history_for_summary();
                             let pass = session.compaction_pass;
-                            (true, history, pass, keep, memory_config.session_keep_important)
+                            (
+                                true,
+                                history,
+                                pass,
+                                keep,
+                                memory_config.session_keep_important,
+                            )
                         }
                     }
                 }
@@ -414,7 +422,8 @@ impl Agent for SimpleAgent {
             if needs_compaction {
                 let summary = match self.ensure_provider().await {
                     Ok(provider) => {
-                        match Self::generate_session_summary(provider, &model, &history, pass).await {
+                        match Self::generate_session_summary(provider, &model, &history, pass).await
+                        {
                             Ok(s) => s,
                             Err(_) => {
                                 format!("{} prior messages summarized.", history.len() / 4)
@@ -501,7 +510,7 @@ mod tests {
     use super::*;
     use crate::agent::session::Session;
     use crate::agent::{Message, ToolCall};
-    use crate::config::{MemoryConfig, SkillsConfig, McpConfig, SecurityConfig};
+    use crate::config::{McpConfig, MemoryConfig, SecurityConfig, SkillsConfig};
     use std::path::PathBuf;
 
     #[test]
@@ -513,11 +522,7 @@ mod tests {
             session.add_message(Message::assistant(format!("assistant {}", index)));
         }
 
-        session.apply_compaction(
-            "test summary of old conversation".to_string(),
-            4,
-            false,
-        );
+        session.apply_compaction("test summary of old conversation".to_string(), 4, false);
 
         let messages = session.messages().iter().collect::<Vec<_>>();
         assert!(messages
@@ -546,11 +551,7 @@ mod tests {
             session.add_message(Message::assistant(format!("assistant {}", index)));
         }
 
-        session.apply_compaction(
-            "test summary".to_string(),
-            2,
-            true,
-        );
+        session.apply_compaction("test summary".to_string(), 2, true);
 
         let messages = session.messages().iter().collect::<Vec<_>>();
         assert!(messages.iter().any(|msg| msg.content == "tool result"));
@@ -600,7 +601,7 @@ mod tests {
     #[test]
     fn system_prompt_injects_current_datetime() {
         use crate::config::AgentConfig;
-        use crate::config::{MemoryConfig, SkillsConfig, McpConfig, SecurityConfig};
+        use crate::config::{McpConfig, MemoryConfig, SecurityConfig, SkillsConfig};
 
         // Create a temporary soul file
         let temp_dir = std::env::temp_dir().join(format!("borgclaw_test_{}", uuid::Uuid::new_v4()));
@@ -647,7 +648,7 @@ mod tests {
     #[test]
     fn system_prompt_returns_none_without_soul_path() {
         use crate::config::AgentConfig;
-        use crate::config::{MemoryConfig, SkillsConfig, McpConfig, SecurityConfig};
+        use crate::config::{McpConfig, MemoryConfig, SecurityConfig, SkillsConfig};
 
         let config = AgentConfig {
             soul_path: None,
@@ -669,7 +670,7 @@ mod tests {
     #[test]
     fn system_prompt_returns_none_for_missing_file() {
         use crate::config::AgentConfig;
-        use crate::config::{MemoryConfig, SkillsConfig, McpConfig, SecurityConfig};
+        use crate::config::{McpConfig, MemoryConfig, SecurityConfig, SkillsConfig};
 
         let config = AgentConfig {
             soul_path: Some(PathBuf::from("/nonexistent/path/test.soul")),
@@ -691,7 +692,7 @@ mod tests {
     #[test]
     fn system_prompt_datetime_is_not_cached() {
         use crate::config::AgentConfig;
-        use crate::config::{MemoryConfig, SkillsConfig, McpConfig, SecurityConfig};
+        use crate::config::{McpConfig, MemoryConfig, SecurityConfig, SkillsConfig};
 
         // Create a temporary soul file
         let temp_dir = std::env::temp_dir().join(format!("borgclaw_test_{}", uuid::Uuid::new_v4()));

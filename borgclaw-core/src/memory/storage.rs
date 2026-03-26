@@ -170,10 +170,8 @@ impl Memory for SqliteMemory {
 
         if self.hybrid_search {
             if let Ok(embedding) = self.embedding_provider.embed(&entry.content).await {
-                let embedding_blob: Vec<u8> = embedding
-                    .iter()
-                    .flat_map(|f| f.to_le_bytes())
-                    .collect();
+                let embedding_blob: Vec<u8> =
+                    embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
 
                 sqlx::query(
                     r#"
@@ -293,7 +291,8 @@ impl SqliteMemory {
         let fts_results = self.recall_fts(query).await?;
         let semantic_results = self.recall_semantic(query, &query_embedding).await?;
 
-        let mut combined: std::collections::HashMap<String, MemoryResult> = std::collections::HashMap::new();
+        let mut combined: std::collections::HashMap<String, MemoryResult> =
+            std::collections::HashMap::new();
 
         for result in fts_results {
             combined.insert(result.entry.id.clone(), result);
@@ -308,7 +307,11 @@ impl SqliteMemory {
         }
 
         let mut results: Vec<_> = combined.into_values().collect();
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(query.limit);
 
         Ok(results)
@@ -450,13 +453,12 @@ impl SqliteMemory {
 
         let mut results = Vec::new();
         for (memory_id,) in rows {
-            let embedding_row: Option<(Vec<u8>,)> = sqlx::query_as(
-                r#"SELECT embedding FROM memory_embeddings WHERE memory_id = ?"#,
-            )
-            .bind(&memory_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| MemoryError::QueryError(e.to_string()))?;
+            let embedding_row: Option<(Vec<u8>,)> =
+                sqlx::query_as(r#"SELECT embedding FROM memory_embeddings WHERE memory_id = ?"#)
+                    .bind(&memory_id)
+                    .fetch_optional(pool)
+                    .await
+                    .map_err(|e| MemoryError::QueryError(e.to_string()))?;
 
             if let Some((embedding_blob,)) = embedding_row {
                 let embedding: Vec<f32> = embedding_blob
@@ -476,7 +478,11 @@ impl SqliteMemory {
             }
         }
 
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(query.limit);
 
         Ok(results)
@@ -662,7 +668,9 @@ mod tests {
         #[async_trait]
         impl EmbeddingProvider for FailingEmbeddingProvider {
             async fn embed(&self, _text: &str) -> Result<Vec<f32>, MemoryError> {
-                Err(MemoryError::EmbeddingError("service unavailable".to_string()))
+                Err(MemoryError::EmbeddingError(
+                    "service unavailable".to_string(),
+                ))
             }
         }
 

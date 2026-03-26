@@ -76,8 +76,8 @@ impl ToolRetryPolicy {
             return 0;
         }
 
-        let base_delay = self.initial_delay_ms as f64
-            * self.backoff_multiplier.powi(attempt as i32 - 1);
+        let base_delay =
+            self.initial_delay_ms as f64 * self.backoff_multiplier.powi(attempt as i32 - 1);
         let capped_delay = base_delay.min(self.max_delay_ms as f64);
 
         // Add jitter
@@ -141,12 +141,12 @@ impl Tool {
     }
 
     /// Execute a function with retry logic according to this tool's policy
-    pub async fn execute_with_retry<F, Fut>(&self, mut operation: F) -> ToolResult
+    pub async fn execute_with_retry<F, Fut>(&self, operation: F) -> ToolResult
     where
         F: FnMut() -> Fut,
         Fut: std::future::Future<Output = ToolResult>,
     {
-        execute_with_retry(&self.retry_policy, &self.name, move || operation()).await
+        execute_with_retry(&self.retry_policy, &self.name, operation).await
     }
 }
 
@@ -281,7 +281,9 @@ impl ToolResult {
         // Check error type or message for transient errors
         if let Some(ref error_type) = self.error_type {
             match error_type.as_str() {
-                "NetworkError" | "TimeoutError" | "RateLimitError" | "TransientError" => return true,
+                "NetworkError" | "TimeoutError" | "RateLimitError" | "TransientError" => {
+                    return true
+                }
                 _ => {}
             }
         }
@@ -302,7 +304,9 @@ impl ToolResult {
         ];
 
         let output_lower = self.output.to_lowercase();
-        retryable_patterns.iter().any(|pattern| output_lower.contains(pattern))
+        retryable_patterns
+            .iter()
+            .any(|pattern| output_lower.contains(pattern))
     }
 }
 
@@ -1102,7 +1106,10 @@ async fn list_directory(
     ToolResult::ok(names.join("\n"))
 }
 
-async fn fetch_url(arguments: &HashMap<String, serde_json::Value>, runtime: &ToolRuntime) -> ToolResult {
+async fn fetch_url(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
     let url = match get_required_string(arguments, "url") {
         Ok(value) => value,
         Err(err) => return ToolResult::err(err),
@@ -2494,7 +2501,10 @@ async fn google_share_file(
     let allow_discovery = get_bool(arguments, "allow_discovery").unwrap_or(false);
 
     let drive = crate::skills::DriveClient::new(client.auth());
-    match drive.share_file(&file_id, email.as_deref(), &role, allow_discovery).await {
+    match drive
+        .share_file(&file_id, email.as_deref(), &role, allow_discovery)
+        .await
+    {
         Ok(perm) => {
             let msg = if let Some(email) = email {
                 format!("shared with {} as {}", email, perm.role)
@@ -2538,7 +2548,9 @@ async fn google_remove_permission(
     arguments: &HashMap<String, serde_json::Value>,
     runtime: &ToolRuntime,
 ) -> ToolResult {
-    if let Some(result) = require_tool_approval("google_remove_permission", arguments, runtime).await {
+    if let Some(result) =
+        require_tool_approval("google_remove_permission", arguments, runtime).await
+    {
         return result;
     }
 
@@ -2575,7 +2587,10 @@ async fn google_move_file(
     let old_folder_id = get_string(arguments, "old_folder_id");
 
     let drive = crate::skills::DriveClient::new(client.auth());
-    match drive.move_file(&file_id, &new_folder_id, old_folder_id.as_deref()).await {
+    match drive
+        .move_file(&file_id, &new_folder_id, old_folder_id.as_deref())
+        .await
+    {
         Ok(file) => ToolResult::ok(format!("moved {} to {}", file.name, new_folder_id)),
         Err(err) => ToolResult::err(err.to_string()),
     }
@@ -2679,7 +2694,9 @@ async fn browser_navigate(
 
     // Block dangerous URL schemes
     if url.starts_with("file://") || url.starts_with("data://") || url.starts_with("javascript:") {
-        return ToolResult::err("Browser cannot navigate to file://, data://, or javascript: URLs".to_string());
+        return ToolResult::err(
+            "Browser cannot navigate to file://, data://, or javascript: URLs".to_string(),
+        );
     }
 
     with_browser(runtime, |browser| async move {
@@ -2835,17 +2852,13 @@ async fn browser_screenshot(
     arguments: &HashMap<String, serde_json::Value>,
     runtime: &ToolRuntime,
 ) -> ToolResult {
-    let full_page = arguments
+    let _full_page = arguments
         .get("full_page")
         .and_then(|value| value.as_bool())
         .unwrap_or(true);
 
     with_browser(runtime, move |browser| async move {
-        let bytes = if full_page {
-            browser.screenshot().await?
-        } else {
-            browser.screenshot().await?
-        };
+        let bytes = browser.screenshot().await?;
         Ok(ToolResult::ok(format!("captured {} bytes", bytes.len()))
             .with_metadata("bytes", bytes.len().to_string()))
     })
@@ -6080,7 +6093,8 @@ for line in sys.stdin:
                     call_count.fetch_add(1, Ordering::SeqCst);
                     ToolResult::ok("success")
                 }
-            }).await
+            })
+            .await
         };
 
         assert!(result.success);
@@ -6143,17 +6157,13 @@ for line in sys.stdin:
 
         let result = {
             let call_count = call_count.clone();
-            execute_with_retry(
-                &policy,
-                "test_tool",
-                move || {
-                    let call_count = call_count.clone();
-                    async move {
-                        call_count.fetch_add(1, Ordering::SeqCst);
-                        ToolResult::err("timeout").with_metadata("error_type", "TimeoutError")
-                    }
-                },
-            )
+            execute_with_retry(&policy, "test_tool", move || {
+                let call_count = call_count.clone();
+                async move {
+                    call_count.fetch_add(1, Ordering::SeqCst);
+                    ToolResult::err("timeout").with_metadata("error_type", "TimeoutError")
+                }
+            })
             .await
         };
 
@@ -6172,31 +6182,37 @@ for line in sys.stdin:
 
         let result = {
             let call_count = call_count.clone();
-            execute_with_retry(
-                &policy, "test_tool", move || {
+            execute_with_retry(&policy, "test_tool", move || {
                 let call_count = call_count.clone();
                 async move {
                     call_count.fetch_add(1, Ordering::SeqCst);
                     ToolResult::err("validation failed") // Not retryable
                 }
-            }).await
+            })
+            .await
         };
 
         assert!(!result.success);
         assert_eq!(call_count.load(Ordering::SeqCst), 1); // No retries
-        assert_eq!(result.metadata.get("retry_skipped"), Some(&"error_not_retryable".to_string()));
+        assert_eq!(
+            result.metadata.get("retry_skipped"),
+            Some(&"error_not_retryable".to_string())
+        );
     }
 
     #[test]
     fn tool_result_detects_retryable_errors() {
         // Retryable errors
-        let timeout_result = ToolResult::err("connection timeout").with_metadata("error_type", "TimeoutError");
+        let timeout_result =
+            ToolResult::err("connection timeout").with_metadata("error_type", "TimeoutError");
         assert!(timeout_result.is_retryable());
 
-        let network_result = ToolResult::err("network error").with_metadata("error_type", "NetworkError");
+        let network_result =
+            ToolResult::err("network error").with_metadata("error_type", "NetworkError");
         assert!(network_result.is_retryable());
 
-        let rate_limit_result = ToolResult::err("rate limited").with_metadata("error_type", "RateLimitError");
+        let rate_limit_result =
+            ToolResult::err("rate limited").with_metadata("error_type", "RateLimitError");
         assert!(rate_limit_result.is_retryable());
 
         let http_503 = ToolResult::err("Service Unavailable: 503");
@@ -6218,14 +6234,13 @@ for line in sys.stdin:
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
 
-        let tool = Tool::new("test_tool", "Test tool")
-            .with_retry_policy(ToolRetryPolicy {
-                max_retries: 2,
-                initial_delay_ms: 10,
-                max_delay_ms: 100,
-                backoff_multiplier: 2.0,
-                jitter_factor: 0.0,
-            });
+        let tool = Tool::new("test_tool", "Test tool").with_retry_policy(ToolRetryPolicy {
+            max_retries: 2,
+            initial_delay_ms: 10,
+            max_delay_ms: 100,
+            backoff_multiplier: 2.0,
+            jitter_factor: 0.0,
+        });
 
         let call_count = Arc::new(AtomicUsize::new(0));
         let result = {
@@ -6240,7 +6255,8 @@ for line in sys.stdin:
                         ToolResult::ok("success")
                     }
                 }
-            }).await
+            })
+            .await
         };
 
         assert!(result.success);
@@ -7204,27 +7220,28 @@ pub fn builtin_tools() -> Vec<Tool> {
             ))
             .with_approval(true)
             .with_tags(vec!["google".to_string(), "integration".to_string()]),
-        Tool::new("google_create_folder", "Create a new folder in Google Drive")
-            .with_schema(ToolSchema::object(
-                [
-                    ("name".to_string(), string_property("Folder name")),
-                    (
-                        "parent_id".to_string(),
-                        string_property("Optional parent folder ID"),
-                    ),
-                ]
-                .into(),
-                vec!["name".to_string()],
-            ))
-            .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new(
+            "google_create_folder",
+            "Create a new folder in Google Drive",
+        )
+        .with_schema(ToolSchema::object(
+            [
+                ("name".to_string(), string_property("Folder name")),
+                (
+                    "parent_id".to_string(),
+                    string_property("Optional parent folder ID"),
+                ),
+            ]
+            .into(),
+            vec!["name".to_string()],
+        ))
+        .with_tags(vec!["google".to_string(), "integration".to_string()]),
         Tool::new("google_list_folders", "List folders in Google Drive")
             .with_schema(ToolSchema::object(
-                [
-                    (
-                        "parent_id".to_string(),
-                        string_property("Optional parent folder ID"),
-                    ),
-                ]
+                [(
+                    "parent_id".to_string(),
+                    string_property("Optional parent folder ID"),
+                )]
                 .into(),
                 Vec::new(),
             ))
@@ -7256,43 +7273,52 @@ pub fn builtin_tools() -> Vec<Tool> {
             ))
             .with_approval(true)
             .with_tags(vec!["google".to_string(), "integration".to_string()]),
-        Tool::new("google_list_permissions", "List permissions for a Google Drive file")
-            .with_schema(ToolSchema::object(
-                [("file_id".to_string(), string_property("File ID"))].into(),
-                vec!["file_id".to_string()],
-            ))
-            .with_tags(vec!["google".to_string(), "integration".to_string()]),
-        Tool::new("google_remove_permission", "Remove a permission from a Google Drive file")
-            .with_schema(ToolSchema::object(
-                [
-                    ("file_id".to_string(), string_property("File ID")),
-                    (
-                        "permission_id".to_string(),
-                        string_property("Permission ID to remove"),
-                    ),
-                ]
-                .into(),
-                vec!["file_id".to_string(), "permission_id".to_string()],
-            ))
-            .with_approval(true)
-            .with_tags(vec!["google".to_string(), "integration".to_string()]),
-        Tool::new("google_move_file", "Move a file to a different folder in Google Drive")
-            .with_schema(ToolSchema::object(
-                [
-                    ("file_id".to_string(), string_property("File ID to move")),
-                    (
-                        "new_folder_id".to_string(),
-                        string_property("Destination folder ID"),
-                    ),
-                    (
-                        "old_folder_id".to_string(),
-                        string_property("Optional source folder ID to remove from"),
-                    ),
-                ]
-                .into(),
-                vec!["file_id".to_string(), "new_folder_id".to_string()],
-            ))
-            .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new(
+            "google_list_permissions",
+            "List permissions for a Google Drive file",
+        )
+        .with_schema(ToolSchema::object(
+            [("file_id".to_string(), string_property("File ID"))].into(),
+            vec!["file_id".to_string()],
+        ))
+        .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new(
+            "google_remove_permission",
+            "Remove a permission from a Google Drive file",
+        )
+        .with_schema(ToolSchema::object(
+            [
+                ("file_id".to_string(), string_property("File ID")),
+                (
+                    "permission_id".to_string(),
+                    string_property("Permission ID to remove"),
+                ),
+            ]
+            .into(),
+            vec!["file_id".to_string(), "permission_id".to_string()],
+        ))
+        .with_approval(true)
+        .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new(
+            "google_move_file",
+            "Move a file to a different folder in Google Drive",
+        )
+        .with_schema(ToolSchema::object(
+            [
+                ("file_id".to_string(), string_property("File ID to move")),
+                (
+                    "new_folder_id".to_string(),
+                    string_property("Destination folder ID"),
+                ),
+                (
+                    "old_folder_id".to_string(),
+                    string_property("Optional source folder ID to remove from"),
+                ),
+            ]
+            .into(),
+            vec!["file_id".to_string(), "new_folder_id".to_string()],
+        ))
+        .with_tags(vec!["google".to_string(), "integration".to_string()]),
         Tool::new("google_copy_file", "Copy a file in Google Drive")
             .with_schema(ToolSchema::object(
                 [
@@ -7322,12 +7348,15 @@ pub fn builtin_tools() -> Vec<Tool> {
             ))
             .with_approval(true)
             .with_tags(vec!["google".to_string(), "integration".to_string()]),
-        Tool::new("google_get_file_details", "Get detailed information about a Google Drive file")
-            .with_schema(ToolSchema::object(
-                [("file_id".to_string(), string_property("File ID"))].into(),
-                vec!["file_id".to_string()],
-            ))
-            .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new(
+            "google_get_file_details",
+            "Get detailed information about a Google Drive file",
+        )
+        .with_schema(ToolSchema::object(
+            [("file_id".to_string(), string_property("File ID"))].into(),
+            vec!["file_id".to_string()],
+        ))
+        .with_tags(vec!["google".to_string(), "integration".to_string()]),
         Tool::new("browser_navigate", "Navigate the browser to a URL")
             .with_schema(ToolSchema::object(
                 [("url".to_string(), string_property("Target URL"))].into(),

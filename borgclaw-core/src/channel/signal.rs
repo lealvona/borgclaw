@@ -176,7 +176,7 @@ impl SignalChannel {
 
     /// Check if restart recovery state is available
     pub fn has_restart_state(&self) -> bool {
-        self.state_path.as_ref().map_or(false, |p| p.exists())
+        self.state_path.as_ref().is_some_and(|p| p.exists())
     }
 
     /// Get last timestamp for restart recovery

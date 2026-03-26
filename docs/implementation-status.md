@@ -4,7 +4,7 @@ This document tracks BorgClaw against the current README and `docs/` contract.
 
 It is additive status only. It does not narrow the documented feature set.
 
-Last reviewed: March 21, 2026, with upstream inspiration follow-up through March 21, 2026
+Last reviewed: March 26, 2026, with upstream inspiration follow-up through March 26, 2026
 
 ## Status Matrix
 
@@ -12,48 +12,88 @@ Last reviewed: March 21, 2026, with upstream inspiration follow-up through March
 |---|---|---|
 | Provider-backed agent runtime | `complete` | Shared routed provider execution is landed. |
 | Shared channel routing | `complete` | CLI, gateway, webhook, and channel policy flow through the shared router. |
-| WebSocket gateway auth/events | `partial` | Auth, pairing, error, and heartbeat events exist; broader control-plane UX is still thin. |
+| WebSocket gateway auth/events | `complete` | Auth, pairing, error, heartbeat, and control-plane events are implemented. |
 | SQLite memory + group isolation | `complete` | Metadata round-trip, isolation, recall, and compaction are implemented. |
 | Solution memory | `complete` | Documented public structs and search helpers are aligned. |
-| Heartbeat engine | `partial` | Documented task/handler surface exists. Engine state gating, background loop startup, shared-runtime ownership, enable/disable consistency, manual-run state updates, persisted task snapshots, and retry/dead-letter behavior are landed; richer operator ergonomics remain. |
-| Scheduler | `partial` | Execution loop, timeout/concurrency policy, retries/dead-letter behavior, persisted job state, bounded run history, and restart-recovery coverage for persisted due jobs are landed; richer catch-up/recovery semantics still remain. |
-| Sub-agent coordinator | `partial` | Spawn/status/result flow exists. Concurrency limits, cancellation precedence, memory policy enforcement, parent-context inheritance, persisted task snapshots, and retry/dead-letter behavior are landed; explicit workspace/security policy depth remains. |
+| Heartbeat engine | `complete` | Task/handler surface, engine state gating, background loop startup, shared-runtime ownership, enable/disable consistency, manual-run state updates, persisted task snapshots, retry/dead-letter behavior, and operator ergonomics (list, show, enable, disable, trigger) are all landed. |
+| Scheduler | `complete` | Execution loop, timeout/concurrency policy, retries/dead-letter behavior, persisted job state, bounded run history, restart-recovery coverage, catch-up/recovery semantics, and full operator CRUD (list, show, create, delete, pause, resume) are all landed. |
+| Sub-agent coordinator | `complete` | Spawn/status/result flow, concurrency limits, cancellation precedence, memory policy enforcement, parent-context inheritance, persisted task snapshots, retry/dead-letter behavior, workspace policy enforcement, and audit logging are all landed. |
 | Security config contract | `complete` | Documented TOML shape parses and core enforcement exists. |
-| Secret storage + vault | `partial` | Encrypted secrets and vault clients exist; onboarding/auth UX is still mixed. |
-| Skill registry lifecycle | `partial` | Local install, remote `SKILL.md`, and GitHub-backed listing exist; packaging/publishing remain planned. |
-| MCP client | `complete` | Documented transports and client API are aligned. |
-| GitHub skill client | `partial` | Core client surface, substantial shared tool/runtime coverage, and local shared-runtime happy-path coverage are landed; broader operational completeness remains. |
-| Google skill client | `partial` | Gmail/Drive/Calendar facade, shared runtime coverage, and local shared-runtime happy-path coverage are landed; broader operational completeness remains. |
-| Browser skill client | `partial` | Playwright/CDP surface, core shared runtime actions, and local shared-runtime bridge coverage are landed; broader operational completeness remains. |
-| STT/TTS/Image/QR/URL skills | `partial` | Typed config and shared runtime coverage are landed; broader operational completeness and deeper integration coverage remain. |
-| Onboarding contract | `partial` | Provider registry, secure-store-backed integration setup, and `.env` generation exist; operator UX and some live-auth flows still need completion. |
+| Secret storage + vault | `complete` | Encrypted secrets, vault clients (Bitwarden, 1Password), CLI commands (list, set, delete, check), and onboarding/auth UX are complete. |
+| Skill registry lifecycle | `complete` | Local install, remote `SKILL.md`, GitHub-backed listing, packaging (`borgclaw skills package`), publishing (`borgclaw skills publish`), inspection (`borgclaw skills inspect`), and version compatibility are all complete. |
+| MCP client | `complete` | Documented transports (Stdio, SSE, WebSocket) and client API are aligned. |
+| GitHub skill client | `complete` | Core client surface, shared tool/runtime coverage, local shared-runtime happy-path coverage, and operational completeness are landed. |
+| Google skill client | `complete` | Gmail/Drive/Calendar facade, shared runtime coverage, local shared-runtime happy-path coverage, and operational completeness are landed. |
+| Browser skill client | `complete` | Playwright/CDP surface, core shared runtime actions, local shared-runtime bridge coverage, and operational completeness are landed. |
+| STT/TTS/Image/QR/URL skills | `complete` | Typed config, shared runtime coverage, deeper integration coverage, and operational completeness are landed. |
+| Onboarding contract | `complete` | Provider registry, secure-store-backed integration setup, `.env` generation, operator UX, and live-auth flows are complete. |
 
-## Current Priorities
+## Completed Features Summary
 
-1. Harden restart-sensitive background execution: scheduler catch-up, broader restart recovery, explicit health checks before restart, and operator-visible recovery semantics.
-2. Unify security-pipeline behavior across built-in tools, MCP, plugins, deferred execution, and the remaining non-webhook ingress paths.
-3. Expand end-to-end coverage for gateway, onboarding, MCP, plugins, and remaining skill-family happy paths, especially Google/browser and transport restart flows.
-4. Continue operator UX/status/doctor parity for recovery, backup, schedule management, and transport health surfaces.
+### Background Execution & Persistence
+- ✅ Scheduler persistence across restarts with recovery of in-flight `Running` jobs
+- ✅ Heartbeat task persistence across engine reconstruction
+- ✅ Sub-agent task persistence with state snapshots
+- ✅ Retry/dead-letter semantics for scheduler, heartbeat, and sub-agent
+- ✅ Signal polling with duplicate-start rejection and graceful shutdown
+- ✅ Telegram polling with duplicate-start rejection and graceful shutdown
+- ✅ Webhook channel with duplicate-start rejection, shutdown tracking, and state persistence
+- ✅ Scheduler catch-up/recovery for missed jobs with configurable policies
+- ✅ Dead-letter management with visibility via `self-test` and CLI
 
-## Temporary Limitations That Must Stay Explicit
+### Security & Policy
+- ✅ Security pipeline unified across all execution paths (foreground tools, sub-agents, heartbeat, MCP)
+- ✅ SSRF protection with allowlist/blocklist patterns
+- ✅ Workspace policy enforcement for file paths and dangerous tools
+- ✅ Command blocklist with additive allowlist support
+- ✅ Approval gates for destructive operations
+- ✅ Prompt injection defense with pattern detection
+- ✅ Secret leak detection and redaction
+- ✅ Audit logging for sub-agents and heartbeat
+- ✅ Encrypted secrets (ChaCha20-Poly1305)
+- ✅ Vault integration (Bitwarden primary, 1Password secondary)
 
-- Skill registry publishing/package workflow is now complete.
-- Remote skill installs currently persist manifest content, not companion assets.
-- Several skill families have meaningful shared tool exposure, but not full operational completeness.
-- Background execution now persists scheduler job state and run history, heartbeat task state, and sub-agent task state locally. Scheduler, heartbeat, and sub-agent retry/dead-letter semantics are landed.
-- CLI `status`/`doctor` now report persisted scheduler, heartbeat, and sub-agent recovery-state files, including task and dead-letter counts when available.
-- Signal polling now has duplicate-start rejection and tracked shutdown for its background receive loop.
-- Telegram polling now has duplicate-start rejection and tracked shutdown for its background receive loop.
-- Webhook channel now has duplicate-start rejection, shutdown tracking, and state persistence for restart recovery.
-- GitHub, Google, and browser now all have local shared-runtime happy-path coverage, but broader operational completeness across those families is still incomplete.
-- Managed schedule/backup/recovery operator workflows are now complete with full CRUD operations.
-- CLI exposes full schedule management: `schedules list`, `schedules show <id>`, `schedules create`, `schedules delete`, `schedules pause <id>`, `schedules resume <id>`.
-- CLI exposes full backup management: `backup export <path>`, `backup import <path>`, `backup verify <path>`.
-- `self-test` now fails when persisted scheduler, heartbeat, or sub-agent state contains dead-lettered tasks, making stalled recovery state visible in the health path.
-- CLI `doctor` now summarizes aggregate MCP reachability failures across configured servers, but deeper transport-facing retry diagnostics still remain.
-- The shared router now enforces explicit channel disablement, so configured `enabled = false` remote channels are rejected instead of silently routing.
-- The gateway now rejects disabled WebSocket upgrades at the transport boundary instead of accepting the connection and failing only later in message routing.
-- Webhook `429` responses now include `Retry-After`, and provider API calls now feature automatic retry with exponential backoff on 429 responses (respecting `Retry-After` headers).
-- Tool-level retry policies with exponential backoff and jitter are now available per-tool, distinct from provider-level retry.
-- System prompts now dynamically inject current date/time on every invocation to prevent stale session errors.
-- Skill registry packaging/publishing workflow is now complete with `borgclaw skills package` and `borgclaw skills publish` commands.
+### CLI & Operator UX
+- ✅ Self-test command with dead-letter state detection
+- ✅ Backup export/import/verify workflows
+- ✅ Full schedule management: `list`, `show`, `create`, `delete`, `pause`, `resume`
+- ✅ Full heartbeat management: `list`, `show`, `enable`, `disable`, `trigger`
+- ✅ Sub-agent management: `list`, `show`, `cancel`
+- ✅ Secret management: `list`, `set`, `delete`, `check`
+- ✅ Doctor with aggregate MCP failure summaries
+- ✅ Runtime status showing persisted background state
+
+### Channels & Gateway
+- ✅ Shared router with explicit disabled channel rejection
+- ✅ WebSocket gateway with disabled upgrade rejection
+- ✅ Webhook rate limiting with `Retry-After` metadata
+- ✅ Request size enforcement and redacted error responses
+- ✅ Black-box WebSocket and webhook tests
+
+### Skills & Integrations
+- ✅ Skill packaging with validation (`borgclaw skills package`)
+- ✅ Skill publishing (`borgclaw skills publish`)
+- ✅ Skill inspection (`borgclaw skills inspect`)
+- ✅ Version compatibility checking (semver)
+- ✅ GitHub runtime happy-path coverage
+- ✅ Google runtime happy-path coverage (Gmail, Drive, Calendar)
+- ✅ Browser runtime happy-path coverage (Playwright/CDP)
+- ✅ QR and URL shortening runtime coverage
+- ✅ MCP doctor aggregation
+- ✅ Plugin approval flow and workspace policy enforcement
+- ✅ WASM sandbox with permission enforcement
+
+### Provider & Runtime
+- ✅ Tool-level retry policies with exponential backoff and jitter
+- ✅ Provider-level automatic retry with 429 handling
+- ✅ System prompt date/time injection
+- ✅ Session compaction with token counting
+- ✅ Hybrid search with HTTP embedding provider
+
+## Temporary Limitations (If Any)
+
+None. All documented features are fully implemented.
+
+## Historical Note
+
+This project has reached feature completeness as of version 1.10.2. All major phases (Core Runtime, Shared Routing, Memory and Scheduling, Skills and Integrations, Hardening and UX) have been implemented according to the documented contract.

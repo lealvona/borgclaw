@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "borgclaw-cli"
-version = "1.10.2"
+version = "1.11.0"
 dependencies = [
  "borgclaw-core",
  "chrono",
@@ -315,7 +315,7 @@ dependencies = [
 
 [[package]]
 name = "borgclaw-core"
-version = "1.10.2"
+version = "1.11.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -350,7 +350,7 @@ dependencies = [
 
 [[package]]
 name = "borgclaw-gateway"
-version = "1.10.2"
+version = "1.11.0"
 dependencies = [
  "axum",
  "borgclaw-core",

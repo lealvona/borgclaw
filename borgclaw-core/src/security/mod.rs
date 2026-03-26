@@ -202,11 +202,9 @@ impl SsrfGuard {
 
     /// Validate a URL for SSRF vulnerabilities
     pub fn validate_url(&self, url: &str) -> Result<(), SsrfError> {
-        let parsed = url::Url::parse(url)
-            .map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;
+        let parsed = url::Url::parse(url).map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;
 
-        let host = parsed.host_str()
-            .ok_or(SsrfError::MissingHost)?;
+        let host = parsed.host_str().ok_or(SsrfError::MissingHost)?;
 
         // Check if explicitly blocked
         for pattern in &self.blocked_hosts {
@@ -1090,7 +1088,9 @@ mod tests {
     fn ssrf_blocks_link_local() {
         let guard = SsrfGuard::new();
         // AWS metadata endpoint
-        assert!(guard.validate_url("http://169.254.169.254/latest/meta-data").is_err());
+        assert!(guard
+            .validate_url("http://169.254.169.254/latest/meta-data")
+            .is_err());
         assert!(guard.validate_url("http://169.254.0.1/api").is_err());
     }
 
@@ -1113,10 +1113,14 @@ mod tests {
     #[test]
     fn ssrf_allowlist_overrides_blocks() {
         let mut guard = SsrfGuard::new();
-        guard.allow_host("^trusted\\.internal\\.example\\.com$").unwrap();
+        guard
+            .allow_host("^trusted\\.internal\\.example\\.com$")
+            .unwrap();
 
         // Allowed by allowlist
-        assert!(guard.validate_url("http://trusted.internal.example.com/api").is_ok());
+        assert!(guard
+            .validate_url("http://trusted.internal.example.com/api")
+            .is_ok());
 
         // Not allowed (not in allowlist)
         assert!(guard.validate_url("http://localhost/admin").is_err());
@@ -1128,7 +1132,9 @@ mod tests {
         guard.block_host("^evil\\.example\\.com$").unwrap();
 
         // Blocked by blocklist
-        assert!(guard.validate_url("http://evil.example.com/attack").is_err());
+        assert!(guard
+            .validate_url("http://evil.example.com/attack")
+            .is_err());
 
         // Not blocked
         assert!(guard.validate_url("http://good.example.com/api").is_ok());
@@ -1141,7 +1147,9 @@ mod tests {
         guard.allow_host("^malicious\\.example\\.com$").unwrap();
 
         // Blocklist is checked first, so this should be blocked
-        assert!(guard.validate_url("http://malicious.example.com/api").is_err());
+        assert!(guard
+            .validate_url("http://malicious.example.com/api")
+            .is_err());
     }
 
     #[test]
@@ -1183,7 +1191,9 @@ mod tests {
             ssrf_allowlist: vec!["^internal\\.mycompany\\.com$".to_string()],
             ..Default::default()
         });
-        assert!(security.validate_url("http://internal.mycompany.com/api").is_ok());
+        assert!(security
+            .validate_url("http://internal.mycompany.com/api")
+            .is_ok());
         // Regular private IPs still blocked
         assert!(security.validate_url("http://10.0.0.1/api").is_err());
     }
@@ -1194,7 +1204,9 @@ mod tests {
             ssrf_blocklist: vec!["^blocked\\.example\\.com$".to_string()],
             ..Default::default()
         });
-        assert!(security.validate_url("http://blocked.example.com/api").is_err());
+        assert!(security
+            .validate_url("http://blocked.example.com/api")
+            .is_err());
         assert!(security.validate_url("https://example.com/api").is_ok());
     }
 

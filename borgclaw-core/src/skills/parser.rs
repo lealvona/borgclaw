@@ -78,11 +78,7 @@ impl SkillManifest {
 
             // Frontmatter parsing
             if line.starts_with("min_version:") {
-                min_version = Some(
-                    line.trim_start_matches("min_version:")
-                        .trim()
-                        .to_string(),
-                );
+                min_version = Some(line.trim_start_matches("min_version:").trim().to_string());
             } else if line.starts_with("name:") {
                 name = line.trim_start_matches("name:").trim().to_string();
             } else if line.starts_with("version:") {
