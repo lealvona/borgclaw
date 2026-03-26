@@ -149,6 +149,10 @@ impl Session {
         self.messages.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.messages.is_empty()
+    }
+
     pub fn system_prompt(&self) -> String {
         self.messages
             .iter()
@@ -275,7 +279,11 @@ impl Session {
             ));
         }
 
-        for msg in self.messages.iter().filter(|m| m.role != MessageRole::System) {
+        for msg in self
+            .messages
+            .iter()
+            .filter(|m| m.role != MessageRole::System)
+        {
             context.push((msg.role, msg.content.clone()));
         }
 

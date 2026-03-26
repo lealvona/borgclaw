@@ -164,7 +164,7 @@ impl WebhookChannel {
 
     /// Check if restart recovery state is available
     pub fn has_restart_state(&self) -> bool {
-        self.state_path.as_ref().map_or(false, |p| p.exists())
+        self.state_path.as_ref().is_some_and(|p| p.exists())
     }
 
     /// Get total webhook count for restart recovery
@@ -343,7 +343,8 @@ impl Channel for WebhookChannel {
     async fn init(&mut self, _config: &ChannelConfig) -> Result<(), ChannelError> {
         // Load persisted state for restart recovery
         let state = self.load_state();
-        self.msg_count.store(state.total_webhooks, Ordering::Relaxed);
+        self.msg_count
+            .store(state.total_webhooks, Ordering::Relaxed);
         *self.trigger_stats.write().await = state.trigger_stats;
         if let Some(last_activity) = state.last_activity {
             self.status.write().await.last_activity = Some(last_activity);
@@ -668,10 +669,7 @@ mod tests {
         // Second start should fail with duplicate error
         let result2 = channel.start_receiving(tx).await;
         assert!(result2.is_err());
-        assert!(result2
-            .unwrap_err()
-            .to_string()
-            .contains("already running"));
+        assert!(result2.unwrap_err().to_string().contains("already running"));
 
         // Clean up
         let _ = channel.shutdown().await;
@@ -679,8 +677,8 @@ mod tests {
 
     #[tokio::test]
     async fn webhook_shutdown_stops_state_persistence() {
-        let root = std::env::temp_dir()
-            .join(format!("borgclaw_webhook_test_{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_webhook_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let state_path = root.join("webhook_state.json");
 
@@ -689,15 +687,14 @@ mod tests {
 
         // Initialize channel first
         channel
-            .init(
-                &ChannelConfig {
-                    channel_type: ChannelType::new("webhook"),
-                    enabled: true,
-                    credentials: None,
-                    allow_from: vec![],
-                    dm_policy: crate::config::DmPolicy::Open,
-                    extra: HashMap::new(),
-                })
+            .init(&ChannelConfig {
+                channel_type: ChannelType::new("webhook"),
+                enabled: true,
+                credentials: None,
+                allow_from: vec![],
+                dm_policy: crate::config::DmPolicy::Open,
+                extra: HashMap::new(),
+            })
             .await
             .unwrap();
 
@@ -742,8 +739,8 @@ mod tests {
 
     #[tokio::test]
     async fn webhook_init_loads_persisted_state() {
-        let root = std::env::temp_dir()
-            .join(format!("borgclaw_webhook_test_{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_webhook_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let state_path = root.join("webhook_state.json");
 
@@ -753,11 +750,7 @@ mod tests {
             last_activity: Some(Utc::now()),
             trigger_stats: HashMap::from([("test-trigger".to_string(), 10)]),
         };
-        std::fs::write(
-            &state_path,
-            serde_json::to_string_pretty(&state).unwrap(),
-        )
-        .unwrap();
+        std::fs::write(&state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
 
         // Create channel and init (should load state)
         let mut channel = WebhookChannel::new().with_state_path(&state_path);

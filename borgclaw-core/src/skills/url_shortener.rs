@@ -72,18 +72,20 @@ impl UrlShortener {
         // Parse the URL to extract the host
         let parsed = url::Url::parse(url)
             .map_err(|e| UrlError::InvalidUrl(format!("Failed to parse URL: {}", e)))?;
-        
-        let host = parsed.host_str()
+
+        let host = parsed
+            .host_str()
             .ok_or_else(|| UrlError::InvalidUrl("URL has no host".to_string()))?;
 
         // Block localhost variants
         let lower = host.to_lowercase();
-        if lower == "localhost" 
-            || lower == "127.0.0.1" 
-            || lower == "::1" 
-            || lower.starts_with("127.") {
+        if lower == "localhost"
+            || lower == "127.0.0.1"
+            || lower == "::1"
+            || lower.starts_with("127.")
+        {
             return Err(UrlError::InvalidUrl(
-                "URLs pointing to localhost are not allowed".to_string()
+                "URLs pointing to localhost are not allowed".to_string(),
             ));
         }
 
@@ -91,7 +93,7 @@ impl UrlShortener {
         // 10.x.x.x
         if host.starts_with("10.") {
             return Err(UrlError::InvalidUrl(
-                "URLs pointing to private IP ranges are not allowed".to_string()
+                "URLs pointing to private IP ranges are not allowed".to_string(),
             ));
         }
 
@@ -101,7 +103,7 @@ impl UrlShortener {
                 if let Ok(second_octet) = rest[..dot_pos].parse::<u8>() {
                     if (16..=31).contains(&second_octet) {
                         return Err(UrlError::InvalidUrl(
-                            "URLs pointing to private IP ranges are not allowed".to_string()
+                            "URLs pointing to private IP ranges are not allowed".to_string(),
                         ));
                     }
                 }
@@ -111,14 +113,14 @@ impl UrlShortener {
         // 192.168.x.x
         if host.starts_with("192.168.") {
             return Err(UrlError::InvalidUrl(
-                "URLs pointing to private IP ranges are not allowed".to_string()
+                "URLs pointing to private IP ranges are not allowed".to_string(),
             ));
         }
 
         // 169.254.x.x (link-local)
         if host.starts_with("169.254.") {
             return Err(UrlError::InvalidUrl(
-                "URLs pointing to link-local addresses are not allowed".to_string()
+                "URLs pointing to link-local addresses are not allowed".to_string(),
             ));
         }
 

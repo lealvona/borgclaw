@@ -268,13 +268,16 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
     state.metrics.increment_connections();
     {
         let mut conns = state.connections.write().await;
-        conns.insert(client_id.clone(), ConnectionInfo {
-            client_id: client_id.clone(),
-            connected_at: chrono::Utc::now(),
-            authenticated: !requires_pairing,
-            messages_received: 0,
-            messages_sent: 0,
-        });
+        conns.insert(
+            client_id.clone(),
+            ConnectionInfo {
+                client_id: client_id.clone(),
+                connected_at: chrono::Utc::now(),
+                authenticated: !requires_pairing,
+                messages_received: 0,
+                messages_sent: 0,
+            },
+        );
     }
     info!(
         "New WebSocket connection: {} (active: {})",
@@ -994,10 +997,7 @@ async fn api_chat_post(
     State(state): State<GatewayState>,
     axum::Json(body): axum::Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let content = body
-        .get("content")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let content = body.get("content").and_then(|v| v.as_str()).unwrap_or("");
     let group_id = body
         .get("group_id")
         .and_then(|v| v.as_str())
@@ -1118,10 +1118,7 @@ async fn api_heartbeat_tasks(State(state): State<GatewayState>) -> impl IntoResp
     match std::fs::read_to_string(&path) {
         Ok(content) => {
             if let Ok(state) = serde_json::from_str::<serde_json::Value>(&content) {
-                let tasks = state
-                    .get("tasks")
-                    .cloned()
-                    .unwrap_or(serde_json::json!([]));
+                let tasks = state.get("tasks").cloned().unwrap_or(serde_json::json!([]));
                 let count = tasks.as_array().map(|a| a.len()).unwrap_or(0);
                 axum::Json(serde_json::json!({
                     "tasks": tasks,

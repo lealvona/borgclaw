@@ -851,7 +851,11 @@ impl DriveClient {
     }
 
     /// Remove a permission from a file
-    pub async fn remove_permission(&self, file_id: &str, permission_id: &str) -> Result<(), GoogleError> {
+    pub async fn remove_permission(
+        &self,
+        file_id: &str,
+        permission_id: &str,
+    ) -> Result<(), GoogleError> {
         let token = self.auth.get_token().await?;
 
         let response = self
@@ -1435,9 +1439,18 @@ mod tests {
         let details: DriveFileDetails = serde_json::from_str(json).unwrap();
         assert_eq!(details.file.id, "file123");
         assert_eq!(details.file.name, "test.txt");
-        assert_eq!(details.web_view_link, Some("https://drive.google.com/file/d/file123/view".to_string()));
-        assert_eq!(details.web_content_link, Some("https://drive.google.com/uc?id=file123".to_string()));
-        assert_eq!(details.created_time, Some("2024-01-01T00:00:00.000Z".to_string()));
+        assert_eq!(
+            details.web_view_link,
+            Some("https://drive.google.com/file/d/file123/view".to_string())
+        );
+        assert_eq!(
+            details.web_content_link,
+            Some("https://drive.google.com/uc?id=file123".to_string())
+        );
+        assert_eq!(
+            details.created_time,
+            Some("2024-01-01T00:00:00.000Z".to_string())
+        );
     }
 
     #[test]
@@ -1470,10 +1483,18 @@ mod tests {
     #[test]
     fn batch_operations_handle_single_item() {
         // Test batch with single item
-        let files = vec![("file1.txt".to_string(), b"content".to_vec(), "text/plain".to_string())];
+        let files = vec![(
+            "file1.txt".to_string(),
+            b"content".to_vec(),
+            "text/plain".to_string(),
+        )];
         assert_eq!(files.len(), 1);
 
-        let shares = vec![("file123".to_string(), "user@example.com".to_string(), "reader".to_string())];
+        let shares = vec![(
+            "file123".to_string(),
+            "user@example.com".to_string(),
+            "reader".to_string(),
+        )];
         assert_eq!(shares.len(), 1);
     }
 
@@ -1481,15 +1502,35 @@ mod tests {
     fn batch_operations_handle_multiple_items() {
         // Test batch with multiple items
         let files = vec![
-            ("file1.txt".to_string(), b"content1".to_vec(), "text/plain".to_string()),
-            ("file2.txt".to_string(), b"content2".to_vec(), "text/plain".to_string()),
-            ("file3.txt".to_string(), b"content3".to_vec(), "text/plain".to_string()),
+            (
+                "file1.txt".to_string(),
+                b"content1".to_vec(),
+                "text/plain".to_string(),
+            ),
+            (
+                "file2.txt".to_string(),
+                b"content2".to_vec(),
+                "text/plain".to_string(),
+            ),
+            (
+                "file3.txt".to_string(),
+                b"content3".to_vec(),
+                "text/plain".to_string(),
+            ),
         ];
         assert_eq!(files.len(), 3);
 
         let shares = vec![
-            ("file1".to_string(), "user1@example.com".to_string(), "reader".to_string()),
-            ("file2".to_string(), "user2@example.com".to_string(), "writer".to_string()),
+            (
+                "file1".to_string(),
+                "user1@example.com".to_string(),
+                "reader".to_string(),
+            ),
+            (
+                "file2".to_string(),
+                "user2@example.com".to_string(),
+                "writer".to_string(),
+            ),
         ];
         assert_eq!(shares.len(), 2);
     }
@@ -1497,7 +1538,14 @@ mod tests {
     #[test]
     fn permission_roles_are_valid() {
         // Test valid permission roles
-        let valid_roles = vec!["owner", "organizer", "fileOrganizer", "writer", "reader", "commenter"];
+        let valid_roles = vec![
+            "owner",
+            "organizer",
+            "fileOrganizer",
+            "writer",
+            "reader",
+            "commenter",
+        ];
         for role in valid_roles {
             assert!(!role.is_empty());
         }
@@ -1553,7 +1601,14 @@ mod tests {
         }"#;
 
         let file: DriveFile = serde_json::from_str(json).unwrap();
-        assert_eq!(file.parents, Some(vec!["folder1".to_string(), "folder2".to_string(), "folder3".to_string()]));
+        assert_eq!(
+            file.parents,
+            Some(vec![
+                "folder1".to_string(),
+                "folder2".to_string(),
+                "folder3".to_string()
+            ])
+        );
     }
 
     #[test]

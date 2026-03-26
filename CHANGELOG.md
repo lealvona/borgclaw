@@ -1,5 +1,86 @@
 # Changelog
 
+## 1.11.0 - 2026-03-26
+
+### Features
+
+**Unified Security Pipeline (PR #198)**
+- `SecurityLayer::run_input_pipeline()` - Unified entry point for injection check + leak redaction
+- `SecurityLayer::run_output_pipeline()` - Unified output processing for secret leak detection
+- `PipelineResult` struct captures blocked status, reason, sanitized text, and leak count
+- Consistent security handling across foreground tools, sub-agents, heartbeat, and MCP paths
+- HeartbeatEngine now supports optional audit logger with `with_audit_logger()` builder
+
+**Skill Registry Polish (PR #197)**
+- `borgclaw skills inspect <package.tar.gz>` - List archive contents and parse manifest
+- `min_version` field in SkillManifest with semver compatibility checking (`is_compatible()`)
+- Package command validates frontmatter and prints manifest info
+- Publish pre-validates archive contains valid SKILL.md
+- Pre-publish validation via `validate_archive_skill_md()`
+
+**Secret Storage UX (PR #196)**
+- `borgclaw secrets list` - List all stored secret keys
+- `borgclaw secrets set <key>` - Store a secret in the encrypted store
+- `borgclaw secrets delete <key>` - Remove a secret from the store
+- `borgclaw secrets check <key>` - Verify a secret exists
+- Encryption key backup notice during onboarding when secrets_encryption is enabled
+- Exported `secrets_key_path` helper for deriving encryption key file location
+
+**Sub-Agent Security (PR #195)**
+- SubAgentCoordinator workspace policy enforcement
+- Sub-agent inputs checked for prompt injection
+- Sub-agent outputs scanned for secret leaks and redacted
+- Workspace policy blocks dangerous tools (execute_command, delete, plugin_invoke) when workspace_only is enabled
+- Audit logging for task start, completion, and failure
+
+**Scheduler Recovery (PR #194)**
+- Scheduler catch-up/recovery for missed jobs with configurable policies
+- Dead-letter management for exhausted scheduler jobs
+- `borgclaw schedules pause <id>` - Pause scheduled jobs
+- `borgclaw schedules resume <id>` - Resume paused jobs
+- Recovery state visibility via CLI and self-test
+
+**Heartbeat Ergonomics (PR #193)**
+- `borgclaw heartbeat list` - Show all persisted heartbeat tasks
+- `borgclaw heartbeat show <id>` - Display task details
+- `borgclaw heartbeat enable <id>` - Enable disabled tasks
+- `borgclaw heartbeat disable <id>` - Disable tasks
+- `borgclaw heartbeat trigger <id>` - Manual task trigger
+
+**Gateway Control Plane (PR #192)**
+- `/api/metrics` endpoint with connection stats, message counts, auth metrics
+- `/api/config` endpoint returning sanitized configuration
+- Gateway metrics tracking: connections, messages sent/received, pairing requests, auth success/failure
+- Control-plane UX for monitoring gateway health
+
+**Security Documentation (PR #191)**
+- Updated security docs with SSRF configuration
+- Approval gates documentation
+
+**Approval Gate Tests (PR #190)**
+- Comprehensive tests for approval gate enforcement
+- Fixed `needs_approval` logic for consistency
+
+**SSRF Protection Tests (PR #189)**
+- Comprehensive test coverage for SSRF protection
+- Tests for allowlist/blocklist pattern matching
+
+**SSRF Integration (PR #188)**
+- SSRF protection integrated across all HTTP tools
+- Blocks localhost, private IPs, internal addresses by default
+- Configurable allowlist/blocklist patterns
+
+**Google Drive Approval Gates (PR #187)**
+- Fixed approval gate enforcement for Google Drive tools
+- Delete and share operations now require approval
+
+### Release Policy
+
+- `1.11.0` is the current release line
+- New work after `1.11.0` should continue on feature branches
+
+---
+
 ## 1.10.2 - 2026-03-19
 
 ### Fixes

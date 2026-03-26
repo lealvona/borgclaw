@@ -519,10 +519,7 @@ fn load_jobs(path: &PathBuf) -> HashMap<String, Job> {
         }
 
         // Detect stale next_run for repeating jobs (Completed or Pending)
-        if matches!(
-            job.status,
-            JobStatus::Completed | JobStatus::Pending
-        ) {
+        if matches!(job.status, JobStatus::Completed | JobStatus::Pending) {
             if let Some(next_run) = job.next_run {
                 if next_run < now && !matches!(job.trigger, JobTrigger::OneShot(_)) {
                     let missed_duration = now - next_run;
@@ -1039,11 +1036,7 @@ mod tests {
     #[tokio::test]
     async fn reset_dead_letter_clears_state_and_reschedules() {
         let scheduler = Scheduler::new();
-        let mut job = new_job(
-            "dead-letter-reset",
-            JobTrigger::Interval(60),
-            "echo reset",
-        );
+        let mut job = new_job("dead-letter-reset", JobTrigger::Interval(60), "echo reset");
         job.next_run = Some(Utc::now() - Duration::seconds(1));
         job.max_retries = 0;
         let id = scheduler.schedule(job).await.unwrap();
@@ -1134,8 +1127,8 @@ mod tests {
 
     #[test]
     fn load_jobs_run_once_policy_sets_next_run_to_now() {
-        let state_path = std::env::temp_dir()
-            .join(format!("borgclaw_catchup_runonce_{}.json", Uuid::new_v4()));
+        let state_path =
+            std::env::temp_dir().join(format!("borgclaw_catchup_runonce_{}.json", Uuid::new_v4()));
 
         let mut jobs = HashMap::new();
         let mut job = new_job("stale-runonce", JobTrigger::Interval(60), "echo runonce");
@@ -1164,8 +1157,8 @@ mod tests {
 
     #[test]
     fn load_jobs_no_catchup_when_next_run_is_future() {
-        let state_path = std::env::temp_dir()
-            .join(format!("borgclaw_catchup_future_{}.json", Uuid::new_v4()));
+        let state_path =
+            std::env::temp_dir().join(format!("borgclaw_catchup_future_{}.json", Uuid::new_v4()));
 
         let mut jobs = HashMap::new();
         let future_next = Utc::now() + Duration::hours(1);
@@ -1190,8 +1183,8 @@ mod tests {
 
     #[test]
     fn load_jobs_no_catchup_for_oneshot_jobs() {
-        let state_path = std::env::temp_dir()
-            .join(format!("borgclaw_catchup_oneshot_{}.json", Uuid::new_v4()));
+        let state_path =
+            std::env::temp_dir().join(format!("borgclaw_catchup_oneshot_{}.json", Uuid::new_v4()));
 
         let mut jobs = HashMap::new();
         let past_time = Utc::now() - Duration::hours(2);

@@ -212,10 +212,7 @@ impl SubAgentCoordinator {
         self
     }
 
-    pub fn with_workspace_policy(
-        mut self,
-        policy: crate::config::WorkspacePolicyConfig,
-    ) -> Self {
+    pub fn with_workspace_policy(mut self, policy: crate::config::WorkspacePolicyConfig) -> Self {
         self.workspace_policy = policy;
         self
     }
@@ -665,10 +662,7 @@ fn workspace_policy_blocks_tool(
     // When workspace_only is set and no extra roots are configured,
     // block file-system tools that could escape the workspace
     if policy.allowed_roots.is_empty() {
-        return matches!(
-            tool_name,
-            "execute_command" | "delete" | "plugin_invoke"
-        );
+        return matches!(tool_name, "execute_command" | "delete" | "plugin_invoke");
     }
     false
 }
@@ -875,18 +869,30 @@ mod tests {
             .memory_access(MemoryAccessType::ReadWrite)
             .build("hello");
 
-        let none_tools = allowed_builtin_tools(&none, &SecurityConfig::default(), &crate::config::WorkspacePolicyConfig::default())
-            .into_iter()
-            .map(|tool| tool.name)
-            .collect::<Vec<_>>();
-        let read_only_tools = allowed_builtin_tools(&read_only, &SecurityConfig::default(), &crate::config::WorkspacePolicyConfig::default())
-            .into_iter()
-            .map(|tool| tool.name)
-            .collect::<Vec<_>>();
-        let read_write_tools = allowed_builtin_tools(&read_write, &SecurityConfig::default(), &crate::config::WorkspacePolicyConfig::default())
-            .into_iter()
-            .map(|tool| tool.name)
-            .collect::<Vec<_>>();
+        let none_tools = allowed_builtin_tools(
+            &none,
+            &SecurityConfig::default(),
+            &crate::config::WorkspacePolicyConfig::default(),
+        )
+        .into_iter()
+        .map(|tool| tool.name)
+        .collect::<Vec<_>>();
+        let read_only_tools = allowed_builtin_tools(
+            &read_only,
+            &SecurityConfig::default(),
+            &crate::config::WorkspacePolicyConfig::default(),
+        )
+        .into_iter()
+        .map(|tool| tool.name)
+        .collect::<Vec<_>>();
+        let read_write_tools = allowed_builtin_tools(
+            &read_write,
+            &SecurityConfig::default(),
+            &crate::config::WorkspacePolicyConfig::default(),
+        )
+        .into_iter()
+        .map(|tool| tool.name)
+        .collect::<Vec<_>>();
 
         assert!(!none_tools.iter().any(|name| name == "memory_store"));
         assert!(!none_tools.iter().any(|name| name == "memory_recall"));
@@ -906,10 +912,14 @@ mod tests {
             ])
             .build("hello");
 
-        let allowed = allowed_builtin_tools(&read_only, &SecurityConfig::default(), &crate::config::WorkspacePolicyConfig::default())
-            .into_iter()
-            .map(|tool| tool.name)
-            .collect::<Vec<_>>();
+        let allowed = allowed_builtin_tools(
+            &read_only,
+            &SecurityConfig::default(),
+            &crate::config::WorkspacePolicyConfig::default(),
+        )
+        .into_iter()
+        .map(|tool| tool.name)
+        .collect::<Vec<_>>();
 
         assert!(!allowed.iter().any(|name| name == "memory_store"));
         assert!(allowed.iter().any(|name| name == "memory_recall"));
@@ -1472,9 +1482,15 @@ mod tests {
             allowed_roots: vec![],
             forbidden_paths: vec![],
         };
-        assert!(!workspace_policy_blocks_tool(&relaxed_policy, "execute_command"));
+        assert!(!workspace_policy_blocks_tool(
+            &relaxed_policy,
+            "execute_command"
+        ));
         assert!(!workspace_policy_blocks_tool(&relaxed_policy, "delete"));
-        assert!(!workspace_policy_blocks_tool(&relaxed_policy, "plugin_invoke"));
+        assert!(!workspace_policy_blocks_tool(
+            &relaxed_policy,
+            "plugin_invoke"
+        ));
     }
 
     #[test]
@@ -1502,8 +1518,8 @@ mod tests {
             },
         ));
 
-        let root = std::env::temp_dir()
-            .join(format!("borgclaw_subagent_audit_{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_subagent_audit_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let (sender, _receiver) = mpsc::channel(4);
         let coordinator = SubAgentCoordinator::with_configs(

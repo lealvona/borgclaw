@@ -62,13 +62,15 @@ impl RateLimiter {
         let now = std::time::Instant::now();
         let window = Duration::from_secs(60);
 
-        self.request_times.retain(|&t| now.duration_since(t) < window);
+        self.request_times
+            .retain(|&t| now.duration_since(t) < window);
 
         if self.request_times.len() >= self.requests_per_minute as usize {
             let oldest = self.request_times.first().unwrap();
             let wait_time = window - now.duration_since(*oldest);
             tokio::time::sleep(wait_time).await;
-            self.request_times.retain(|&t| std::time::Instant::now().duration_since(t) < window);
+            self.request_times
+                .retain(|&t| std::time::Instant::now().duration_since(t) < window);
         }
 
         self.request_times.push(std::time::Instant::now());
@@ -119,16 +121,18 @@ impl ProviderFactory {
             other => return Err(ProviderError::UnsupportedProvider(other.to_string())),
         };
 
-        let rate_limit_rpm = config.rate_limit_rpm.unwrap_or(match config.provider.as_str() {
-            "openai" => 60,
-            "anthropic" => 50,
-            "google" => 15,
-            "kimi" => 30,
-            "minimax" => 30,
-            "z" => 30,
-            "ollama" => 120,
-            _ => 60,
-        });
+        let rate_limit_rpm = config
+            .rate_limit_rpm
+            .unwrap_or(match config.provider.as_str() {
+                "openai" => 60,
+                "anthropic" => 50,
+                "google" => 15,
+                "kimi" => 30,
+                "minimax" => 30,
+                "z" => 30,
+                "ollama" => 120,
+                _ => 60,
+            });
 
         Ok(Box::new(RateLimitedProvider {
             inner: provider,

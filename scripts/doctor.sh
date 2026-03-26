@@ -71,10 +71,20 @@ check_file "Cargo.toml" "Workspace manifest"
 check_file "borgclaw-core/Cargo.toml" "Core crate manifest"
 check_file "borgclaw-cli/Cargo.toml" "CLI crate manifest"
 check_file "borgclaw-gateway/Cargo.toml" "Gateway crate manifest"
-if [ -f "$HOME/.config/borgclaw/config.toml" ]; then
-    echo -e "\033[0;32m✓\033[0m Runtime config: configured"
+
+# Runtime configuration
+CONFIG_DIR="${HOME}/.config/borgclaw"
+if [ -f "${CONFIG_DIR}/config.toml" ]; then
+    echo -e "\033[0;32m✓\033[0m Runtime config: ${CONFIG_DIR}/config.toml"
 else
     echo -e "\033[0;33m○\033[0m Runtime config: not configured (run ./scripts/onboarding.sh)"
+fi
+
+# Secrets encryption key (PR #196)
+if [ -f "${CONFIG_DIR}/.secrets_key" ]; then
+    echo -e "\033[0;32m✓\033[0m Secrets encryption key: ${CONFIG_DIR}/.secrets_key"
+else
+    echo -e "\033[0;33m○\033[0m Secrets encryption key: not initialized (will be created on first use)"
 fi
 
 echo ""
@@ -99,6 +109,16 @@ if [ -d ".local/tools/whisper.cpp" ]; then
 else
     echo -e "\033[0;33m○\033[0m whisper.cpp: not installed (run ./scripts/install-whisper.sh)"
 fi
+
+echo ""
+echo "=== Available Commands ==="
+echo "  borgclaw status          - Show system status"
+echo "  borgclaw doctor          - Run diagnostics"
+echo "  borgclaw self-test       - Run self-test (exits 1 on failure)"
+echo "  borgclaw schedules list  - List scheduled tasks"
+echo "  borgclaw heartbeat list  - List heartbeat tasks"
+echo "  borgclaw secrets list    - List stored secrets"
+echo "  borgclaw backup export   - Export runtime state"
 
 echo ""
 echo "========================"

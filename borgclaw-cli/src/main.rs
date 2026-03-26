@@ -509,16 +509,26 @@ async fn skills_action(config: &AppConfig, action: SkillsAction) {
             match package_skill(&path, output.as_deref()).await {
                 Ok(package_path) => {
                     println!("✓ Packaged skill to {}", package_path.display());
-                    println!("  You can now install it with: borgclaw skills install {}",
-                        package_path.file_name().unwrap_or_default().to_string_lossy());
+                    println!(
+                        "  You can now install it with: borgclaw skills install {}",
+                        package_path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                    );
                 }
                 Err(err) => println!("✗ Failed to package skill: {}", err),
             }
         }
-        SkillsAction::Publish { path, registry, force } => {
+        SkillsAction::Publish {
+            path,
+            registry,
+            force,
+        } => {
             println!("Publishing skill");
             println!("================");
-            let registry_url = registry.as_deref()
+            let registry_url = registry
+                .as_deref()
                 .or(config.skills.registry_url.as_deref())
                 .unwrap_or("https://borgclaw.io/registry");
             match publish_skill(&path, registry_url, force).await {
@@ -2253,7 +2263,12 @@ fn retry_dead_lettered_job(path: &std::path::Path, id: &str) -> Result<bool, Str
     job.retry_count = 0;
     job.status = JobStatus::Pending;
     job.missed_runs = 0;
-    if job.next_run.is_none() || job.next_run.map(|dt| dt < chrono::Utc::now()).unwrap_or(false) {
+    if job.next_run.is_none()
+        || job
+            .next_run
+            .map(|dt| dt < chrono::Utc::now())
+            .unwrap_or(false)
+    {
         job.next_run = job.trigger.next_run().or(Some(chrono::Utc::now()));
     }
 
@@ -2294,10 +2309,7 @@ fn heartbeat_list_lines(path: &std::path::Path) -> Result<Vec<String>, String> {
             .get("schedule")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
-        let run_count = task
-            .get("run_count")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
+        let run_count = task.get("run_count").and_then(|v| v.as_u64()).unwrap_or(0);
         let next_run = task
             .get("next_run")
             .and_then(|v| v.as_str())
@@ -2366,7 +2378,10 @@ fn heartbeat_detail_lines(path: &std::path::Path, id: &str) -> Result<Vec<String
     }
 
     if let Some(max_retries) = task.get("max_retries").and_then(|v| v.as_u64()) {
-        let retry_count = task.get("retry_count").and_then(|v| v.as_u64()).unwrap_or(0);
+        let retry_count = task
+            .get("retry_count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
         let retry_delay = task
             .get("retry_delay_seconds")
             .and_then(|v| v.as_u64())
@@ -2997,8 +3012,8 @@ async fn package_skill(
     }
 
     // Parse manifest to get skill name
-    let manifest_content =
-        std::fs::read_to_string(&skill_md_path).map_err(|e| format!("Failed to read SKILL.md: {}", e))?;
+    let manifest_content = std::fs::read_to_string(&skill_md_path)
+        .map_err(|e| format!("Failed to read SKILL.md: {}", e))?;
     let manifest = borgclaw_core::skills::SkillManifest::parse(&manifest_content)
         .map_err(|e| format!("Failed to parse SKILL.md: {}", e))?;
 
@@ -3072,8 +3087,11 @@ fn create_skill_archive(
     }
 
     // Finish archive
-    let enc = tar.into_inner().map_err(|e| format!("Failed to finalize archive: {}", e))?;
-    enc.finish().map_err(|e| format!("Failed to finish compression: {}", e))?;
+    let enc = tar
+        .into_inner()
+        .map_err(|e| format!("Failed to finalize archive: {}", e))?;
+    enc.finish()
+        .map_err(|e| format!("Failed to finish compression: {}", e))?;
 
     Ok(())
 }
@@ -3092,7 +3110,10 @@ async fn publish_skill(
 ) -> Result<PublishResult, String> {
     // Validate package file
     if !package_path.exists() {
-        return Err(format!("Package file not found: {}", package_path.display()));
+        return Err(format!(
+            "Package file not found: {}",
+            package_path.display()
+        ));
     }
 
     if !package_path.extension().map_or(false, |ext| ext == "gz")
@@ -3146,8 +3167,8 @@ async fn publish_skill(
 fn inspect_skill_package(package_path: &std::path::Path) -> Result<(), String> {
     use std::io::Read;
 
-    let tar_gz = std::fs::File::open(package_path)
-        .map_err(|e| format!("Failed to open package: {}", e))?;
+    let tar_gz =
+        std::fs::File::open(package_path).map_err(|e| format!("Failed to open package: {}", e))?;
     let dec = flate2::read::GzDecoder::new(tar_gz);
     let mut archive = tar::Archive::new(dec);
 
@@ -3226,8 +3247,8 @@ fn inspect_skill_package(package_path: &std::path::Path) -> Result<(), String> {
 fn validate_archive_skill_md(package_path: &std::path::Path) -> Result<(), String> {
     use std::io::Read;
 
-    let tar_gz = std::fs::File::open(package_path)
-        .map_err(|e| format!("Failed to open package: {}", e))?;
+    let tar_gz =
+        std::fs::File::open(package_path).map_err(|e| format!("Failed to open package: {}", e))?;
     let dec = flate2::read::GzDecoder::new(tar_gz);
     let mut archive = tar::Archive::new(dec);
 
@@ -3263,12 +3284,15 @@ fn validate_archive_skill_md(package_path: &std::path::Path) -> Result<(), Strin
 fn extract_package_metadata(package_path: &std::path::Path) -> Result<serde_json::Value, String> {
     use std::io::Read;
 
-    let tar_gz = std::fs::File::open(package_path)
-        .map_err(|e| format!("Failed to open package: {}", e))?;
+    let tar_gz =
+        std::fs::File::open(package_path).map_err(|e| format!("Failed to open package: {}", e))?;
     let dec = flate2::read::GzDecoder::new(tar_gz);
     let mut archive = tar::Archive::new(dec);
 
-    for entry in archive.entries().map_err(|e| format!("Failed to read archive: {}", e))? {
+    for entry in archive
+        .entries()
+        .map_err(|e| format!("Failed to read archive: {}", e))?
+    {
         let mut entry = entry.map_err(|e| format!("Failed to read archive entry: {}", e))?;
         let path = entry.path().map_err(|e| e.to_string())?;
 
@@ -4295,8 +4319,8 @@ mod skill_packaging_tests {
 
     #[test]
     fn package_skill_rejects_missing_skill_md() {
-        let root = std::env::temp_dir()
-            .join(format!("borgclaw_package_test_{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_package_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let output = root.join("test.tar.gz");
 
@@ -4312,8 +4336,8 @@ mod skill_packaging_tests {
 
     #[test]
     fn package_skill_rejects_non_directory() {
-        let root = std::env::temp_dir()
-            .join(format!("borgclaw_package_test_{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_package_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let file = root.join("not-a-directory");
         std::fs::write(&file, "test").unwrap();
@@ -4350,8 +4374,8 @@ mod skill_packaging_tests {
 
     #[test]
     fn extract_package_metadata_fails_for_missing_metadata() {
-        let root = std::env::temp_dir()
-            .join(format!("borgclaw_package_test_{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_package_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
 
         // Create a valid tar.gz without metadata file
@@ -4372,17 +4396,15 @@ mod skill_packaging_tests {
 
         let result = extract_package_metadata(&output);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("Package metadata not found"));
+        assert!(result.unwrap_err().contains("Package metadata not found"));
 
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn create_skill_archive_preserves_directory_structure() {
-        let root = std::env::temp_dir()
-            .join(format!("borgclaw_package_test_{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_package_test_{}", uuid::Uuid::new_v4()));
         let skill_dir = root.join("complex-skill");
         std::fs::create_dir_all(&skill_dir).unwrap();
         std::fs::write(
@@ -4444,8 +4466,8 @@ mod skill_packaging_tests {
 
     #[test]
     fn validate_archive_skill_md_passes_valid_package() {
-        let root = std::env::temp_dir()
-            .join(format!("borgclaw_validate_test_{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_validate_test_{}", uuid::Uuid::new_v4()));
         let skill_dir = create_test_skill_dir(&root, "valid-skill");
         let output = root.join("valid-skill-1.0.0.tar.gz");
 
@@ -4460,8 +4482,8 @@ mod skill_packaging_tests {
 
     #[test]
     fn validate_archive_skill_md_rejects_archive_without_skill_md() {
-        let root = std::env::temp_dir()
-            .join(format!("borgclaw_validate_test_{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_validate_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
 
         let output = root.join("no-skill.tar.gz");
@@ -4510,10 +4532,8 @@ mod secrets_tests {
     use borgclaw_core::security::{SecretStore, SecretStoreConfig};
 
     fn temp_store() -> (SecretStore, std::path::PathBuf) {
-        let root = std::env::temp_dir().join(format!(
-            "borgclaw_secrets_test_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_secrets_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("secrets.json");
         let store = SecretStore::with_config(SecretStoreConfig {

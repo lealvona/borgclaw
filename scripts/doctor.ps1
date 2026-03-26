@@ -72,7 +72,21 @@ Test-File "Cargo.toml" "Workspace manifest"
 Test-File "borgclaw-core\Cargo.toml" "Core crate manifest"
 Test-File "borgclaw-cli\Cargo.toml" "CLI crate manifest"
 Test-File "borgclaw-gateway\Cargo.toml" "Gateway crate manifest"
-Test-File "config.toml" "Configuration file"
+
+# Runtime configuration
+$CONFIG_DIR = "$env:USERPROFILE\.config\borgclaw"
+if (Test-Path "$CONFIG_DIR\config.toml") {
+    Write-Host "✓ Runtime config: $CONFIG_DIR\config.toml" -ForegroundColor Green
+} else {
+    Write-Host "○ Runtime config: not configured (run .\scripts\onboarding.ps1)" -ForegroundColor Yellow
+}
+
+# Secrets encryption key (PR #196)
+if (Test-Path "$CONFIG_DIR\.secrets_key") {
+    Write-Host "✓ Secrets encryption key: $CONFIG_DIR\.secrets_key" -ForegroundColor Green
+} else {
+    Write-Host "○ Secrets encryption key: not initialized (will be created on first use)" -ForegroundColor Yellow
+}
 
 Write-Host ""
 Write-Host "=== Build Status ===" -ForegroundColor White
@@ -97,6 +111,16 @@ if (Test-Path ".local\tools\whisper.cpp") {
 } else {
     Write-Host "○ whisper.cpp: not installed (run .\scripts\install-whisper.ps1)" -ForegroundColor Yellow
 }
+
+Write-Host ""
+Write-Host "=== Available Commands ===" -ForegroundColor White
+Write-Host "  borgclaw status          - Show system status"
+Write-Host "  borgclaw doctor          - Run diagnostics"
+Write-Host "  borgclaw self-test       - Run self-test (exits 1 on failure)"
+Write-Host "  borgclaw schedules list  - List scheduled tasks"
+Write-Host "  borgclaw heartbeat list  - List heartbeat tasks"
+Write-Host "  borgclaw secrets list    - List stored secrets"
+Write-Host "  borgclaw backup export   - Export runtime state"
 
 Write-Host ""
 Write-Host "========================"

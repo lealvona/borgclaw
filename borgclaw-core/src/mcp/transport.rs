@@ -299,8 +299,13 @@ mod tests {
         };
         let mut transport = SseTransport::new(config);
 
-        let result = transport.send(r#"{"jsonrpc":"2.0","method":"test","params":{}}"#).await;
-        assert!(result.is_ok(), "SSE send should succeed when post_url is configured");
+        let result = transport
+            .send(r#"{"jsonrpc":"2.0","method":"test","params":{}}"#)
+            .await;
+        assert!(
+            result.is_ok(),
+            "SSE send should succeed when post_url is configured"
+        );
     }
 
     #[test]
