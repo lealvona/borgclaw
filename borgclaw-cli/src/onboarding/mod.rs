@@ -2117,6 +2117,32 @@ async fn fetch_models(
                 Ok(out)
             }
         }
-        _ => Err("Unknown provider".to_string()),
+        "kimi" | "minimax" | "z" => {
+            // OpenAI-compatible model listing
+            let mut req = client.get(&provider.models_endpoint);
+            if let Some(k) = api_key {
+                req = req.bearer_auth(k);
+            }
+            let resp: Value = req
+                .send()
+                .await
+                .map_err(|e| e.to_string())?
+                .json()
+                .await
+                .map_err(|e| e.to_string())?;
+            let mut out = Vec::new();
+            if let Some(arr) = resp.get("data").and_then(|v| v.as_array()) {
+                for item in arr {
+                    if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+                        out.push(id.to_string());
+                    }
+                }
+            }
+            if out.is_empty() {
+                return Err(format!("No models returned from {}", provider.display));
+            }
+            Ok(out)
+        }
+        _ => Err(format!("Unknown provider: {}", provider.id)),
     }
 }

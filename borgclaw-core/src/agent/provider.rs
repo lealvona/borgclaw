@@ -118,6 +118,9 @@ impl ProviderFactory {
             "anthropic" => Box::new(AnthropicProvider::from_security(security_config).await?),
             "google" => Box::new(GoogleProvider::from_security(security_config).await?),
             "ollama" => Box::new(OllamaProvider::default()),
+            "kimi" => Box::new(KimiProvider::from_security(security_config).await?),
+            "minimax" => Box::new(MiniMaxProvider::from_security(security_config).await?),
+            "z" => Box::new(ZProvider::from_security(security_config).await?),
             other => return Err(ProviderError::UnsupportedProvider(other.to_string())),
         };
 
@@ -598,6 +601,99 @@ impl ChatProvider for OllamaProvider {
         Ok(body.message.content)
     }
 }
+
+/// Macro to generate OpenAI-compatible providers
+macro_rules! openai_compatible_provider {
+    ($name:ident, $env_key:expr, $base_url:expr) => {
+        struct $name {
+            api_key: String,
+            http: reqwest::Client,
+        }
+
+        impl $name {
+            async fn from_security(config: &SecurityConfig) -> Result<Self, ProviderError> {
+                Ok(Self {
+                    api_key: resolve_provider_secret(config, $env_key).await?,
+                    http: reqwest::Client::new(),
+                })
+            }
+        }
+
+        #[async_trait]
+        impl ChatProvider for $name {
+            async fn complete(&self, request: &ProviderRequest) -> Result<String, ProviderError> {
+                #[derive(Serialize)]
+                struct Body<'a> {
+                    model: &'a str,
+                    temperature: f32,
+                    max_tokens: u32,
+                    messages: &'a [ChatMessage],
+                }
+
+                #[derive(Deserialize)]
+                struct Response {
+                    choices: Vec<Choice>,
+                }
+
+                #[derive(Deserialize)]
+                struct Choice {
+                    message: ChoiceMessage,
+                }
+
+                #[derive(Deserialize)]
+                struct ChoiceMessage {
+                    content: String,
+                }
+
+                let response = self
+                    .http
+                    .post(concat!($base_url, "/chat/completions"))
+                    .bearer_auth(&self.api_key)
+                    .json(&Body {
+                        model: &request.model,
+                        temperature: request.temperature,
+                        max_tokens: request.max_tokens,
+                        messages: &request.messages,
+                    })
+                    .send()
+                    .await
+                    .map_err(|e| ProviderError::Request(e.to_string()))?;
+
+                if !response.status().is_success() {
+                    if response.status().as_u16() == 429 {
+                        let retry_after = response
+                            .headers()
+                            .get("retry-after")
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(60);
+                        return Err(ProviderError::RateLimited(retry_after));
+                    }
+                    return Err(ProviderError::Request(format!(
+                        "http {}",
+                        response.status()
+                    )));
+                }
+
+                let body: Response = response
+                    .json()
+                    .await
+                    .map_err(|e| ProviderError::Parse(e.to_string()))?;
+
+                body.choices
+                    .into_iter()
+                    .next()
+                    .map(|choice| choice.message.content)
+                    .ok_or_else(|| ProviderError::Parse("missing choice".to_string()))
+            }
+        }
+    };
+}
+
+// Generate OpenAI-compatible providers
+openai_compatible_provider!(KimiProvider, "KIMI_API_KEY", "https://api.moonshot.cn/v1");
+openai_compatible_provider!(MiniMaxProvider, "MINIMAX_API_KEY", "https://api.minimax.chat/v1");
+openai_compatible_provider!(ZProvider, "Z_API_KEY", "https://api.z.ai/v1");
 
 #[cfg(test)]
 mod tests {
