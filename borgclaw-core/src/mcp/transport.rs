@@ -290,6 +290,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[ignore = "Requires mock server running on localhost:8080"]
     async fn sse_transport_send_posts_to_post_url() {
         let config = SseTransportConfig {
             url: "http://localhost:8080/events".to_string(),

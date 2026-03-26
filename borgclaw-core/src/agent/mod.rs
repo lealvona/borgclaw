@@ -481,7 +481,8 @@ impl Agent for SimpleAgent {
 mod tests {
     use super::*;
     use crate::agent::session::Session;
-    use crate::agent::{Message, MessageRole, ToolCall};
+    use crate::agent::{Message, ToolCall};
+    use crate::config::{MemoryConfig, SkillsConfig, McpConfig, SecurityConfig};
 
     #[test]
     fn session_compaction_keeps_recent_messages_and_summary() {

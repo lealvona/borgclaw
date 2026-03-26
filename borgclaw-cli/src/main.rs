@@ -101,6 +101,25 @@ enum SkillsAction {
     },
     /// Install a skill
     Install { name: String },
+    /// Package a skill for distribution
+    Package {
+        /// Path to skill directory
+        path: PathBuf,
+        /// Output path for the package (optional, defaults to skill-name.tar.gz)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Publish a skill to the registry
+    Publish {
+        /// Path to packaged skill file (.tar.gz)
+        path: PathBuf,
+        /// Registry URL (optional, uses config default)
+        #[arg(short, long)]
+        registry: Option<String>,
+        /// Skip confirmation prompt
+        #[arg(short, long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -444,6 +463,36 @@ async fn skills_action(config: &AppConfig, action: SkillsAction) {
             {
                 Ok(path) => println!("Installed skill to {:?}", path),
                 Err(err) => println!("{}", err),
+            }
+        }
+        SkillsAction::Package { path, output } => {
+            println!("Packaging skill");
+            println!("===============");
+            match package_skill(&path, output.as_deref()).await {
+                Ok(package_path) => {
+                    println!("✓ Packaged skill to {}", package_path.display());
+                    println!("  You can now install it with: borgclaw skills install {}",
+                        package_path.file_name().unwrap_or_default().to_string_lossy());
+                }
+                Err(err) => println!("✗ Failed to package skill: {}", err),
+            }
+        }
+        SkillsAction::Publish { path, registry, force } => {
+            println!("Publishing skill");
+            println!("================");
+            let registry_url = registry.as_deref()
+                .or(config.skills.registry_url.as_deref())
+                .unwrap_or("https://borgclaw.io/registry");
+            match publish_skill(&path, registry_url, force).await {
+                Ok(result) => {
+                    println!("✓ Published skill successfully");
+                    println!("  Registry: {}", registry_url);
+                    println!("  Package: {}", result.package_id);
+                    if let Some(url) = result.public_url {
+                        println!("  URL: {}", url);
+                    }
+                }
+                Err(err) => println!("✗ Failed to publish skill: {}", err),
             }
         }
     }
@@ -2597,6 +2646,233 @@ fn github_registry_base(registry_url: &str) -> Option<String> {
         "https://raw.githubusercontent.com/{}/{}/main",
         owner, name
     ))
+}
+
+/// Package a skill directory into a distributable .tar.gz archive
+async fn package_skill(
+    skill_path: &std::path::Path,
+    output_path: Option<&std::path::Path>,
+) -> Result<std::path::PathBuf, String> {
+    // Validate skill directory
+    if !skill_path.is_dir() {
+        return Err(format!("{} is not a directory", skill_path.display()));
+    }
+
+    let skill_md_path = skill_path.join("SKILL.md");
+    if !skill_md_path.exists() {
+        return Err(format!(
+            "Skill directory must contain a SKILL.md file: {}",
+            skill_path.display()
+        ));
+    }
+
+    // Parse manifest to get skill name
+    let manifest_content =
+        std::fs::read_to_string(&skill_md_path).map_err(|e| format!("Failed to read SKILL.md: {}", e))?;
+    let manifest = borgclaw_core::skills::SkillManifest::parse(&manifest_content)
+        .map_err(|e| format!("Failed to parse SKILL.md: {}", e))?;
+
+    let skill_name = manifest.name;
+    let version = manifest.version;
+
+    // Determine output path
+    let output = output_path.map(|p| p.to_path_buf()).unwrap_or_else(|| {
+        std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(format!("{}-{}.tar.gz", skill_name, version))
+    });
+
+    // Create archive
+    create_skill_archive(skill_path, &output, &skill_name, &version)?;
+
+    Ok(output)
+}
+
+/// Create a tar.gz archive from a skill directory
+fn create_skill_archive(
+    source: &std::path::Path,
+    output: &std::path::Path,
+    skill_name: &str,
+    version: &str,
+) -> Result<(), String> {
+    let tar_gz = std::fs::File::create(output)
+        .map_err(|e| format!("Failed to create archive file: {}", e))?;
+    let enc = flate2::write::GzEncoder::new(tar_gz, flate2::Compression::default());
+    let mut tar = tar::Builder::new(enc);
+
+    // Add metadata file
+    let metadata = serde_json::json!({
+        "name": skill_name,
+        "version": version,
+        "packaged_at": chrono::Utc::now().to_rfc3339(),
+        "packaged_by": "borgclaw-cli",
+    });
+    let metadata_bytes = metadata.to_string().into_bytes();
+    let mut header = tar::Header::new_gnu();
+    header.set_size(metadata_bytes.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    tar.append_data(&mut header, "borgclaw-package.json", &metadata_bytes[..])
+        .map_err(|e| format!("Failed to add metadata to archive: {}", e))?;
+
+    // Walk directory and add files
+    for entry in walkdir::WalkDir::new(source) {
+        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+        let path = entry.path();
+        let relative_path = path.strip_prefix(source).map_err(|e| e.to_string())?;
+
+        if path.is_file() {
+            tar.append_path_with_name(path, relative_path)
+                .map_err(|e| format!("Failed to add file to archive: {}", e))?;
+        }
+    }
+
+    // Finish archive
+    let enc = tar.into_inner().map_err(|e| format!("Failed to finalize archive: {}", e))?;
+    enc.finish().map_err(|e| format!("Failed to finish compression: {}", e))?;
+
+    Ok(())
+}
+
+/// Result of publishing a skill
+struct PublishResult {
+    package_id: String,
+    public_url: Option<String>,
+}
+
+/// Publish a packaged skill to the registry
+async fn publish_skill(
+    package_path: &std::path::Path,
+    registry_url: &str,
+    force: bool,
+) -> Result<PublishResult, String> {
+    // Validate package file
+    if !package_path.exists() {
+        return Err(format!("Package file not found: {}", package_path.display()));
+    }
+
+    if !package_path.extension().map_or(false, |ext| ext == "gz")
+        && !package_path.to_string_lossy().ends_with(".tar.gz")
+    {
+        return Err("Package file must be a .tar.gz archive".to_string());
+    }
+
+    // Extract package metadata
+    let package_metadata = extract_package_metadata(package_path)?;
+    let skill_name = package_metadata
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or("Package metadata missing skill name")?;
+    let version = package_metadata
+        .get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+
+    // Confirm with user if not forced
+    if !force {
+        println!("You are about to publish:");
+        println!("  Skill: {}", skill_name);
+        println!("  Version: {}", version);
+        println!("  Package: {}", package_path.display());
+        println!("  Registry: {}", registry_url);
+        println!("\nContinue? [y/N]");
+
+        let mut response = String::new();
+        std::io::stdin()
+            .read_line(&mut response)
+            .map_err(|e| format!("Failed to read confirmation: {}", e))?;
+        if !response.trim().eq_ignore_ascii_case("y") {
+            return Err("Publish cancelled by user".to_string());
+        }
+    }
+
+    // Upload to registry
+    let package_id = upload_to_registry(package_path, registry_url, skill_name).await?;
+
+    Ok(PublishResult {
+        package_id,
+        public_url: Some(format!("{}/skills/{}", registry_url, skill_name)),
+    })
+}
+
+/// Extract metadata from a package archive
+fn extract_package_metadata(package_path: &std::path::Path) -> Result<serde_json::Value, String> {
+    use std::io::Read;
+
+    let tar_gz = std::fs::File::open(package_path)
+        .map_err(|e| format!("Failed to open package: {}", e))?;
+    let dec = flate2::read::GzDecoder::new(tar_gz);
+    let mut archive = tar::Archive::new(dec);
+
+    for entry in archive.entries().map_err(|e| format!("Failed to read archive: {}", e))? {
+        let mut entry = entry.map_err(|e| format!("Failed to read archive entry: {}", e))?;
+        let path = entry.path().map_err(|e| e.to_string())?;
+
+        if path == std::path::Path::new("borgclaw-package.json") {
+            let mut content = String::new();
+            entry
+                .read_to_string(&mut content)
+                .map_err(|e| format!("Failed to read metadata: {}", e))?;
+            return serde_json::from_str(&content)
+                .map_err(|e| format!("Failed to parse metadata: {}", e));
+        }
+    }
+
+    Err("Package metadata not found (borgclaw-package.json)".to_string())
+}
+
+/// Upload package to registry
+async fn upload_to_registry(
+    package_path: &std::path::Path,
+    registry_url: &str,
+    skill_name: &str,
+) -> Result<String, String> {
+    // Read package file
+    let package_data = tokio::fs::read(package_path)
+        .await
+        .map_err(|e| format!("Failed to read package: {}", e))?;
+
+    // Create multipart form
+    let form = reqwest::multipart::Form::new()
+        .text("name", skill_name.to_string())
+        .part(
+            "package",
+            reqwest::multipart::Part::bytes(package_data)
+                .file_name(format!("{}.tar.gz", skill_name))
+                .mime_str("application/gzip")
+                .map_err(|e| e.to_string())?,
+        );
+
+    // Upload
+    let client = reqwest::Client::new();
+    let upload_url = format!("{}/api/v1/skills/upload", registry_url);
+
+    let response = client
+        .post(&upload_url)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to upload to registry: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Registry upload failed ({}): {}", status, body));
+    }
+
+    // Parse response
+    let result: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse registry response: {}", e))?;
+
+    let package_id = result
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or("Registry response missing package ID")?;
+
+    Ok(package_id)
 }
 
 async fn fetch_registry_skills(registry_url: &str) -> Result<Vec<String>, String> {

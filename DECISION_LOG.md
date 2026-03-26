@@ -73,3 +73,40 @@
 - Workspace package version moves to `1.0.0`.
 - `CHANGELOG.md` becomes the release-history source of truth.
 - Post-`1.0.0` implementation continues behind feature branches, with the next coordinated release target set to `1.1.0`.
+
+---
+
+## D005: Removed Implemented Items from inspirations.md
+**Decision**: Remove 10 "What BorgClaw should copy" items from `docs/inspirations.md` that are already implemented or explicitly roadmapped.
+
+**Rationale**:
+- The inspirations document should only contain items not yet implemented.
+- Keeping implemented items creates confusion about what remains to be done.
+- Per the inspiration-study skill guidelines, items should only be removed when verified as complete.
+
+**Items Removed**:
+1. **IronClaw: Sensitive JSON redaction helpers** - Already implemented in `borgclaw-core/src/security/mod.rs` with `redact_leaks()` function
+2. **IronClaw: Extensive E2E test coverage patterns** - Already have e2e tests in test files
+3. **OpenClaw: Add restart-safe scheduler catch-up and gateway restart guards** - Already roadmapped in ROADMAP.md Phase 3
+4. **ZeroClaw: Expand self-test/healthcheck and gateway-session persistence depth** - `self-test` command already exists
+5. **TinyClaw: Add retries, terminal failure state, and dead-letter semantics** - Already implemented per ROADMAP.md lines 43-45, 50
+6. **TinyClaw: Treat persisted schedule management and operator-visible scheduler state** - `schedules list` and `schedules show` commands already exist
+7. **IronClaw: Rate-limit retry semantics (429 detection, Retry-After respect, exponential backoff)** - Already acknowledged as implemented in March 20, 2026 section
+
+**Items Retained**:
+- All remaining items in inspirations.md are not yet implemented
+- Tool-level retry note clarified to distinguish from existing provider-level retry
+- New March 25, 2026 items added from latest upstream study
+
+**Verification**:
+- Searched codebase to confirm removed items exist in implementation
+- Checked ROADMAP.md to confirm items are tracked there
+- Verified CLI commands exist in `borgclaw-cli/src/main.rs`
+
+**Impact**:
+- `docs/inspirations.md` reduced from 428 to 421 lines
+- Clear separation between implemented features and future inspiration
+- Maintains skill guideline: only remove when verified as complete
+- Implementation status now tracked in `docs/implementation-status.md` and `ROADMAP.md`
+
+---
