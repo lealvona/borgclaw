@@ -14,6 +14,29 @@ Use it for two things:
 1. Understand which upstream project is the best model for a given BorgClaw subsystem.
 2. Cross-check BorgClaw roadmap items, stubs, and rough edges against upstream implementations that already solved similar problems well.
 
+## Upstream Follow-Up: March 25, 2026
+
+Recent upstream movement:
+
+- OpenClaw continues active development on Claude Code integration, GPT-5.4 + Gemini 3.1 Flash-Lite models, and critical scheduling fixes including dynamic date/time injection into system prompts (not just timezone) to prevent stale session errors. GitHub issue #26609 documents real scheduling errors where agents gave incorrect advice due to stale timestamps. SafeClaw project (OpenClaw alternative) gained traction with zero-cost deterministic approach using rule-based parsing instead of LLMs.
+  Sources: [OpenClaw issues](https://github.com/openclaw/openclaw/issues/26609), [SafeClaw GitHub](https://github.com/princezuda/safeclaw)
+- IronClaw `v0.5.x+` added AWS Bedrock LLM provider via native Converse API, context size logging before LLM prompts, tool-level retry with exponential backoff, sensitive JSON redaction helpers, native Composio tool integration for third-party apps, Feishu WebSocket channel, MiniMax LLM provider, context-LLM tool support, webhook reverse proxy for tunnel support, Slack approval buttons for DMs, and CLI skills list/search/info subcommands. Also improved: WASM bundle filename disambiguation, timezone conversion in time tool, message routing reliability, and extensive E2E test coverage.
+  Sources: [IronClaw pulse](https://github.com/nearai/ironclaw/pulse), [IronClaw tests](https://github.com/nearai/ironclaw/tree/main/tests)
+- TinyClaw released v0.0.19 with bug fixes for `agent_messages` and `signalDone`.
+  Source: [TinyClaw releases](https://github.com/TinyAGI/tinyclaw/releases)
+
+**New "What BorgClaw should copy" items** (added per upstream findings, preserving all existing items):
+
+- OpenClaw: Dynamic current date/time injection into system prompts (not cached) to prevent stale session errors
+- OpenClaw: Claude Code-style AI coding agent (searches, edits, tests, commits via CLI)
+- IronClaw: AWS Bedrock LLM provider via native Converse API
+- IronClaw: Tool-level retry with exponential backoff and jitter (BorgClaw has provider-level retry; tool-level retry per-tool is new)
+- IronClaw: Native Composio tool integration for third-party app connectivity
+- IronClaw: Context-LLM tool for context-aware operations
+- IronClaw: Webhook reverse proxy support for tunnel scenarios
+- IronClaw: CLI skills list/search/info subcommands
+- IronClaw: Slack approval buttons for tool execution in DMs
+
 ## Upstream Follow-Up: March 21, 2026
 
 Recent upstream movement:
@@ -125,7 +148,6 @@ What BorgClaw should copy:
 - Make gateway behavior a first-class control plane, not just a message tunnel.
 - Split sandbox modes by execution context instead of relying on one global switch.
 - Turn skills into a lifecycle with discovery, install policy, approval, and status.
-- Add restart-safe scheduler catch-up and gateway restart guards so recovered processes do not flood or stall background execution.
 - Treat backup/restore and destructive-flow verification as part of the operator contract, not as an afterthought.
 - Keep workspace/plugin bootstrap behavior explicit at compaction, scheduler, and subagent boundaries.
 - Tighten transport-specific SSRF/media policy enforcement and deployment-time secret handling, not just runtime prompt/tool defenses.
@@ -157,12 +179,11 @@ Good examples:
 What BorgClaw should copy:
 
 - Make subsystem boundaries explicit in both code and docs, not just implied by module names.
-- Expand security config from “feature flags” to policy objects.
+- Expand security config from "feature flags" to policy objects.
 - Add a provider auth/profile registry instead of only relying on process env.
 - Treat identity format as an interface, not a one-off prompt file.
 - Preserve richer provider transcript artifacts such as reasoning content when tools are involved, instead of flattening every turn to plain text.
 - Keep release and bootstrap paths reproducible and supply-chain-conscious.
-- Expand self-test/healthcheck and gateway-session persistence depth so runtime and operator UX stay aligned.
 - Consider mem0/OpenMemory-style external memory backend integration with history(), recall_filtered(), store_procedural() patterns.
 - Add structured fallback deliverables for failed/stuck jobs (ZeroClaw pattern).
 
@@ -219,7 +240,6 @@ What BorgClaw should copy:
 - Gate webhook-triggerable tools on explicit capability declarations, not mere tool existence.
 - Keep approval semantics identical across immediate, deferred, and background tool execution paths.
 - Redact internal failure detail at transport boundaries while retaining richer internal diagnostics.
-- Rate-limit retry semantics (429 detection, Retry-After respect, exponential backoff) now implemented in BorgClaw provider layer.
 - Tighten deferred approval waiting coverage and channel ownership/routing fallback tests as correctness work, not polish.
 
 Best matches for current BorgClaw gaps:
@@ -274,11 +294,9 @@ Good examples:
 What BorgClaw should copy:
 
 - Define the scheduler/subagent queue contract explicitly.
-- Separate “parallel across agents” from “ordered within one session/task owner”.
-- Add retries, terminal failure state, and dead-letter semantics to background execution.
+- Separate "parallel across agents" from "ordered within one session/task owner".
 - Keep workspaces isolated per spawned agent/task.
 - Treat long-lived polling/channel loops as restart-sensitive state machines with explicit shutdown, health verification, and restart guards.
-- Treat persisted schedule management and operator-visible scheduler state as part of the product surface, not only internal runtime machinery.
 
 Best matches for current BorgClaw gaps:
 

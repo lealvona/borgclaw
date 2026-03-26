@@ -1175,14 +1175,12 @@ mod tests {
         config.mcp.servers.insert(
             "test".to_string(),
             crate::config::McpServerConfig {
-                url: "not-a-valid-url".to_string(),
-                transport: crate::config::McpTransportConfig::Stdio(
-                    crate::config::StdioTransportConfig {
-                        command: "echo".to_string(),
-                        args: Vec::new(),
-                        env: std::collections::HashMap::new(),
-                    },
-                ),
+                url: Some("not-a-valid-url".to_string()),
+                transport: "stdio".to_string(),
+                command: Some("echo".to_string()),
+                args: Vec::new(),
+                env: std::collections::HashMap::new(),
+                headers: std::collections::HashMap::new(),
             },
         );
 

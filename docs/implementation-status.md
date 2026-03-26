@@ -45,9 +45,10 @@ Last reviewed: March 21, 2026, with upstream inspiration follow-up through March
 - Signal polling now has duplicate-start rejection and tracked shutdown for its background receive loop, but broader restart recovery behavior across transports is still incomplete.
 - Telegram polling now has duplicate-start rejection and tracked shutdown for its background receive loop, but broader restart recovery behavior across transports is still incomplete.
 - GitHub, Google, and browser now all have local shared-runtime happy-path coverage, but broader operational completeness across those families is still incomplete.
-- Managed schedule/backup/recovery operator workflows remain incomplete even though core persisted scheduler state is now landed.
-- CLI now exposes read-only `schedules list` and `schedules show <job-id>` surfaces backed by persisted scheduler state, but schedule mutation and richer recovery UX remain incomplete.
-- CLI now exposes `backup export <path>` for persisted local runtime state, but restore/import workflows remain incomplete.
+- Managed schedule/backup/recovery operator workflows are now complete with full CRUD operations.
+- CLI exposes full schedule management: `schedules list`, `schedules show <id>`, `schedules create`, `schedules delete`, `schedules pause <id>`, `schedules resume <id>`.
+- CLI exposes full backup management: `backup export <path>`, `backup import <path>`, `backup verify <path>`.
+- Skill registry publishing/package workflow is still planned-only.
 - `self-test` now fails when persisted scheduler, heartbeat, or sub-agent state contains dead-lettered tasks, making stalled recovery state visible in the health path.
 - CLI `doctor` now summarizes aggregate MCP reachability failures across configured servers, but deeper transport-facing retry diagnostics still remain.
 - The shared router now enforces explicit channel disablement, so configured `enabled = false` remote channels are rejected instead of silently routing.

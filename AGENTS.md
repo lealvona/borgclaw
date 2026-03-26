@@ -165,5 +165,4 @@ git remote -v | grep "upstream.*NO_PUSH"  # Verify upstream push protection
 ```
 
 ## Additional References
-- `.codex/instructions/` — per-ticket instruction files with YAML frontmatter
-- `.codex/skills/` — progressive-loading agent skill definitions
+- `.opencode/skills/` — progressive-loading agent skill definitions
