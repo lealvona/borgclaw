@@ -31,7 +31,15 @@ BorgClaw implements defense-in-depth security with multiple protective layers.
 
 ### Overview
 
-Untrusted tools run in WebAssembly sandbox via wasmtime:
+BorgClaw uses WebAssembly (WASM) as its primary sandbox mechanism for executing untrusted tools. WASM provides better isolation and lower overhead than traditional container approaches:
+
+- **Memory isolation**: Each plugin runs in its own isolated memory space
+- **Capability-based security**: Explicit permissions for filesystem, network, and system access
+- **Resource limits**: Configurable memory and CPU constraints
+- **Fast startup**: No container image overhead
+- **Cross-platform**: Works consistently across operating systems
+
+Untrusted tools run via wasmtime runtime:
 
 - Isolated memory space
 - No direct filesystem access
@@ -43,8 +51,14 @@ Untrusted tools run in WebAssembly sandbox via wasmtime:
 ```toml
 [security]
 wasm_sandbox = true
-wasm_max_instances = 10
+wasm_max_instances = 10  # Maximum concurrent WASM instances
 ```
+
+The `max_instances` parameter controls resource usage and prevents resource exhaustion:
+- Each running plugin consumes one instance slot
+- New plugin executions wait if limit is reached
+- Default is 10 concurrent instances
+- Increase for high-throughput scenarios, decrease for resource-constrained environments
 
 ### Plugin Permissions
 
@@ -219,6 +233,123 @@ command_blocklist = true
 extra_blocked = [
     "^custom_dangerous_command"
 ]
+```
+
+## SSRF Protection
+
+### Overview
+
+Server-Side Request Forgery (SSRF) protection prevents malicious URLs from accessing internal resources:
+
+- Blocks requests to localhost/loopback addresses
+- Blocks private IP ranges (10.x.x.x, 172.16-31.x.x, 192.168.x.x)
+- Blocks link-local addresses (169.254.x.x, fe80::/10)
+- Blocks IPv6 unique local addresses (fc00::/7)
+
+### Blocked IP Ranges
+
+```
+IPv4:
+- 127.0.0.0/8      (loopback)
+- 10.0.0.0/8       (private)
+- 172.16.0.0/12    (private)
+- 192.168.0.0/16   (private)
+- 169.254.0.0/16   (link-local)
+- 224.0.0.0/4      (multicast)
+- 0.0.0.0          (unspecified)
+
+IPv6:
+- ::1              (loopback)
+- fc00::/7         (unique local)
+- fe80::/10        (link-local)
+- ff00::/8         (multicast)
+- ::               (unspecified)
+
+Hostnames:
+- localhost
+- 127.*.*.*
+- 10.*.*.*
+- 192.168.*.*
+- 172.16-31.*.*
+- 169.254.*.*
+- fc*, fd*         (IPv6 unique local)
+- fe8*              (IPv6 link-local)
+```
+
+### Usage
+
+```rust
+use borgclaw_core::security::{SecurityLayer, SsrfGuard};
+
+// Use via SecurityLayer
+let security = SecurityLayer::new();
+
+// Validate URL before making request
+match security.validate_url("https://example.com/api") {
+    Ok(()) => println!("URL is safe"),
+    Err(e) => println!("Blocked: {}", e),
+}
+
+// Direct usage with custom configuration
+let guard = SsrfGuard::new()
+    .with_localhost(true)      // Allow localhost (for testing)
+    .with_private_ips(false);   // Block private IPs
+```
+
+### Examples of Blocked URLs
+
+```rust
+// These URLs will be blocked:
+let blocked_urls = vec![
+    "http://localhost/admin",
+    "http://127.0.0.1/secrets",
+    "http://192.168.1.1/router-config",
+    "http://10.0.0.1/internal-api",
+    "http://172.16.0.1/metadata",
+    "http://169.254.169.254/latest/meta-data",  // AWS metadata
+];
+
+for url in blocked_urls {
+    assert!(security.validate_url(url).is_err());
+}
+```
+
+### Configuration
+
+```toml
+[security]
+ssrf_protection = true  # Enabled by default
+
+# Allow specific hosts (overrides default blocks)
+[security.ssrf_allowlist]
+patterns = [
+    "^trusted-internal\\.example\\.com$"
+]
+
+# Block additional hosts
+[security.ssrf_blocklist]
+patterns = [
+    "^malicious\\.example\\.com$"
+]
+```
+
+### Implementation
+
+The `SsrfGuard` provides URL validation:
+
+```rust
+pub struct SsrfGuard {
+    allow_localhost: bool,
+    allow_private_ips: bool,
+    allowed_hosts: Vec<Regex>,
+    blocked_hosts: Vec<Regex>,
+}
+
+impl SsrfGuard {
+    pub fn validate_url(&self, url: &str) -> Result<(), SsrfError>;
+    pub fn allow_host(&mut self, pattern: &str) -> Result<(), regex::Error>;
+    pub fn block_host(&mut self, pattern: &str) -> Result<(), regex::Error>;
+}
 ```
 
 ## Vault Integration

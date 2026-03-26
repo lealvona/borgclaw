@@ -23,7 +23,7 @@ BorgClaw is a Rust-based personal AI assistant combining the best features from 
 
 ### Skills & Integrations
 - **GitHub** - Repos, PRs, issues, releases with safety rules
-- **Google Workspace** - Gmail, Drive, Calendar via OAuth2
+- **Google Workspace** - Gmail, Calendar, Drive (upload, download, folders, sharing, batch operations) via OAuth2
 - **MCP Protocol** - Model Context Protocol client (Stdio, SSE, WebSocket)
 - **Browser Automation** - Playwright bridge + CDP fallback
 - **Speech-to-Text** - OpenAI, Open WebUI, whisper.cpp
@@ -35,12 +35,14 @@ BorgClaw is a Rust-based personal AI assistant combining the best features from 
 
 ### Security (Defense in Depth)
 - **WASM Sandbox** - Isolated tool execution via wasmtime
+- **SSRF Protection** - Blocks localhost, private IPs, internal addresses
 - **Command blocklist** - Regex-based dangerous command blocking
 - **Pairing codes** - 6-digit channel authentication
 - **Prompt injection defense** - Pattern detection + sanitization
 - **Secret leak detection** - API key redaction
 - **Encrypted secrets** - ChaCha20-Poly1305
 - **Vault integration** - Bitwarden (primary), 1Password (secondary)
+- **Approval gates** - Destructive operations require confirmation
 
 ## Architecture
 
