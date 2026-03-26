@@ -166,6 +166,233 @@ impl Default for LeakDetector {
     }
 }
 
+/// SSRF (Server-Side Request Forgery) protection
+/// Validates URLs to prevent requests to internal/private networks
+#[derive(Debug, Clone)]
+pub struct SsrfGuard {
+    /// Allow localhost/loopback addresses (default: false)
+    allow_localhost: bool,
+    /// Allow private IP ranges (default: false)
+    allow_private_ips: bool,
+    /// Additional allowed host patterns
+    allowed_hosts: Vec<Regex>,
+    /// Blocked host patterns
+    blocked_hosts: Vec<Regex>,
+}
+
+impl SsrfGuard {
+    pub fn new() -> Self {
+        Self {
+            allow_localhost: false,
+            allow_private_ips: false,
+            allowed_hosts: Vec::new(),
+            blocked_hosts: Vec::new(),
+        }
+    }
+
+    pub fn with_localhost(mut self, allow: bool) -> Self {
+        self.allow_localhost = allow;
+        self
+    }
+
+    pub fn with_private_ips(mut self, allow: bool) -> Self {
+        self.allow_private_ips = allow;
+        self
+    }
+
+    /// Validate a URL for SSRF vulnerabilities
+    pub fn validate_url(&self, url: &str) -> Result<(), SsrfError> {
+        let parsed = url::Url::parse(url)
+            .map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;
+
+        let host = parsed.host_str()
+            .ok_or(SsrfError::MissingHost)?;
+
+        // Check if explicitly blocked
+        for pattern in &self.blocked_hosts {
+            if pattern.is_match(host) {
+                return Err(SsrfError::BlockedHost(host.to_string()));
+            }
+        }
+
+        // Check if explicitly allowed (overrides other checks)
+        for pattern in &self.allowed_hosts {
+            if pattern.is_match(host) {
+                return Ok(());
+            }
+        }
+
+        // Check for localhost variants
+        if !self.allow_localhost {
+            if Self::is_localhost(host) {
+                return Err(SsrfError::LocalhostNotAllowed);
+            }
+        }
+
+        // Check for private IP ranges
+        if !self.allow_private_ips {
+            if Self::is_private_ip(host)? {
+                return Err(SsrfError::PrivateIpNotAllowed);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check if host is localhost or loopback
+    fn is_localhost(host: &str) -> bool {
+        let lower = host.to_lowercase();
+        lower == "localhost"
+            || lower == "127.0.0.1"
+            || lower == "::1"
+            || lower == "0:0:0:0:0:0:0:1"
+            || lower.starts_with("127.")
+    }
+
+    /// Check if host is a private/internal IP
+    fn is_private_ip(host: &str) -> Result<bool, SsrfError> {
+        // Try to parse as IP address
+        if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+            return Ok(Self::is_ip_private(&ip));
+        }
+
+        // Check for common private IP patterns in hostnames
+        // 10.x.x.x
+        if host.starts_with("10.") {
+            return Ok(true);
+        }
+
+        // 172.16-31.x.x
+        if let Some(rest) = host.strip_prefix("172.") {
+            if let Some(dot_pos) = rest.find('.') {
+                if let Ok(second_octet) = rest[..dot_pos].parse::<u8>() {
+                    if (16..=31).contains(&second_octet) {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+
+        // 192.168.x.x
+        if host.starts_with("192.168.") {
+            return Ok(true);
+        }
+
+        // 169.254.x.x (link-local)
+        if host.starts_with("169.254.") {
+            return Ok(true);
+        }
+
+        // fc00::/7 (IPv6 unique local)
+        if host.to_lowercase().starts_with("fc") || host.to_lowercase().starts_with("fd") {
+            return Ok(true);
+        }
+
+        // fe80::/10 (IPv6 link-local)
+        if host.to_lowercase().starts_with("fe8") {
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    /// Check if an IP address is private (for older Rust versions)
+    fn is_ip_private(ip: &std::net::IpAddr) -> bool {
+        match ip {
+            std::net::IpAddr::V4(ipv4) => {
+                let octets = ipv4.octets();
+                // 10.0.0.0/8
+                if octets[0] == 10 {
+                    return true;
+                }
+                // 172.16.0.0/12
+                if octets[0] == 172 && (16..=31).contains(&octets[1]) {
+                    return true;
+                }
+                // 192.168.0.0/16
+                if octets[0] == 192 && octets[1] == 168 {
+                    return true;
+                }
+                // 127.0.0.0/8 (loopback)
+                if octets[0] == 127 {
+                    return true;
+                }
+                // 169.254.0.0/16 (link-local)
+                if octets[0] == 169 && octets[1] == 254 {
+                    return true;
+                }
+                // 224.0.0.0/4 (multicast)
+                if octets[0] >= 224 && octets[0] <= 239 {
+                    return true;
+                }
+                // 0.0.0.0 (unspecified)
+                if octets == [0, 0, 0, 0] {
+                    return true;
+                }
+                false
+            }
+            std::net::IpAddr::V6(ipv6) => {
+                let octets = ipv6.octets();
+                // fc00::/7 (unique local)
+                if (octets[0] & 0xfe) == 0xfc {
+                    return true;
+                }
+                // fe80::/10 (link-local)
+                if octets[0] == 0xfe && (octets[1] & 0xc0) == 0x80 {
+                    return true;
+                }
+                // ::1 (loopback)
+                if octets == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1] {
+                    return true;
+                }
+                // :: (unspecified)
+                if octets == [0; 16] {
+                    return true;
+                }
+                // ff00::/8 (multicast)
+                if octets[0] == 0xff {
+                    return true;
+                }
+                false
+            }
+        }
+    }
+
+    /// Add an allowed host pattern
+    pub fn allow_host(&mut self, pattern: &str) -> Result<(), regex::Error> {
+        let regex = Regex::new(pattern)?;
+        self.allowed_hosts.push(regex);
+        Ok(())
+    }
+
+    /// Add a blocked host pattern
+    pub fn block_host(&mut self, pattern: &str) -> Result<(), regex::Error> {
+        let regex = Regex::new(pattern)?;
+        self.blocked_hosts.push(regex);
+        Ok(())
+    }
+}
+
+impl Default for SsrfGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, thiserror::Error, Clone)]
+pub enum SsrfError {
+    #[error("Invalid URL: {0}")]
+    InvalidUrl(String),
+    #[error("URL missing host")]
+    MissingHost,
+    #[error("Blocked host: {0}")]
+    BlockedHost(String),
+    #[error("Localhost/loopback addresses not allowed")]
+    LocalhostNotAllowed,
+    #[error("Private/internal IP addresses not allowed")]
+    PrivateIpNotAllowed,
+}
+
 /// Security layer - combines all security features
 pub struct SecurityLayer {
     config: SecurityConfig,
@@ -176,6 +403,7 @@ pub struct SecurityLayer {
     approvals: Arc<RwLock<HashMap<String, PendingApproval>>>,
     vault: Option<Arc<dyn VaultClient>>,
     wasm: Option<WasmSandbox>,
+    ssrf_guard: SsrfGuard,
 }
 
 #[derive(Debug, Clone)]
@@ -205,6 +433,7 @@ impl SecurityLayer {
             wasm: config
                 .wasm_sandbox
                 .then(|| WasmSandbox::new(config.wasm_max_instances)),
+            ssrf_guard: SsrfGuard::new(),
         }
     }
 
@@ -225,6 +454,7 @@ impl SecurityLayer {
             wasm: config
                 .wasm_sandbox
                 .then(|| WasmSandbox::new(config.wasm_max_instances)),
+            ssrf_guard: SsrfGuard::new(),
         }
     }
 
@@ -244,6 +474,16 @@ impl SecurityLayer {
             }
         }
         CommandCheck::Allowed
+    }
+
+    /// Validate URL against SSRF attacks
+    pub fn validate_url(&self, url: &str) -> Result<(), SsrfError> {
+        self.ssrf_guard.validate_url(url)
+    }
+
+    /// Get a reference to the SSRF guard for custom configuration
+    pub fn ssrf_guard(&self) -> &SsrfGuard {
+        &self.ssrf_guard
     }
 
     /// Check pairing status for sender
