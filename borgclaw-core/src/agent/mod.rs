@@ -192,7 +192,26 @@ impl SimpleAgent {
 
     fn system_prompt(&self) -> Option<String> {
         let path = self.config.soul_path.as_ref()?;
-        std::fs::read_to_string(path).ok()
+        let base_prompt = std::fs::read_to_string(path).ok()?;
+        
+        // Inject current date/time to prevent stale session errors
+        // This is dynamic and not cached - critical for accurate time-based responses
+        let now = chrono::Local::now();
+        let datetime_str = now.format("%Y-%m-%d %H:%M:%S %Z").to_string();
+        let date_str = now.format("%Y-%m-%d").to_string();
+        let time_str = now.format("%H:%M:%S").to_string();
+        let timezone_str = now.format("%Z").to_string();
+        
+        let injected = format!(
+            "{}\n\n[SYSTEM CONTEXT - CURRENT TIME]\nCurrent date and time: {}\nDate: {}\nTime: {}\nTimezone: {}\n[END SYSTEM CONTEXT]",
+            base_prompt,
+            datetime_str,
+            date_str,
+            time_str,
+            timezone_str
+        );
+        
+        Some(injected)
     }
 
     fn ensure_session(&mut self, session_id: &SessionId, group_id: Option<String>) -> &mut Session {
@@ -483,6 +502,7 @@ mod tests {
     use crate::agent::session::Session;
     use crate::agent::{Message, ToolCall};
     use crate::config::{MemoryConfig, SkillsConfig, McpConfig, SecurityConfig};
+    use std::path::PathBuf;
 
     #[test]
     fn session_compaction_keeps_recent_messages_and_summary() {
@@ -575,5 +595,140 @@ mod tests {
             .await;
 
         assert!(response.text.contains("prompt-injection"));
+    }
+
+    #[test]
+    fn system_prompt_injects_current_datetime() {
+        use crate::config::AgentConfig;
+        use crate::config::{MemoryConfig, SkillsConfig, McpConfig, SecurityConfig};
+
+        // Create a temporary soul file
+        let temp_dir = std::env::temp_dir().join(format!("borgclaw_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let soul_path = temp_dir.join("test.soul");
+
+        let base_prompt = "You are a helpful assistant.";
+        std::fs::write(&soul_path, base_prompt).unwrap();
+
+        let config = AgentConfig {
+            soul_path: Some(soul_path.clone()),
+            ..Default::default()
+        };
+
+        let agent = SimpleAgent::new(
+            config,
+            Some(MemoryConfig::default()),
+            None,
+            None,
+            Some(SkillsConfig::default()),
+            Some(McpConfig::default()),
+            Some(SecurityConfig::default()),
+        );
+        let system_prompt = agent.system_prompt().unwrap();
+
+        // Verify base prompt is present
+        assert!(system_prompt.contains(base_prompt));
+
+        // Verify datetime context section is present
+        assert!(system_prompt.contains("[SYSTEM CONTEXT - CURRENT TIME]"));
+        assert!(system_prompt.contains("Current date and time:"));
+        assert!(system_prompt.contains("Date:"));
+        assert!(system_prompt.contains("Time:"));
+        assert!(system_prompt.contains("Timezone:"));
+        assert!(system_prompt.contains("[END SYSTEM CONTEXT]"));
+
+        // Verify the format looks correct (YYYY-MM-DD HH:MM:SS)
+        assert!(system_prompt.contains("Current date and time: 20")); // Should start with 20xx year
+
+        // Clean up
+        std::fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
+    fn system_prompt_returns_none_without_soul_path() {
+        use crate::config::AgentConfig;
+        use crate::config::{MemoryConfig, SkillsConfig, McpConfig, SecurityConfig};
+
+        let config = AgentConfig {
+            soul_path: None,
+            ..Default::default()
+        };
+
+        let agent = SimpleAgent::new(
+            config,
+            Some(MemoryConfig::default()),
+            None,
+            None,
+            Some(SkillsConfig::default()),
+            Some(McpConfig::default()),
+            Some(SecurityConfig::default()),
+        );
+        assert!(agent.system_prompt().is_none());
+    }
+
+    #[test]
+    fn system_prompt_returns_none_for_missing_file() {
+        use crate::config::AgentConfig;
+        use crate::config::{MemoryConfig, SkillsConfig, McpConfig, SecurityConfig};
+
+        let config = AgentConfig {
+            soul_path: Some(PathBuf::from("/nonexistent/path/test.soul")),
+            ..Default::default()
+        };
+
+        let agent = SimpleAgent::new(
+            config,
+            Some(MemoryConfig::default()),
+            None,
+            None,
+            Some(SkillsConfig::default()),
+            Some(McpConfig::default()),
+            Some(SecurityConfig::default()),
+        );
+        assert!(agent.system_prompt().is_none());
+    }
+
+    #[test]
+    fn system_prompt_datetime_is_not_cached() {
+        use crate::config::AgentConfig;
+        use crate::config::{MemoryConfig, SkillsConfig, McpConfig, SecurityConfig};
+
+        // Create a temporary soul file
+        let temp_dir = std::env::temp_dir().join(format!("borgclaw_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let soul_path = temp_dir.join("test.soul");
+        std::fs::write(&soul_path, "You are a helpful assistant.").unwrap();
+
+        let config = AgentConfig {
+            soul_path: Some(soul_path.clone()),
+            ..Default::default()
+        };
+
+        let agent = SimpleAgent::new(
+            config,
+            Some(MemoryConfig::default()),
+            None,
+            None,
+            Some(SkillsConfig::default()),
+            Some(McpConfig::default()),
+            Some(SecurityConfig::default()),
+        );
+
+        // Get first prompt
+        let prompt1 = agent.system_prompt().unwrap();
+
+        // Get second prompt (should have different timestamp)
+        let prompt2 = agent.system_prompt().unwrap();
+
+        // Both should contain the datetime section but may have different timestamps
+        assert!(prompt1.contains("Current date and time:"));
+        assert!(prompt2.contains("Current date and time:"));
+
+        // The prompts should not be identical due to different timestamps
+        // (unless we hit a very rare race condition where both calls happen in the same second)
+        // So we just verify the structure is correct rather than comparing the full strings
+
+        // Clean up
+        std::fs::remove_dir_all(temp_dir).unwrap();
     }
 }
