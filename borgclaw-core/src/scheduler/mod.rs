@@ -2,7 +2,7 @@
 
 mod jobs;
 
-pub use jobs::{Job, JobRun, JobStatus, JobTrigger};
+pub use jobs::{CatchUpPolicy, Job, JobRun, JobStatus, JobTrigger};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -383,6 +383,44 @@ impl Scheduler {
         results
     }
 
+    /// List all dead-lettered jobs
+    pub async fn list_dead_lettered(&self) -> Vec<Job> {
+        let jobs = self.jobs.read().await;
+        jobs.values()
+            .filter(|j| j.dead_lettered_at.is_some())
+            .cloned()
+            .collect()
+    }
+
+    /// Reset a dead-lettered job, clearing dead-letter state and re-enabling it
+    pub async fn reset_dead_letter(&self, id: &str) -> Result<(), SchedulerError> {
+        let mut jobs = self.jobs.write().await;
+        let job = jobs
+            .get_mut(id)
+            .ok_or_else(|| SchedulerError::JobNotFound(id.to_string()))?;
+
+        if job.dead_lettered_at.is_none() {
+            return Err(SchedulerError::Error(
+                "Job is not dead-lettered".to_string(),
+            ));
+        }
+
+        job.dead_lettered_at = None;
+        job.retry_count = 0;
+        job.status = JobStatus::Pending;
+        job.missed_runs = 0;
+
+        // Recompute next_run
+        if let Some(next) = job.trigger.next_run() {
+            job.next_run = Some(next);
+        } else {
+            job.next_run = Some(Utc::now());
+        }
+
+        self.persist_state(&jobs);
+        Ok(())
+    }
+
     fn persist_state(&self, jobs: &HashMap<String, Job>) {
         let Some(path) = &self.state_path else {
             return;
@@ -444,6 +482,8 @@ pub fn new_job(name: impl Into<String>, trigger: JobTrigger, action: impl Into<S
         dead_lettered_at: None,
         run_history: Vec::new(),
         metadata: HashMap::new(),
+        catch_up_policy: CatchUpPolicy::default(),
+        missed_runs: 0,
     }
 }
 
@@ -462,11 +502,58 @@ fn load_jobs(path: &PathBuf) -> HashMap<String, Job> {
         return HashMap::new();
     };
 
+    let now = Utc::now();
+
     for job in jobs.values_mut() {
+        // Recover Running jobs as Pending
         if job.status == JobStatus::Running {
+            tracing::info!(
+                "Recovering running job '{}' ({}) as pending",
+                job.name,
+                job.id
+            );
             job.status = JobStatus::Pending;
             if job.next_run.is_none() {
-                job.next_run = Some(Utc::now());
+                job.next_run = Some(now);
+            }
+        }
+
+        // Detect stale next_run for repeating jobs (Completed or Pending)
+        if matches!(
+            job.status,
+            JobStatus::Completed | JobStatus::Pending
+        ) {
+            if let Some(next_run) = job.next_run {
+                if next_run < now && !matches!(job.trigger, JobTrigger::OneShot(_)) {
+                    let missed_duration = now - next_run;
+                    let missed_hours = missed_duration.num_hours();
+
+                    if missed_hours > 0 {
+                        tracing::warn!(
+                            "Job '{}' ({}) missed scheduled run by {} hours (catch_up_policy={:?})",
+                            job.name,
+                            job.id,
+                            missed_hours,
+                            job.catch_up_policy
+                        );
+                    }
+
+                    match job.catch_up_policy {
+                        CatchUpPolicy::Skip => {
+                            // Advance next_run to the next future occurrence
+                            if let Some(future_run) = job.trigger.next_run() {
+                                job.next_run = Some(future_run);
+                                job.status = JobStatus::Pending;
+                            }
+                        }
+                        CatchUpPolicy::RunOnce => {
+                            // Set next_run to now so it fires once on the next tick
+                            job.next_run = Some(now);
+                            job.status = JobStatus::Pending;
+                            job.missed_runs = 1;
+                        }
+                    }
+                }
             }
         }
     }
@@ -904,6 +991,231 @@ mod tests {
 
         let reloaded = Scheduler::new().with_state_path(state_path);
         assert!(reloaded.get(&id).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn list_dead_lettered_returns_only_dead_lettered_jobs() {
+        let scheduler = Scheduler::new();
+
+        // Schedule a normal job
+        let mut normal = new_job(
+            "normal",
+            JobTrigger::OneShot(Utc::now() + Duration::seconds(5)),
+            "echo normal",
+        );
+        normal.next_run = Some(Utc::now() - Duration::seconds(1));
+        scheduler.schedule(normal).await.unwrap();
+
+        // Schedule a job that will be dead-lettered
+        let mut dl_job = with_retry_policy(
+            new_job(
+                "dead-letter-me",
+                JobTrigger::OneShot(Utc::now() + Duration::seconds(5)),
+                "echo dl",
+            ),
+            0,
+            1,
+        );
+        dl_job.next_run = Some(Utc::now() - Duration::seconds(1));
+        let dl_id = scheduler.schedule(dl_job).await.unwrap();
+
+        // Fail the second job to dead-letter it
+        let _ = scheduler
+            .run_due(|job| async move {
+                if job.action == "echo dl" {
+                    Err(SchedulerError::JobFailed("dead".to_string()))
+                } else {
+                    Ok(())
+                }
+            })
+            .await;
+
+        let dead = scheduler.list_dead_lettered().await;
+        assert_eq!(dead.len(), 1);
+        assert_eq!(dead[0].id, dl_id);
+        assert!(dead[0].dead_lettered_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn reset_dead_letter_clears_state_and_reschedules() {
+        let scheduler = Scheduler::new();
+        let mut job = new_job(
+            "dead-letter-reset",
+            JobTrigger::Interval(60),
+            "echo reset",
+        );
+        job.next_run = Some(Utc::now() - Duration::seconds(1));
+        job.max_retries = 0;
+        let id = scheduler.schedule(job).await.unwrap();
+
+        // Fail it to dead-letter
+        let _ = scheduler
+            .run_due(|_| async { Err(SchedulerError::JobFailed("fail".to_string())) })
+            .await;
+
+        let stored = scheduler.get(&id).await.unwrap();
+        assert!(stored.dead_lettered_at.is_some());
+        assert!(stored.next_run.is_none());
+
+        // Reset it
+        scheduler.reset_dead_letter(&id).await.unwrap();
+        let stored = scheduler.get(&id).await.unwrap();
+        assert!(stored.dead_lettered_at.is_none());
+        assert_eq!(stored.retry_count, 0);
+        assert_eq!(stored.status, JobStatus::Pending);
+        assert_eq!(stored.missed_runs, 0);
+        assert!(stored.next_run.is_some());
+    }
+
+    #[tokio::test]
+    async fn reset_dead_letter_errors_on_non_dead_lettered_job() {
+        let scheduler = Scheduler::new();
+        let job = new_job("healthy", JobTrigger::Interval(60), "echo ok");
+        let id = scheduler.schedule(job).await.unwrap();
+
+        let err = scheduler.reset_dead_letter(&id).await.unwrap_err();
+        assert!(err.to_string().contains("not dead-lettered"));
+    }
+
+    #[tokio::test]
+    async fn reset_dead_letter_errors_on_missing_job() {
+        let scheduler = Scheduler::new();
+        let err = scheduler
+            .reset_dead_letter("nonexistent")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn catch_up_policy_default_is_skip() {
+        assert_eq!(CatchUpPolicy::default(), CatchUpPolicy::Skip);
+    }
+
+    #[test]
+    fn catch_up_policy_serialization_round_trips() {
+        let skip_json = serde_json::to_string(&CatchUpPolicy::Skip).unwrap();
+        assert_eq!(skip_json, "\"skip\"");
+        let run_once_json = serde_json::to_string(&CatchUpPolicy::RunOnce).unwrap();
+        assert_eq!(run_once_json, "\"run_once\"");
+
+        let skip: CatchUpPolicy = serde_json::from_str(&skip_json).unwrap();
+        assert_eq!(skip, CatchUpPolicy::Skip);
+        let run_once: CatchUpPolicy = serde_json::from_str(&run_once_json).unwrap();
+        assert_eq!(run_once, CatchUpPolicy::RunOnce);
+    }
+
+    #[test]
+    fn load_jobs_skip_policy_advances_stale_next_run() {
+        let state_path =
+            std::env::temp_dir().join(format!("borgclaw_catchup_skip_{}.json", Uuid::new_v4()));
+
+        let mut jobs = HashMap::new();
+        let mut job = new_job("stale-skip", JobTrigger::Interval(60), "echo skip");
+        job.status = JobStatus::Completed;
+        job.catch_up_policy = CatchUpPolicy::Skip;
+        // Set next_run to 2 hours ago to trigger catch-up
+        job.next_run = Some(Utc::now() - Duration::hours(2));
+        let id = job.id.clone();
+        jobs.insert(id.clone(), job);
+
+        let serialized = serde_json::to_string_pretty(&jobs).unwrap();
+        std::fs::write(&state_path, serialized).unwrap();
+
+        let loaded = load_jobs(&state_path);
+        let loaded_job = loaded.get(&id).unwrap();
+        assert_eq!(loaded_job.status, JobStatus::Pending);
+        // next_run should be in the future (advanced past now)
+        assert!(loaded_job.next_run.unwrap() > Utc::now() - Duration::seconds(5));
+        assert_eq!(loaded_job.missed_runs, 0);
+
+        let _ = std::fs::remove_file(&state_path);
+    }
+
+    #[test]
+    fn load_jobs_run_once_policy_sets_next_run_to_now() {
+        let state_path = std::env::temp_dir()
+            .join(format!("borgclaw_catchup_runonce_{}.json", Uuid::new_v4()));
+
+        let mut jobs = HashMap::new();
+        let mut job = new_job("stale-runonce", JobTrigger::Interval(60), "echo runonce");
+        job.status = JobStatus::Completed;
+        job.catch_up_policy = CatchUpPolicy::RunOnce;
+        // Set next_run to 2 hours ago to trigger catch-up
+        job.next_run = Some(Utc::now() - Duration::hours(2));
+        let id = job.id.clone();
+        jobs.insert(id.clone(), job);
+
+        let serialized = serde_json::to_string_pretty(&jobs).unwrap();
+        std::fs::write(&state_path, serialized).unwrap();
+
+        let before = Utc::now();
+        let loaded = load_jobs(&state_path);
+        let loaded_job = loaded.get(&id).unwrap();
+        assert_eq!(loaded_job.status, JobStatus::Pending);
+        assert_eq!(loaded_job.missed_runs, 1);
+        // next_run should be approximately now (within a few seconds)
+        let next = loaded_job.next_run.unwrap();
+        assert!(next >= before - Duration::seconds(1));
+        assert!(next <= Utc::now() + Duration::seconds(1));
+
+        let _ = std::fs::remove_file(&state_path);
+    }
+
+    #[test]
+    fn load_jobs_no_catchup_when_next_run_is_future() {
+        let state_path = std::env::temp_dir()
+            .join(format!("borgclaw_catchup_future_{}.json", Uuid::new_v4()));
+
+        let mut jobs = HashMap::new();
+        let future_next = Utc::now() + Duration::hours(1);
+        let mut job = new_job("future-job", JobTrigger::Interval(60), "echo future");
+        job.status = JobStatus::Pending;
+        job.catch_up_policy = CatchUpPolicy::RunOnce;
+        job.next_run = Some(future_next);
+        let id = job.id.clone();
+        jobs.insert(id.clone(), job);
+
+        let serialized = serde_json::to_string_pretty(&jobs).unwrap();
+        std::fs::write(&state_path, serialized).unwrap();
+
+        let loaded = load_jobs(&state_path);
+        let loaded_job = loaded.get(&id).unwrap();
+        // Should be untouched
+        assert_eq!(loaded_job.next_run.unwrap(), future_next);
+        assert_eq!(loaded_job.missed_runs, 0);
+
+        let _ = std::fs::remove_file(&state_path);
+    }
+
+    #[test]
+    fn load_jobs_no_catchup_for_oneshot_jobs() {
+        let state_path = std::env::temp_dir()
+            .join(format!("borgclaw_catchup_oneshot_{}.json", Uuid::new_v4()));
+
+        let mut jobs = HashMap::new();
+        let past_time = Utc::now() - Duration::hours(2);
+        let mut job = new_job(
+            "oneshot-stale",
+            JobTrigger::OneShot(past_time),
+            "echo oneshot",
+        );
+        job.status = JobStatus::Pending;
+        job.catch_up_policy = CatchUpPolicy::RunOnce;
+        job.next_run = Some(past_time);
+        let id = job.id.clone();
+        jobs.insert(id.clone(), job);
+
+        let serialized = serde_json::to_string_pretty(&jobs).unwrap();
+        std::fs::write(&state_path, serialized).unwrap();
+
+        let loaded = load_jobs(&state_path);
+        let loaded_job = loaded.get(&id).unwrap();
+        // OneShot jobs should NOT get catch-up recovery
+        assert_eq!(loaded_job.next_run.unwrap(), past_time);
+        assert_eq!(loaded_job.missed_runs, 0);
+
+        let _ = std::fs::remove_file(&state_path);
     }
 
     #[tokio::test]

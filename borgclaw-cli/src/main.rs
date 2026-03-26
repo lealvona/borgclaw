@@ -156,6 +156,10 @@ enum ScheduleAction {
     Pause { id: String },
     /// Resume (enable) a paused scheduled task
     Resume { id: String },
+    /// List dead-lettered jobs
+    DeadLetters,
+    /// Retry (reset) a dead-lettered job
+    Retry { id: String },
 }
 
 #[derive(Subcommand)]
@@ -789,6 +793,30 @@ fn schedules(config: AppConfig, action: ScheduleAction) {
                 Ok(true) => println!("Resumed scheduled task '{}'", id),
                 Ok(false) => println!("No scheduled task '{}' found or not paused", id),
                 Err(err) => println!("Failed to resume scheduled task: {}", err),
+            }
+        }
+        ScheduleAction::DeadLetters => {
+            println!("Dead-lettered scheduled tasks");
+            println!("=============================");
+            match dead_lettered_jobs(&path) {
+                Ok(lines) if lines.is_empty() => {
+                    println!("No dead-lettered tasks found")
+                }
+                Ok(lines) => {
+                    for line in lines {
+                        println!("  - {}", line);
+                    }
+                }
+                Err(err) => println!("Could not read {}: {}", path.display(), err),
+            }
+        }
+        ScheduleAction::Retry { id } => {
+            println!("Retrying dead-lettered task");
+            println!("===========================");
+            match retry_dead_lettered_job(&path, &id) {
+                Ok(true) => println!("Reset dead-lettered task '{}' to pending", id),
+                Ok(false) => println!("No dead-lettered task '{}' found", id),
+                Err(err) => println!("Failed to retry task: {}", err),
             }
         }
     }
@@ -1995,6 +2023,8 @@ fn create_scheduled_job(
         dead_lettered_at: None,
         run_history: Vec::new(),
         metadata: HashMap::new(),
+        catch_up_policy: borgclaw_core::scheduler::CatchUpPolicy::default(),
+        missed_runs: 0,
     };
 
     let job = if max_retries > 0 {
@@ -2095,6 +2125,61 @@ fn resume_scheduled_job(path: &std::path::Path, id: &str) -> Result<bool, String
     job.status = JobStatus::Pending;
     if job.next_run.is_none() && job.trigger.next_run().is_some() {
         job.next_run = job.trigger.next_run();
+    }
+
+    let serialized = serde_json::to_string_pretty(&jobs).map_err(|e| e.to_string())?;
+    std::fs::write(path, serialized).map_err(|e| e.to_string())?;
+
+    Ok(true)
+}
+
+fn dead_lettered_jobs(path: &std::path::Path) -> Result<Vec<String>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let jobs: std::collections::HashMap<String, Job> =
+        serde_json::from_str(&contents).map_err(|e| e.to_string())?;
+
+    let mut lines = Vec::new();
+    for (id, job) in &jobs {
+        if let Some(dead_at) = job.dead_lettered_at {
+            lines.push(format!(
+                "{} [{}] action={} dead_lettered_at={} retries={}/{}",
+                job.name, id, job.action, dead_at, job.retry_count, job.max_retries
+            ));
+        }
+    }
+
+    lines.sort();
+    Ok(lines)
+}
+
+fn retry_dead_lettered_job(path: &std::path::Path, id: &str) -> Result<bool, String> {
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut jobs: std::collections::HashMap<String, Job> =
+        serde_json::from_str(&contents).map_err(|e| e.to_string())?;
+
+    let job = match jobs.get_mut(id) {
+        Some(job) => job,
+        None => return Ok(false),
+    };
+
+    if job.dead_lettered_at.is_none() {
+        return Ok(false);
+    }
+
+    job.dead_lettered_at = None;
+    job.retry_count = 0;
+    job.status = JobStatus::Pending;
+    job.missed_runs = 0;
+    if job.next_run.is_none() || job.next_run.map(|dt| dt < chrono::Utc::now()).unwrap_or(false) {
+        job.next_run = job.trigger.next_run().or(Some(chrono::Utc::now()));
     }
 
     let serialized = serde_json::to_string_pretty(&jobs).map_err(|e| e.to_string())?;

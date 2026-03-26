@@ -5,6 +5,22 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
 
+/// Policy for handling missed scheduled runs (e.g., after process restart)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatchUpPolicy {
+    /// Skip all missed windows, advance to next future run (default)
+    Skip,
+    /// Coalesce: run once on recovery regardless of how many were missed
+    RunOnce,
+}
+
+impl Default for CatchUpPolicy {
+    fn default() -> Self {
+        Self::Skip
+    }
+}
+
 /// Job definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Job {
@@ -40,6 +56,12 @@ pub struct Job {
     pub run_history: Vec<JobRun>,
     /// Additional metadata
     pub metadata: HashMap<String, String>,
+    /// Policy for handling missed scheduled runs
+    #[serde(default)]
+    pub catch_up_policy: CatchUpPolicy,
+    /// Count of detected missed runs during last recovery
+    #[serde(default)]
+    pub missed_runs: u32,
 }
 
 /// Recorded execution of a scheduled job
