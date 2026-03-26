@@ -571,7 +571,7 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "execute_command" => execute_command(&call.arguments, runtime).await,
         "read_file" => read_file(&call.arguments, runtime).await,
         "list_directory" => list_directory(&call.arguments, runtime).await,
-        "fetch_url" => fetch_url(&call.arguments).await,
+        "fetch_url" => fetch_url(&call.arguments, runtime).await,
         "message" => message(&call.arguments),
         "schedule_task" => schedule_task(&call.arguments, runtime).await,
         "run_scheduled_tasks" => run_scheduled_tasks(runtime).await,
@@ -1102,11 +1102,16 @@ async fn list_directory(
     ToolResult::ok(names.join("\n"))
 }
 
-async fn fetch_url(arguments: &HashMap<String, serde_json::Value>) -> ToolResult {
+async fn fetch_url(arguments: &HashMap<String, serde_json::Value>, runtime: &ToolRuntime) -> ToolResult {
     let url = match get_required_string(arguments, "url") {
         Ok(value) => value,
         Err(err) => return ToolResult::err(err),
     };
+
+    // Validate URL against SSRF attacks
+    if let Err(e) = runtime.security.validate_url(&url) {
+        return ToolResult::err(format!("URL blocked by SSRF protection: {}", e));
+    }
 
     match reqwest::get(&url).await {
         Ok(response) if response.status().is_success() => match response.text().await {
@@ -2667,6 +2672,16 @@ async fn browser_navigate(
         Err(err) => return ToolResult::err(err),
     };
 
+    // Validate URL against SSRF attacks
+    if let Err(e) = runtime.security.validate_url(&url) {
+        return ToolResult::err(format!("URL blocked by SSRF protection: {}", e));
+    }
+
+    // Block dangerous URL schemes
+    if url.starts_with("file://") || url.starts_with("data://") || url.starts_with("javascript:") {
+        return ToolResult::err("Browser cannot navigate to file://, data://, or javascript: URLs".to_string());
+    }
+
     with_browser(runtime, |browser| async move {
         browser.navigate(&url).await?;
         Ok(ToolResult::ok(url))
@@ -3118,6 +3133,12 @@ async fn url_shorten(
         Ok(value) => value,
         Err(err) => return ToolResult::err(err),
     };
+
+    // Validate URL against SSRF attacks
+    if let Err(e) = runtime.security.validate_url(&url) {
+        return ToolResult::err(format!("URL blocked by SSRF protection: {}", e));
+    }
+
     let shortener = UrlShortener::new(resolve_url_shortener_provider(&runtime.skills));
     match shortener.shorten(&url).await {
         Ok(short) => ToolResult::ok(short),
@@ -3133,6 +3154,12 @@ async fn url_expand(
         Ok(value) => value,
         Err(err) => return ToolResult::err(err),
     };
+
+    // Validate URL against SSRF attacks
+    if let Err(e) = runtime.security.validate_url(&url) {
+        return ToolResult::err(format!("URL blocked by SSRF protection: {}", e));
+    }
+
     let shortener = UrlShortener::new(resolve_url_shortener_provider(&runtime.skills));
     match shortener.expand(&url).await {
         Ok(expanded) => ToolResult::ok(expanded),

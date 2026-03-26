@@ -44,6 +44,9 @@ impl UrlShortener {
     }
 
     pub async fn shorten(&self, url: &str) -> Result<String, UrlError> {
+        // Validate URL against SSRF attacks
+        Self::validate_url(url)?;
+
         match &self.provider {
             UrlShortenerProvider::IsGd => self.shorten_isgd(url).await,
             UrlShortenerProvider::TinyUrl => self.shorten_tinyurl(url).await,
@@ -53,12 +56,73 @@ impl UrlShortener {
     }
 
     pub async fn expand(&self, short_url: &str) -> Result<String, UrlError> {
+        // Validate URL against SSRF attacks
+        Self::validate_url(short_url)?;
+
         match &self.provider {
             UrlShortenerProvider::IsGd => self.expand_isgd(short_url).await,
             UrlShortenerProvider::TinyUrl => self.expand_tinyurl(short_url).await,
             UrlShortenerProvider::Yourls(cfg) => self.expand_yourls(short_url, cfg).await,
             UrlShortenerProvider::Custom(cfg) => self.expand_custom(short_url, cfg).await,
         }
+    }
+
+    /// Validate URL to prevent SSRF attacks
+    fn validate_url(url: &str) -> Result<(), UrlError> {
+        // Parse the URL to extract the host
+        let parsed = url::Url::parse(url)
+            .map_err(|e| UrlError::InvalidUrl(format!("Failed to parse URL: {}", e)))?;
+        
+        let host = parsed.host_str()
+            .ok_or_else(|| UrlError::InvalidUrl("URL has no host".to_string()))?;
+
+        // Block localhost variants
+        let lower = host.to_lowercase();
+        if lower == "localhost" 
+            || lower == "127.0.0.1" 
+            || lower == "::1" 
+            || lower.starts_with("127.") {
+            return Err(UrlError::InvalidUrl(
+                "URLs pointing to localhost are not allowed".to_string()
+            ));
+        }
+
+        // Block private IP ranges
+        // 10.x.x.x
+        if host.starts_with("10.") {
+            return Err(UrlError::InvalidUrl(
+                "URLs pointing to private IP ranges are not allowed".to_string()
+            ));
+        }
+
+        // 172.16-31.x.x
+        if let Some(rest) = host.strip_prefix("172.") {
+            if let Some(dot_pos) = rest.find('.') {
+                if let Ok(second_octet) = rest[..dot_pos].parse::<u8>() {
+                    if (16..=31).contains(&second_octet) {
+                        return Err(UrlError::InvalidUrl(
+                            "URLs pointing to private IP ranges are not allowed".to_string()
+                        ));
+                    }
+                }
+            }
+        }
+
+        // 192.168.x.x
+        if host.starts_with("192.168.") {
+            return Err(UrlError::InvalidUrl(
+                "URLs pointing to private IP ranges are not allowed".to_string()
+            ));
+        }
+
+        // 169.254.x.x (link-local)
+        if host.starts_with("169.254.") {
+            return Err(UrlError::InvalidUrl(
+                "URLs pointing to link-local addresses are not allowed".to_string()
+            ));
+        }
+
+        Ok(())
     }
 
     async fn shorten_isgd(&self, url: &str) -> Result<String, UrlError> {
@@ -280,4 +344,7 @@ pub enum UrlError {
 
     #[error("Config error: {0}")]
     ConfigError(String),
+
+    #[error("Invalid URL: {0}")]
+    InvalidUrl(String),
 }
