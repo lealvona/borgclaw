@@ -605,17 +605,11 @@ fn configure_security(
     );
     if quick {
         config.security.wasm_sandbox = true;
-        config.security.docker_sandbox = false;
         return Ok(());
     }
     config.security.wasm_sandbox = Confirm::with_theme(theme)
-        .with_prompt("Enable WASM sandbox?")
+        .with_prompt("Enable WASM sandbox? (Recommended: provides secure plugin execution)")
         .default(config.security.wasm_sandbox)
-        .interact()
-        .map_err(|e| e.to_string())?;
-    config.security.docker_sandbox = Confirm::with_theme(theme)
-        .with_prompt("Enable Docker sandbox (image borgclaw/sandbox:latest)?")
-        .default(config.security.docker_sandbox)
         .interact()
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -1222,14 +1216,10 @@ fn print_summary(config: &AppConfig) {
     println!("{} {}", paint(INFO, "Model:"), config.agent.model);
     println!("{} {:?}", paint(INFO, "Workspace:"), config.agent.workspace);
     println!(
-        "{} {}",
+        "{} {} (max_instances={})",
         paint(INFO, "WASM sandbox:"),
-        config.security.wasm_sandbox
-    );
-    println!(
-        "{} {}",
-        paint(INFO, "Docker sandbox:"),
-        config.security.docker_sandbox
+        config.security.wasm_sandbox,
+        config.security.wasm_max_instances
     );
     println!(
         "{} {:?}",
@@ -1270,7 +1260,6 @@ fn apply_component_action(
                     config.channels.remove(&chapter);
                 }
                 ("sandbox", "wasm") => config.security.wasm_sandbox = false,
-                ("sandbox", "docker") => config.security.docker_sandbox = false,
                 ("memory", "sqlite") => config.memory.hybrid_search = false,
                 ("memory", "vector") => config.memory.vector_provider = "sqlite".to_string(),
                 ("provider", provider) if config.agent.provider == provider => {
@@ -1309,26 +1298,6 @@ fn apply_component_action(
                 }
                 ("sandbox", "wasm") => {
                     config.security.wasm_sandbox = true;
-                }
-                ("sandbox", "docker") => {
-                    config.security.docker_sandbox = true;
-                    let image: String = Input::with_theme(theme)
-                        .with_prompt("Docker sandbox image")
-                        .default("borgclaw/sandbox:latest".to_string())
-                        .interact_text()
-                        .map_err(|e| e.to_string())?;
-                    config
-                        .registrar
-                        .chapters
-                        .entry("sandbox_meta".to_string())
-                        .or_default()
-                        .retain(|value| !value.starts_with("docker_image="));
-                    config
-                        .registrar
-                        .chapters
-                        .entry("sandbox_meta".to_string())
-                        .or_default()
-                        .push(format!("docker_image={}", image));
                 }
                 ("memory", "sqlite") => {
                     config.memory.hybrid_search = true;

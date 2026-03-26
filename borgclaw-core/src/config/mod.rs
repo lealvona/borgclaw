@@ -203,12 +203,10 @@ impl Default for ChannelConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SecurityConfig {
-    /// Enable WASM sandbox
+    /// Enable WASM sandbox (primary sandbox mechanism for plugin execution)
     pub wasm_sandbox: bool,
     /// Max registered WASM sandbox instances
     pub wasm_max_instances: usize,
-    /// Enable Docker sandbox
-    pub docker_sandbox: bool,
     /// Enable the default command blocklist
     pub command_blocklist: bool,
     /// Additional blocklist entries
@@ -292,7 +290,6 @@ impl Default for SecurityConfig {
         Self {
             wasm_sandbox: true,
             wasm_max_instances: 10,
-            docker_sandbox: false,
             command_blocklist: true,
             extra_blocked: Vec::new(),
             allowed_commands: Vec::new(),
