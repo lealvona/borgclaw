@@ -102,8 +102,33 @@
 
 ### Release Policy
 
-- `1.10.2` is the current release line
-- New work after `1.10.2` should continue on feature branches
+- `1.11.0` is the **current release**
+- Available at: https://github.com/lealvona/borgclaw/releases/tag/v1.11.0
+- New work after `1.11.0` should continue on feature branches
+
+## 1.10.2 - 2026-03-19
+
+### Fixes
+
+**Compiler Warnings Cleanup**
+- Fixed all 21 compiler warnings (zero warnings remaining)
+- Added workspace resolver = "2" for edition 2021
+- Removed unused traits: `ChannelFactory`
+- Removed unused structs: `WebhookChannelBuilder`, `WasmTool`
+- Removed unused functions: `default_skill`
+- Removed unused fields from internal response structs
+- Fixed Signal API structs with proper serde rename attributes
+
+**Completed Missing Functionality**
+- `SseTransport`: Now uses stored client instead of creating new one per connection
+- `WasmSandbox`: Implemented max_instances limit using Semaphore
+- `OpListItem`: item_type now properly maps to VaultItemType
+- `PendingPairing`: Removed redundant code field (was already HashMap key)
+
+### Release Policy
+
+- `1.10.2` was the previous release line
+- Superseded by `1.11.0`
 
 ## 1.10.1 - 2026-03-19
 
