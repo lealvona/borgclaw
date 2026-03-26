@@ -721,6 +721,371 @@ impl DriveClient {
     pub async fn search_files(&self, query: &str) -> Result<Vec<DriveFile>, GoogleError> {
         self.list_files(Some(query), 20).await
     }
+
+    /// Create a new folder in Google Drive
+    pub async fn create_folder(
+        &self,
+        name: &str,
+        parent_id: Option<&str>,
+    ) -> Result<DriveFile, GoogleError> {
+        let token = self.auth.get_token().await?;
+
+        let mut metadata = serde_json::json!({
+            "name": name,
+            "mimeType": "application/vnd.google-apps.folder"
+        });
+        if let Some(parent_id) = parent_id {
+            metadata["parents"] = serde_json::json!([parent_id]);
+        }
+
+        let response = self
+            .auth
+            .http
+            .post(format!(
+                "{}/drive/v3/files",
+                self.auth.config.drive_base_url.trim_end_matches('/')
+            ))
+            .bearer_auth(&token.access_token)
+            .json(&metadata)
+            .send()
+            .await
+            .map_err(|e| GoogleError::RequestFailed(e.to_string()))?;
+
+        let file: DriveFile = response
+            .json()
+            .await
+            .map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
+
+        Ok(file)
+    }
+
+    /// List folders in Google Drive
+    pub async fn list_folders(
+        &self,
+        parent_id: Option<&str>,
+        page_size: u32,
+    ) -> Result<Vec<DriveFile>, GoogleError> {
+        let mut query = "mimeType='application/vnd.google-apps.folder'".to_string();
+        if let Some(parent_id) = parent_id {
+            query.push_str(&format!(" and '{}' in parents", parent_id));
+        }
+        query.push_str(" and trashed=false");
+
+        self.list_files(Some(&query), page_size).await
+    }
+
+    /// Share a file with a specific user or make it public
+    pub async fn share_file(
+        &self,
+        file_id: &str,
+        email: Option<&str>,
+        role: &str,
+        allow_discovery: bool,
+    ) -> Result<Permission, GoogleError> {
+        let token = self.auth.get_token().await?;
+
+        let permission = if let Some(email) = email {
+            serde_json::json!({
+                "type": "user",
+                "role": role,
+                "emailAddress": email
+            })
+        } else {
+            serde_json::json!({
+                "type": if allow_discovery { "anyone" } else { "domain" },
+                "role": role
+            })
+        };
+
+        let response = self
+            .auth
+            .http
+            .post(format!(
+                "{}/drive/v3/files/{}/permissions",
+                self.auth.config.drive_base_url.trim_end_matches('/'),
+                file_id
+            ))
+            .bearer_auth(&token.access_token)
+            .json(&permission)
+            .send()
+            .await
+            .map_err(|e| GoogleError::RequestFailed(e.to_string()))?;
+
+        let result: Permission = response
+            .json()
+            .await
+            .map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
+
+        Ok(result)
+    }
+
+    /// List permissions for a file
+    pub async fn list_permissions(&self, file_id: &str) -> Result<Vec<Permission>, GoogleError> {
+        let token = self.auth.get_token().await?;
+
+        let response = self
+            .auth
+            .http
+            .get(format!(
+                "{}/drive/v3/files/{}/permissions",
+                self.auth.config.drive_base_url.trim_end_matches('/'),
+                file_id
+            ))
+            .bearer_auth(&token.access_token)
+            .send()
+            .await
+            .map_err(|e| GoogleError::RequestFailed(e.to_string()))?;
+
+        #[derive(Deserialize)]
+        struct ListResponse {
+            permissions: Vec<Permission>,
+        }
+
+        let result: ListResponse = response
+            .json()
+            .await
+            .map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
+
+        Ok(result.permissions)
+    }
+
+    /// Remove a permission from a file
+    pub async fn remove_permission(&self, file_id: &str, permission_id: &str) -> Result<(), GoogleError> {
+        let token = self.auth.get_token().await?;
+
+        let response = self
+            .auth
+            .http
+            .delete(format!(
+                "{}/drive/v3/files/{}/permissions/{}",
+                self.auth.config.drive_base_url.trim_end_matches('/'),
+                file_id,
+                permission_id
+            ))
+            .bearer_auth(&token.access_token)
+            .send()
+            .await
+            .map_err(|e| GoogleError::RequestFailed(e.to_string()))?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(GoogleError::RequestFailed(format!(
+                "Failed to remove permission: {}",
+                response.status()
+            )))
+        }
+    }
+
+    /// Move a file to a different folder
+    pub async fn move_file(
+        &self,
+        file_id: &str,
+        new_parent_id: &str,
+        old_parent_id: Option<&str>,
+    ) -> Result<DriveFile, GoogleError> {
+        let token = self.auth.get_token().await?;
+
+        let mut url = format!(
+            "{}/drive/v3/files/{}?addParents={}",
+            self.auth.config.drive_base_url.trim_end_matches('/'),
+            file_id,
+            new_parent_id
+        );
+
+        if let Some(old_parent_id) = old_parent_id {
+            url.push_str(&format!("&removeParents={}", old_parent_id));
+        }
+
+        let response = self
+            .auth
+            .http
+            .patch(&url)
+            .bearer_auth(&token.access_token)
+            .header("Content-Type", "application/json")
+            .send()
+            .await
+            .map_err(|e| GoogleError::RequestFailed(e.to_string()))?;
+
+        let file: DriveFile = response
+            .json()
+            .await
+            .map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
+
+        Ok(file)
+    }
+
+    /// Copy a file
+    pub async fn copy_file(&self, file_id: &str, new_name: &str) -> Result<DriveFile, GoogleError> {
+        let token = self.auth.get_token().await?;
+
+        let metadata = serde_json::json!({
+            "name": new_name
+        });
+
+        let response = self
+            .auth
+            .http
+            .post(format!(
+                "{}/drive/v3/files/{}/copy",
+                self.auth.config.drive_base_url.trim_end_matches('/'),
+                file_id
+            ))
+            .bearer_auth(&token.access_token)
+            .json(&metadata)
+            .send()
+            .await
+            .map_err(|e| GoogleError::RequestFailed(e.to_string()))?;
+
+        let file: DriveFile = response
+            .json()
+            .await
+            .map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
+
+        Ok(file)
+    }
+
+    /// Delete a file (move to trash or permanently)
+    pub async fn delete_file(&self, file_id: &str, permanent: bool) -> Result<(), GoogleError> {
+        let token = self.auth.get_token().await?;
+
+        if permanent {
+            let response = self
+                .auth
+                .http
+                .delete(format!(
+                    "{}/drive/v3/files/{}",
+                    self.auth.config.drive_base_url.trim_end_matches('/'),
+                    file_id
+                ))
+                .bearer_auth(&token.access_token)
+                .send()
+                .await
+                .map_err(|e| GoogleError::RequestFailed(e.to_string()))?;
+
+            if response.status().is_success() {
+                Ok(())
+            } else {
+                Err(GoogleError::RequestFailed(format!(
+                    "Failed to delete file: {}",
+                    response.status()
+                )))
+            }
+        } else {
+            // Move to trash
+            let metadata = serde_json::json!({
+                "trashed": true
+            });
+
+            let response = self
+                .auth
+                .http
+                .patch(format!(
+                    "{}/drive/v3/files/{}",
+                    self.auth.config.drive_base_url.trim_end_matches('/'),
+                    file_id
+                ))
+                .bearer_auth(&token.access_token)
+                .json(&metadata)
+                .send()
+                .await
+                .map_err(|e| GoogleError::RequestFailed(e.to_string()))?;
+
+            if response.status().is_success() {
+                Ok(())
+            } else {
+                Err(GoogleError::RequestFailed(format!(
+                    "Failed to trash file: {}",
+                    response.status()
+                )))
+            }
+        }
+    }
+
+    /// Batch upload multiple files
+    pub async fn batch_upload(
+        &self,
+        files: Vec<(&str, Vec<u8>, &str, Option<&str>)>,
+    ) -> Result<Vec<DriveFile>, GoogleError> {
+        let mut results = Vec::new();
+
+        for (name, content, mime_type, folder_id) in files {
+            match self.upload_file(name, content, mime_type, folder_id).await {
+                Ok(file) => results.push(file),
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Batch share files
+    pub async fn batch_share(
+        &self,
+        file_ids: Vec<&str>,
+        email: Option<&str>,
+        role: &str,
+        allow_discovery: bool,
+    ) -> Result<Vec<Permission>, GoogleError> {
+        let mut results = Vec::new();
+
+        for file_id in file_ids {
+            match self.share_file(file_id, email, role, allow_discovery).await {
+                Ok(permission) => results.push(permission),
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Get file details including web view link
+    pub async fn get_file_details(&self, file_id: &str) -> Result<DriveFileDetails, GoogleError> {
+        let token = self.auth.get_token().await?;
+
+        let response = self
+            .auth
+            .http
+            .get(format!(
+                "{}/drive/v3/files/{}?fields=id,name,mimeType,size,parents,webViewLink,webContentLink,createdTime,modifiedTime",
+                self.auth.config.drive_base_url.trim_end_matches('/'),
+                file_id
+            ))
+            .bearer_auth(&token.access_token)
+            .send()
+            .await
+            .map_err(|e| GoogleError::RequestFailed(e.to_string()))?;
+
+        let details: DriveFileDetails = response
+            .json()
+            .await
+            .map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
+
+        Ok(details)
+    }
+}
+
+/// Permission structure for sharing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Permission {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub permission_type: String,
+    pub role: String,
+    pub email_address: Option<String>,
+    pub domain: Option<String>,
+    pub allow_file_discovery: Option<bool>,
+}
+
+/// Extended file details
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DriveFileDetails {
+    #[serde(flatten)]
+    pub file: DriveFile,
+    pub web_view_link: Option<String>,
+    pub web_content_link: Option<String>,
+    pub created_time: Option<String>,
+    pub modified_time: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

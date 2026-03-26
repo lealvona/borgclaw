@@ -611,6 +611,15 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "google_trash_email" => google_trash_email(&call.arguments, runtime).await,
         "google_update_event" => google_update_event(&call.arguments, runtime).await,
         "google_delete_event" => google_delete_event(&call.arguments, runtime).await,
+        "google_create_folder" => google_create_folder(&call.arguments, runtime).await,
+        "google_list_folders" => google_list_folders(&call.arguments, runtime).await,
+        "google_share_file" => google_share_file(&call.arguments, runtime).await,
+        "google_list_permissions" => google_list_permissions(&call.arguments, runtime).await,
+        "google_remove_permission" => google_remove_permission(&call.arguments, runtime).await,
+        "google_move_file" => google_move_file(&call.arguments, runtime).await,
+        "google_copy_file" => google_copy_file(&call.arguments, runtime).await,
+        "google_delete_file" => google_delete_file(&call.arguments, runtime).await,
+        "google_get_file_details" => google_get_file_details(&call.arguments, runtime).await,
         "browser_navigate" => browser_navigate(&call.arguments, runtime).await,
         "browser_click" => browser_click(&call.arguments, runtime).await,
         "browser_fill" => browser_fill(&call.arguments, runtime).await,
@@ -2423,6 +2432,220 @@ async fn google_delete_event(
     }
 }
 
+async fn google_create_folder(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = google_client(runtime);
+    let name = match get_required_string(arguments, "name") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let parent_id = get_string(arguments, "parent_id");
+
+    let drive = crate::skills::DriveClient::new(client.auth());
+    match drive.create_folder(&name, parent_id.as_deref()).await {
+        Ok(folder) => ToolResult::ok(format!("created folder {} ({})", folder.name, folder.id)),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn google_list_folders(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = google_client(runtime);
+    let parent_id = get_string(arguments, "parent_id");
+
+    let drive = crate::skills::DriveClient::new(client.auth());
+    match drive.list_folders(parent_id.as_deref(), 20).await {
+        Ok(folders) if folders.is_empty() => ToolResult::ok("no folders"),
+        Ok(folders) => ToolResult::ok(
+            folders
+                .into_iter()
+                .map(|f| format!("{} | {}", f.id, f.name))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn google_share_file(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = google_client(runtime);
+    let file_id = match get_required_string(arguments, "file_id") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let email = get_string(arguments, "email");
+    let role = get_string(arguments, "role").unwrap_or_else(|| "reader".to_string());
+    let allow_discovery = get_bool(arguments, "allow_discovery").unwrap_or(false);
+
+    let drive = crate::skills::DriveClient::new(client.auth());
+    match drive.share_file(&file_id, email.as_deref(), &role, allow_discovery).await {
+        Ok(perm) => {
+            let msg = if let Some(email) = email {
+                format!("shared with {} as {}", email, perm.role)
+            } else {
+                format!("shared publicly as {}", perm.role)
+            };
+            ToolResult::ok(msg)
+        }
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn google_list_permissions(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = google_client(runtime);
+    let file_id = match get_required_string(arguments, "file_id") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    let drive = crate::skills::DriveClient::new(client.auth());
+    match drive.list_permissions(&file_id).await {
+        Ok(perms) if perms.is_empty() => ToolResult::ok("no permissions"),
+        Ok(perms) => ToolResult::ok(
+            perms
+                .into_iter()
+                .map(|p| {
+                    let email = p.email_address.as_deref().unwrap_or("public");
+                    format!("{} | {} | {} | {}", p.id, p.permission_type, p.role, email)
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn google_remove_permission(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = google_client(runtime);
+    let file_id = match get_required_string(arguments, "file_id") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let permission_id = match get_required_string(arguments, "permission_id") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    let drive = crate::skills::DriveClient::new(client.auth());
+    match drive.remove_permission(&file_id, &permission_id).await {
+        Ok(()) => ToolResult::ok("permission removed"),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn google_move_file(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = google_client(runtime);
+    let file_id = match get_required_string(arguments, "file_id") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let new_folder_id = match get_required_string(arguments, "new_folder_id") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let old_folder_id = get_string(arguments, "old_folder_id");
+
+    let drive = crate::skills::DriveClient::new(client.auth());
+    match drive.move_file(&file_id, &new_folder_id, old_folder_id.as_deref()).await {
+        Ok(file) => ToolResult::ok(format!("moved {} to {}", file.name, new_folder_id)),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn google_copy_file(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = google_client(runtime);
+    let file_id = match get_required_string(arguments, "file_id") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let new_name = match get_required_string(arguments, "new_name") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    let drive = crate::skills::DriveClient::new(client.auth());
+    match drive.copy_file(&file_id, &new_name).await {
+        Ok(file) => ToolResult::ok(format!("copied to {} ({})", file.name, file.id)),
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn google_delete_file(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = google_client(runtime);
+    let file_id = match get_required_string(arguments, "file_id") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let permanent = get_bool(arguments, "permanent").unwrap_or(false);
+
+    let drive = crate::skills::DriveClient::new(client.auth());
+    match drive.delete_file(&file_id, permanent).await {
+        Ok(()) => {
+            let msg = if permanent {
+                "file permanently deleted"
+            } else {
+                "file moved to trash"
+            };
+            ToolResult::ok(msg)
+        }
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+async fn google_get_file_details(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let client = google_client(runtime);
+    let file_id = match get_required_string(arguments, "file_id") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    let drive = crate::skills::DriveClient::new(client.auth());
+    match drive.get_file_details(&file_id).await {
+        Ok(details) => {
+            let mut result = format!(
+                "Name: {}\nID: {}\nType: {}\nSize: {:?}\n",
+                details.file.name, details.file.id, details.file.mime_type, details.file.size
+            );
+            if let Some(link) = details.web_view_link {
+                result.push_str(&format!("View: {}\n", link));
+            }
+            if let Some(created) = details.created_time {
+                result.push_str(&format!("Created: {}\n", created));
+            }
+            if let Some(modified) = details.modified_time {
+                result.push_str(&format!("Modified: {}\n", modified));
+            }
+            ToolResult::ok(result)
+        }
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
 async fn browser_navigate(
     arguments: &HashMap<String, serde_json::Value>,
     runtime: &ToolRuntime,
@@ -3195,6 +3418,17 @@ fn get_required_string(
 
 fn get_u64(arguments: &HashMap<String, serde_json::Value>, key: &str) -> Option<u64> {
     arguments.get(key).and_then(|value| value.as_u64())
+}
+
+fn get_string(arguments: &HashMap<String, serde_json::Value>, key: &str) -> Option<String> {
+    arguments
+        .get(key)
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string)
+}
+
+fn get_bool(arguments: &HashMap<String, serde_json::Value>, key: &str) -> Option<bool> {
+    arguments.get(key).and_then(|value| value.as_bool())
 }
 
 fn resolve_workspace_path(
@@ -6733,6 +6967,130 @@ pub fn builtin_tools() -> Vec<Tool> {
                 vec!["event_id".to_string()],
             ))
             .with_approval(true)
+            .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new("google_create_folder", "Create a new folder in Google Drive")
+            .with_schema(ToolSchema::object(
+                [
+                    ("name".to_string(), string_property("Folder name")),
+                    (
+                        "parent_id".to_string(),
+                        string_property("Optional parent folder ID"),
+                    ),
+                ]
+                .into(),
+                vec!["name".to_string()],
+            ))
+            .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new("google_list_folders", "List folders in Google Drive")
+            .with_schema(ToolSchema::object(
+                [
+                    (
+                        "parent_id".to_string(),
+                        string_property("Optional parent folder ID"),
+                    ),
+                ]
+                .into(),
+                Vec::new(),
+            ))
+            .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new("google_share_file", "Share a Google Drive file")
+            .with_schema(ToolSchema::object(
+                [
+                    ("file_id".to_string(), string_property("File ID to share")),
+                    (
+                        "email".to_string(),
+                        string_property("Optional email to share with (omit for public)"),
+                    ),
+                    (
+                        "role".to_string(),
+                        string_property("Permission role: reader, commenter, or writer"),
+                    ),
+                    (
+                        "allow_discovery".to_string(),
+                        PropertySchema {
+                            prop_type: "boolean".to_string(),
+                            description: Some("Allow file discovery if public".to_string()),
+                            default: Some(serde_json::json!(false)),
+                            enum_values: None,
+                        },
+                    ),
+                ]
+                .into(),
+                vec!["file_id".to_string()],
+            ))
+            .with_approval(true)
+            .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new("google_list_permissions", "List permissions for a Google Drive file")
+            .with_schema(ToolSchema::object(
+                [("file_id".to_string(), string_property("File ID"))].into(),
+                vec!["file_id".to_string()],
+            ))
+            .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new("google_remove_permission", "Remove a permission from a Google Drive file")
+            .with_schema(ToolSchema::object(
+                [
+                    ("file_id".to_string(), string_property("File ID")),
+                    (
+                        "permission_id".to_string(),
+                        string_property("Permission ID to remove"),
+                    ),
+                ]
+                .into(),
+                vec!["file_id".to_string(), "permission_id".to_string()],
+            ))
+            .with_approval(true)
+            .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new("google_move_file", "Move a file to a different folder in Google Drive")
+            .with_schema(ToolSchema::object(
+                [
+                    ("file_id".to_string(), string_property("File ID to move")),
+                    (
+                        "new_folder_id".to_string(),
+                        string_property("Destination folder ID"),
+                    ),
+                    (
+                        "old_folder_id".to_string(),
+                        string_property("Optional source folder ID to remove from"),
+                    ),
+                ]
+                .into(),
+                vec!["file_id".to_string(), "new_folder_id".to_string()],
+            ))
+            .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new("google_copy_file", "Copy a file in Google Drive")
+            .with_schema(ToolSchema::object(
+                [
+                    ("file_id".to_string(), string_property("File ID to copy")),
+                    ("new_name".to_string(), string_property("Name for the copy")),
+                ]
+                .into(),
+                vec!["file_id".to_string(), "new_name".to_string()],
+            ))
+            .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new("google_delete_file", "Delete a file from Google Drive")
+            .with_schema(ToolSchema::object(
+                [
+                    ("file_id".to_string(), string_property("File ID to delete")),
+                    (
+                        "permanent".to_string(),
+                        PropertySchema {
+                            prop_type: "boolean".to_string(),
+                            description: Some("Permanently delete instead of trash".to_string()),
+                            default: Some(serde_json::json!(false)),
+                            enum_values: None,
+                        },
+                    ),
+                ]
+                .into(),
+                vec!["file_id".to_string()],
+            ))
+            .with_approval(true)
+            .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new("google_get_file_details", "Get detailed information about a Google Drive file")
+            .with_schema(ToolSchema::object(
+                [("file_id".to_string(), string_property("File ID"))].into(),
+                vec!["file_id".to_string()],
+            ))
             .with_tags(vec!["google".to_string(), "integration".to_string()]),
         Tool::new("browser_navigate", "Navigate the browser to a URL")
             .with_schema(ToolSchema::object(
