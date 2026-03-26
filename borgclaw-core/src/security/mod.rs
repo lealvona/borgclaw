@@ -8,7 +8,7 @@ mod wasm;
 
 pub use audit::{AuditConfig, AuditEntry, AuditError, AuditEventType, AuditLogger};
 pub use pairing::PairingManager;
-pub use secrets::{SecretStore, SecretStoreConfig};
+pub use secrets::{secrets_key_path, SecretStore, SecretStoreConfig};
 pub use vault::{
     BitwardenClient, BitwardenConfig, OnePasswordClient, OnePasswordConfig, VaultClient,
     VaultError, VaultItem, VaultItemType,
