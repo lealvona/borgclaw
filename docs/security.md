@@ -320,18 +320,33 @@ for url in blocked_urls {
 [security]
 ssrf_protection = true  # Enabled by default
 
-# Allow specific hosts (overrides default blocks)
-[security.ssrf_allowlist]
-patterns = [
-    "^trusted-internal\\.example\\.com$"
+# Allow specific hosts via regex patterns (overrides default blocks)
+ssrf_allowlist = [
+    "^trusted-internal\\.example\\.com$",
+    "^monitoring\\.internal\\.corp$"
 ]
 
-# Block additional hosts
-[security.ssrf_blocklist]
-patterns = [
-    "^malicious\\.example\\.com$"
+# Block additional hosts via regex patterns
+ssrf_blocklist = [
+    "^malicious\\.example\\.com$",
+    "^.*\\.evil\\.com$"
 ]
 ```
+
+Set `ssrf_protection = false` to disable all SSRF checks (not recommended for production).
+
+### Protected Tools
+
+SSRF validation is enforced on all tools that make HTTP requests or navigate to URLs:
+
+| Tool | Protection |
+|------|-----------|
+| `browser_navigate` | SSRF + blocks `file://`, `data://`, `javascript:` schemes |
+| `fetch_url` | SSRF validation before HTTP request |
+| `url_shorten` | SSRF validation on user-provided URL |
+| `url_expand` | SSRF validation on shortened URL |
+
+The `UrlShortener` skill also validates URLs independently as defense in depth.
 
 ### Implementation
 
@@ -350,6 +365,82 @@ impl SsrfGuard {
     pub fn allow_host(&mut self, pattern: &str) -> Result<(), regex::Error>;
     pub fn block_host(&mut self, pattern: &str) -> Result<(), regex::Error>;
 }
+```
+
+### Validation Order
+
+1. Check custom blocklist (reject if matched)
+2. Check custom allowlist (accept if matched, overrides default blocks)
+3. Check localhost/loopback (reject unless `allow_localhost` is true)
+4. Check private IP ranges (reject unless `allow_private_ips` is true)
+5. Accept all other URLs
+
+## Execution Approval Gates
+
+### Overview
+
+Destructive or security-sensitive operations require explicit user approval before execution.
+This prevents agents from performing irreversible actions without human confirmation.
+
+### Approval Modes
+
+```toml
+[security]
+# Options: "read_only", "supervised", "autonomous"
+approval_mode = "supervised"
+```
+
+| Mode | Behavior |
+|------|----------|
+| `read_only` | All tool executions require approval |
+| `supervised` | Only destructive tools require approval |
+| `autonomous` | No approval required (default) |
+
+### Tools Requiring Approval
+
+In `supervised` mode, the following tools require approval:
+
+| Tool | Risk |
+|------|------|
+| `execute_command` | Arbitrary command execution |
+| `write_file` | File system modification |
+| `delete` | File deletion |
+| `plugin_invoke` | WASM plugin execution |
+| `mcp_call_tool` | External MCP tool execution |
+| `google_share_file` | Data exposure via sharing |
+| `google_remove_permission` | Access revocation |
+| `google_delete_file` | Permanent data loss |
+| `google_delete_email` | Email deletion |
+| `google_trash_email` | Email trashing |
+| `google_delete_event` | Calendar event deletion |
+| `github_delete_file` | Repository file deletion |
+| `github_delete_branch` | Branch deletion |
+| `github_merge_pr` | Pull request merge |
+
+### Approval Workflow
+
+```
+1. Agent requests tool execution
+2. SecurityLayer checks needs_approval(tool_name, mode)
+3. If approval needed and no token provided:
+   - Generate approval token (UUID)
+   - Return approval request to user
+4. User approves via /approve command with token
+5. Agent retries with approval_token in arguments
+6. SecurityLayer validates and consumes token
+7. Tool executes
+```
+
+### Example
+
+```rust
+// Agent calls google_share_file without approval token
+// Response: "approval required; rerun with /approve {"tool":"google_share_file","token":"abc-123"}"
+
+// User approves:
+// /approve {"tool":"google_share_file","token":"abc-123"}
+
+// Agent retries with token - execution proceeds
 ```
 
 ## Vault Integration
