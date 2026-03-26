@@ -2475,6 +2475,10 @@ async fn google_share_file(
     arguments: &HashMap<String, serde_json::Value>,
     runtime: &ToolRuntime,
 ) -> ToolResult {
+    if let Some(result) = require_tool_approval("google_share_file", arguments, runtime).await {
+        return result;
+    }
+
     let client = google_client(runtime);
     let file_id = match get_required_string(arguments, "file_id") {
         Ok(value) => value,
@@ -2529,6 +2533,10 @@ async fn google_remove_permission(
     arguments: &HashMap<String, serde_json::Value>,
     runtime: &ToolRuntime,
 ) -> ToolResult {
+    if let Some(result) = require_tool_approval("google_remove_permission", arguments, runtime).await {
+        return result;
+    }
+
     let client = google_client(runtime);
     let file_id = match get_required_string(arguments, "file_id") {
         Ok(value) => value,
@@ -2593,6 +2601,10 @@ async fn google_delete_file(
     arguments: &HashMap<String, serde_json::Value>,
     runtime: &ToolRuntime,
 ) -> ToolResult {
+    if let Some(result) = require_tool_approval("google_delete_file", arguments, runtime).await {
+        return result;
+    }
+
     let client = google_client(runtime);
     let file_id = match get_required_string(arguments, "file_id") {
         Ok(value) => value,
