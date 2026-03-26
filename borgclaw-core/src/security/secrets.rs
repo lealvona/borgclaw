@@ -178,6 +178,11 @@ fn load_or_create_key(path: &Path) -> Result<[u8; 32], super::SecurityError> {
     Ok(key)
 }
 
+/// Return the path where the encryption key lives for a given secrets file.
+pub fn secrets_key_path(path: &Path) -> PathBuf {
+    key_path_for(path)
+}
+
 fn key_path_for(path: &Path) -> PathBuf {
     let mut key_path = path.to_path_buf();
     let extension = path

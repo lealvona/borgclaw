@@ -78,8 +78,25 @@ enum Commands {
         #[command(subcommand)]
         action: SubagentAction,
     },
+    /// Manage encrypted secrets
+    Secrets {
+        #[command(subcommand)]
+        action: SecretAction,
+    },
     /// Show comprehensive runtime status
     Runtime,
+}
+
+#[derive(Subcommand)]
+enum SecretAction {
+    /// List secret keys (values are not shown)
+    List,
+    /// Store or update a secret (prompts for value)
+    Set { key: String },
+    /// Delete a secret
+    Delete { key: String },
+    /// Check whether a secret exists
+    Check { key: String },
 }
 
 #[derive(Subcommand)]
@@ -282,6 +299,7 @@ async fn main() {
         Commands::Backup { action } => backup(config, action),
         Commands::Heartbeat { action } => heartbeat(config, action),
         Commands::Subagent { action } => subagent(config, action),
+        Commands::Secrets { action } => secrets(config, action).await,
         Commands::Runtime => runtime(config).await,
     }
 }
@@ -1019,6 +1037,50 @@ fn subagent(config: AppConfig, action: SubagentAction) {
                 Ok(true) => println!("Cancelled sub-agent task '{}'", id),
                 Ok(false) => println!("No sub-agent task '{}' found", id),
                 Err(err) => println!("Failed to cancel sub-agent task: {}", err),
+            }
+        }
+    }
+}
+
+async fn secrets(config: AppConfig, action: SecretAction) {
+    let store = borgclaw_core::security::SecretStore::with_config(
+        borgclaw_core::security::SecretStoreConfig {
+            encryption_enabled: config.security.secrets_encryption,
+            secrets_path: Some(config.security.secrets_path.clone()),
+        },
+    );
+
+    match action {
+        SecretAction::List => {
+            let keys = store.keys().await;
+            if keys.is_empty() {
+                println!("No secrets stored.");
+            } else {
+                println!("Stored secrets ({}):", keys.len());
+                for key in keys {
+                    println!("  - {}", key);
+                }
+            }
+        }
+        SecretAction::Set { key } => {
+            let value = dialoguer::Password::new()
+                .with_prompt(format!("Enter value for '{}'", key))
+                .interact()
+                .unwrap_or_default();
+            match store.store(&key, &value).await {
+                Ok(()) => println!("✓ Secret '{}' stored", key),
+                Err(e) => println!("✗ Failed to store secret: {}", e),
+            }
+        }
+        SecretAction::Delete { key } => match store.delete(&key).await {
+            Some(_) => println!("✓ Secret '{}' deleted", key),
+            None => println!("Secret '{}' not found", key),
+        },
+        SecretAction::Check { key } => {
+            if store.exists(&key).await {
+                println!("✓ Secret '{}' exists", key);
+            } else {
+                println!("✗ Secret '{}' not found", key);
             }
         }
     }
@@ -4230,5 +4292,64 @@ mod cli_path_tests {
         assert!(!cli_path_available(Path::new(
             "/definitely/not/a/real/binary"
         )));
+    }
+}
+
+#[cfg(test)]
+mod secrets_tests {
+    use borgclaw_core::security::{SecretStore, SecretStoreConfig};
+
+    fn temp_store() -> (SecretStore, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_secrets_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("secrets.json");
+        let store = SecretStore::with_config(SecretStoreConfig {
+            encryption_enabled: false,
+            secrets_path: Some(path),
+        });
+        (store, root)
+    }
+
+    #[tokio::test]
+    async fn secrets_list_returns_stored_keys() {
+        let (store, root) = temp_store();
+        store.store("KEY_A", "val_a").await.unwrap();
+        store.store("KEY_B", "val_b").await.unwrap();
+        let mut keys = store.keys().await;
+        keys.sort();
+        assert_eq!(keys, vec!["KEY_A", "KEY_B"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn secrets_set_and_check() {
+        let (store, root) = temp_store();
+        assert!(!store.exists("MY_SECRET").await);
+        store.store("MY_SECRET", "hidden").await.unwrap();
+        assert!(store.exists("MY_SECRET").await);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn secrets_delete_removes_key() {
+        let (store, root) = temp_store();
+        store.store("TO_DELETE", "val").await.unwrap();
+        assert!(store.exists("TO_DELETE").await);
+        store.delete("TO_DELETE").await;
+        assert!(!store.exists("TO_DELETE").await);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn secrets_key_path_derives_correctly() {
+        let path = std::path::Path::new("/tmp/borgclaw/secrets.enc");
+        let key_path = borgclaw_core::security::secrets_key_path(path);
+        assert_eq!(
+            key_path,
+            std::path::PathBuf::from("/tmp/borgclaw/secrets.enc.key")
+        );
     }
 }

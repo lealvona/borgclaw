@@ -612,6 +612,20 @@ fn configure_security(
         .default(config.security.wasm_sandbox)
         .interact()
         .map_err(|e| e.to_string())?;
+
+    if config.security.secrets_encryption {
+        let key_path = borgclaw_core::security::secrets_key_path(&config.security.secrets_path);
+        println!(
+            "{}",
+            paint(
+                WARN,
+                &format!(
+                    "Encryption key: {}\n  Back up this file — without it, stored secrets cannot be recovered.",
+                    key_path.display()
+                ),
+            )
+        );
+    }
     Ok(())
 }
 
