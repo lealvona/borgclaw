@@ -347,7 +347,7 @@ async fn configure_provider_and_model(
         .map_err(|e| e.to_string())?;
     let provider = providers[selection];
     config.agent.provider = provider.id.clone();
-    config.agent.rate_limit_rpm = provider.rate_limit_rpm;
+    config.agent.rate_limit_rpm = Some(provider.rate_limit_rpm_with_default());
 
     let resolved_api_key = resolve_provider_api_key(config, provider).await;
     let models = fetch_models(provider, resolved_api_key.as_deref())
@@ -1344,7 +1344,7 @@ fn apply_component_action(
                     config.agent.provider = provider.to_string();
                     if let Some(def) = registry.providers.get(provider) {
                         config.agent.model = def.default_model.clone();
-                        config.agent.rate_limit_rpm = def.rate_limit_rpm;
+                        config.agent.rate_limit_rpm = Some(def.rate_limit_rpm_with_default());
                     }
                 }
                 _ => {}
