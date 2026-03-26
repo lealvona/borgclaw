@@ -19,6 +19,7 @@ pub struct HeartbeatEngine {
     sender: mpsc::Sender<HeartbeatEvent>,
     state_path: Option<PathBuf>,
     poll_interval: Duration,
+    audit_logger: Option<Arc<crate::security::AuditLogger>>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -211,7 +212,13 @@ impl HeartbeatEngine {
             sender,
             state_path: None,
             poll_interval: Duration::from_secs(60),
+            audit_logger: None,
         }
+    }
+
+    pub fn with_audit_logger(mut self, logger: Arc<crate::security::AuditLogger>) -> Self {
+        self.audit_logger = Some(logger);
+        self
     }
 
     pub fn with_state_path(mut self, path: impl Into<PathBuf>) -> Self {
@@ -429,6 +436,25 @@ impl HeartbeatEngine {
 
             let result = self.execute_task(&task).await;
 
+            if let Some(logger) = &self.audit_logger {
+                logger
+                    .log(
+                        crate::security::AuditEntry::new(
+                            crate::security::AuditEventType::ToolExecution,
+                            format!("heartbeat:{}", task.name),
+                            &task_id,
+                            if result.success {
+                                "task_completed"
+                            } else {
+                                "task_failed"
+                            },
+                        )
+                        .with_success(result.success)
+                        .with_metadata("duration_ms", result.duration_ms.to_string()),
+                    )
+                    .await;
+            }
+
             {
                 let mut tasks = self.tasks.write().await;
                 if let Some(t) = tasks.get_mut(&task_id) {
@@ -558,6 +584,7 @@ impl Clone for HeartbeatEngine {
             sender: self.sender.clone(),
             state_path: self.state_path.clone(),
             poll_interval: self.poll_interval,
+            audit_logger: self.audit_logger.clone(),
         }
     }
 }
