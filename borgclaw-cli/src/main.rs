@@ -3940,7 +3940,6 @@ mod skill_packaging_tests {
         assert!(output.exists());
 
         // Extract and verify structure
-        use std::io::Read;
         let tar_gz = std::fs::File::open(&output).unwrap();
         let dec = flate2::read::GzDecoder::new(tar_gz);
         let mut archive = tar::Archive::new(dec);
