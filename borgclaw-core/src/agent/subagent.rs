@@ -157,11 +157,13 @@ pub struct SubAgentCoordinator {
     skills_config: SkillsConfig,
     mcp_config: McpConfig,
     security_config: SecurityConfig,
+    workspace_policy: crate::config::WorkspacePolicyConfig,
     tasks: Arc<RwLock<HashMap<String, SubAgentTask>>>,
     result_sender: mpsc::Sender<SubAgentResult>,
     max_concurrent: usize,
     permits: Arc<Semaphore>,
     state_path: PathBuf,
+    audit_logger: Arc<crate::security::AuditLogger>,
 }
 
 impl SubAgentCoordinator {
@@ -194,11 +196,13 @@ impl SubAgentCoordinator {
             skills_config,
             mcp_config,
             security_config,
+            workspace_policy: crate::config::WorkspacePolicyConfig::default(),
             tasks: Arc::new(RwLock::new(load_tasks(&state_path))),
             result_sender,
             max_concurrent: 5,
             permits: Arc::new(Semaphore::new(5)),
             state_path,
+            audit_logger: Arc::new(crate::security::AuditLogger::disabled()),
         }
     }
 
@@ -206,6 +210,23 @@ impl SubAgentCoordinator {
         self.max_concurrent = max.max(1);
         self.permits = Arc::new(Semaphore::new(self.max_concurrent));
         self
+    }
+
+    pub fn with_workspace_policy(
+        mut self,
+        policy: crate::config::WorkspacePolicyConfig,
+    ) -> Self {
+        self.workspace_policy = policy;
+        self
+    }
+
+    pub fn with_audit_logger(mut self, logger: Arc<crate::security::AuditLogger>) -> Self {
+        self.audit_logger = logger;
+        self
+    }
+
+    pub fn workspace_policy(&self) -> &crate::config::WorkspacePolicyConfig {
+        &self.workspace_policy
     }
 
     pub async fn submit(&self, task: SubAgentTask) -> String {
@@ -317,12 +338,24 @@ impl SubAgentCoordinator {
             };
             self.persist_state().await;
 
+            self.audit_logger
+                .log(
+                    crate::security::AuditEntry::new(
+                        crate::security::AuditEventType::ToolExecution,
+                        format!("subagent:{}", task.name),
+                        &task.id,
+                        "task_started",
+                    )
+                    .with_metadata("task_name", &task.name),
+                )
+                .await;
+
             let start = std::time::Instant::now();
             let timeout = std::time::Duration::from_secs(task.timeout_seconds);
 
             let result = tokio::time::timeout(timeout, self.execute_task_inner(&task))
                 .await
-                .unwrap_or_else(|_| Err(SubAgentError::Timeout(task.timeout_seconds)));
+                .unwrap_or(Err(SubAgentError::Timeout(task.timeout_seconds)));
 
             let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -355,6 +388,17 @@ impl SubAgentCoordinator {
 
             match self.apply_attempt_outcome(task_id, attempt_outcome).await {
                 RetryAction::Complete(result) => {
+                    self.audit_logger
+                        .log(
+                            crate::security::AuditEntry::new(
+                                crate::security::AuditEventType::ToolExecution,
+                                format!("subagent:{}", task.name),
+                                task_id,
+                                "task_completed",
+                            )
+                            .with_metadata("duration_ms", result.duration_ms.to_string()),
+                        )
+                        .await;
                     let _ = self.result_sender.send(result.clone()).await;
                     return Ok(result);
                 }
@@ -369,6 +413,18 @@ impl SubAgentCoordinator {
                     return Err(SubAgentError::Cancelled);
                 }
                 RetryAction::TerminalError { result, error } => {
+                    self.audit_logger
+                        .log(
+                            crate::security::AuditEntry::new(
+                                crate::security::AuditEventType::ToolExecution,
+                                format!("subagent:{}", task.name),
+                                task_id,
+                                "task_failed",
+                            )
+                            .with_success(false)
+                            .with_metadata("error", error.to_string()),
+                        )
+                        .await;
                     let _ = self.result_sender.send(result).await;
                     return Err(error);
                 }
@@ -384,16 +440,28 @@ impl SubAgentCoordinator {
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
         }
 
+        // Check for prompt injection in sub-agent input
+        let security = crate::security::SecurityLayer::with_config(self.security_config.clone());
+        let message = match security.check_prompt_injection(&task.input) {
+            crate::security::InjectionCheck::Blocked => {
+                return Err(SubAgentError::ExecutionFailed(
+                    "Prompt injection detected in sub-agent input".to_string(),
+                ));
+            }
+            crate::security::InjectionCheck::Sanitized(sanitized) => sanitized,
+            _ => task.input.clone(),
+        };
+
         let session_id = task.parent_session_id.clone().unwrap_or_default();
         let ctx = AgentContext {
             session_id,
-            message: task.input.clone(),
+            message,
             sender: task.parent_sender.clone().unwrap_or_else(|| SenderInfo {
                 id: format!("subagent:{}", task.id),
                 name: Some(task.name.clone()),
                 channel: "subagent".to_string(),
             }),
-            metadata: task_metadata(task),
+            metadata: task_metadata(task, &self.workspace_policy),
         };
 
         let mut agent = SimpleAgent::new(
@@ -405,7 +473,7 @@ impl SubAgentCoordinator {
             Some(self.mcp_config.clone()),
             Some(self.security_config.clone()),
         );
-        let tools = allowed_builtin_tools(task, &self.security_config);
+        let tools = allowed_builtin_tools(task, &self.security_config, &self.workspace_policy);
         for tool in tools {
             agent.register_tool(tool);
         }
@@ -417,6 +485,16 @@ impl SubAgentCoordinator {
             .map(|call| call.name.clone())
             .collect::<Vec<_>>();
 
+        // Check for secret leaks in output
+        let (output_text, leak_count) = security.redact_leaks(&response.text);
+        if leak_count > 0 {
+            tracing::warn!(
+                task_id = %task.id,
+                leak_count,
+                "Secret leak detected in sub-agent output, redacted"
+            );
+        }
+
         let memory_entries_created = match task.memory_access {
             MemoryAccessType::ReadWrite => {
                 let memory = SqliteMemory::new(self.memory_config.database_path.clone());
@@ -427,7 +505,7 @@ impl SubAgentCoordinator {
                 memory
                     .store(new_entry_for_group(
                         format!("subagent:{}", task.name),
-                        response.text.clone(),
+                        output_text.clone(),
                         task_group_id(task),
                     ))
                     .await
@@ -438,7 +516,7 @@ impl SubAgentCoordinator {
         };
 
         Ok(InnerTaskResult {
-            output: response.text,
+            output: output_text,
             tools_used,
             memory_entries_created,
         })
@@ -564,6 +642,7 @@ enum RetryAction {
 fn allowed_builtin_tools(
     task: &SubAgentTask,
     security_config: &SecurityConfig,
+    workspace_policy: &crate::config::WorkspacePolicyConfig,
 ) -> Vec<crate::agent::Tool> {
     let security = crate::security::SecurityLayer::with_config(security_config.clone());
     builtin_tools()
@@ -571,11 +650,33 @@ fn allowed_builtin_tools(
         .filter(|tool| {
             task_allows_tool(task, &tool.name)
                 && !security.needs_approval(&tool.name, security.approval_mode())
+                && !workspace_policy_blocks_tool(workspace_policy, &tool.name)
         })
         .collect()
 }
 
-fn task_metadata(task: &SubAgentTask) -> HashMap<String, String> {
+fn workspace_policy_blocks_tool(
+    policy: &crate::config::WorkspacePolicyConfig,
+    tool_name: &str,
+) -> bool {
+    if !policy.workspace_only {
+        return false;
+    }
+    // When workspace_only is set and no extra roots are configured,
+    // block file-system tools that could escape the workspace
+    if policy.allowed_roots.is_empty() {
+        return matches!(
+            tool_name,
+            "execute_command" | "delete" | "plugin_invoke"
+        );
+    }
+    false
+}
+
+fn task_metadata(
+    task: &SubAgentTask,
+    workspace_policy: &crate::config::WorkspacePolicyConfig,
+) -> HashMap<String, String> {
     let mut metadata = task.parent_metadata.clone();
     metadata
         .entry("subagent_task_id".to_string())
@@ -586,6 +687,9 @@ fn task_metadata(task: &SubAgentTask) -> HashMap<String, String> {
     metadata
         .entry("group_id".to_string())
         .or_insert_with(|| task_group_id(task));
+    metadata
+        .entry("workspace_only".to_string())
+        .or_insert_with(|| workspace_policy.workspace_only.to_string());
     metadata
 }
 
@@ -771,15 +875,15 @@ mod tests {
             .memory_access(MemoryAccessType::ReadWrite)
             .build("hello");
 
-        let none_tools = allowed_builtin_tools(&none, &SecurityConfig::default())
+        let none_tools = allowed_builtin_tools(&none, &SecurityConfig::default(), &crate::config::WorkspacePolicyConfig::default())
             .into_iter()
             .map(|tool| tool.name)
             .collect::<Vec<_>>();
-        let read_only_tools = allowed_builtin_tools(&read_only, &SecurityConfig::default())
+        let read_only_tools = allowed_builtin_tools(&read_only, &SecurityConfig::default(), &crate::config::WorkspacePolicyConfig::default())
             .into_iter()
             .map(|tool| tool.name)
             .collect::<Vec<_>>();
-        let read_write_tools = allowed_builtin_tools(&read_write, &SecurityConfig::default())
+        let read_write_tools = allowed_builtin_tools(&read_write, &SecurityConfig::default(), &crate::config::WorkspacePolicyConfig::default())
             .into_iter()
             .map(|tool| tool.name)
             .collect::<Vec<_>>();
@@ -802,7 +906,7 @@ mod tests {
             ])
             .build("hello");
 
-        let allowed = allowed_builtin_tools(&read_only, &SecurityConfig::default())
+        let allowed = allowed_builtin_tools(&read_only, &SecurityConfig::default(), &crate::config::WorkspacePolicyConfig::default())
             .into_iter()
             .map(|tool| tool.name)
             .collect::<Vec<_>>();
@@ -1099,6 +1203,7 @@ mod tests {
                 approval_mode: crate::config::ApprovalMode::Supervised,
                 ..Default::default()
             },
+            &crate::config::WorkspacePolicyConfig::default(),
         )
         .into_iter()
         .map(|tool| tool.name)
@@ -1326,5 +1431,109 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(task.status, TaskStatus::Completed);
         assert!(task.result.is_some());
+    }
+
+    #[test]
+    fn workspace_policy_stored_on_coordinator() {
+        let (sender, _receiver) = mpsc::channel(4);
+        let policy = crate::config::WorkspacePolicyConfig {
+            workspace_only: true,
+            allowed_roots: vec![],
+            forbidden_paths: vec![std::path::PathBuf::from("/etc")],
+        };
+        let coordinator = SubAgentCoordinator::new(AgentConfig::default(), sender)
+            .with_workspace_policy(policy.clone());
+        assert!(coordinator.workspace_policy().workspace_only);
+        assert_eq!(coordinator.workspace_policy().forbidden_paths.len(), 1);
+    }
+
+    #[test]
+    fn workspace_policy_blocks_dangerous_tools_when_strict() {
+        let task = SubAgentBuilder::new("strict").build("hello");
+        let strict_policy = crate::config::WorkspacePolicyConfig {
+            workspace_only: true,
+            allowed_roots: vec![],
+            forbidden_paths: vec![],
+        };
+        let tools = allowed_builtin_tools(&task, &SecurityConfig::default(), &strict_policy)
+            .into_iter()
+            .map(|t| t.name)
+            .collect::<Vec<_>>();
+        assert!(!tools.iter().any(|n| n == "execute_command"));
+        assert!(!tools.iter().any(|n| n == "delete"));
+        assert!(!tools.iter().any(|n| n == "plugin_invoke"));
+    }
+
+    #[test]
+    fn workspace_policy_allows_tools_when_not_strict() {
+        let task = SubAgentBuilder::new("relaxed").build("hello");
+        let relaxed_policy = crate::config::WorkspacePolicyConfig {
+            workspace_only: false,
+            allowed_roots: vec![],
+            forbidden_paths: vec![],
+        };
+        assert!(!workspace_policy_blocks_tool(&relaxed_policy, "execute_command"));
+        assert!(!workspace_policy_blocks_tool(&relaxed_policy, "delete"));
+        assert!(!workspace_policy_blocks_tool(&relaxed_policy, "plugin_invoke"));
+    }
+
+    #[test]
+    fn task_metadata_includes_workspace_policy() {
+        let task = SubAgentBuilder::new("meta").build("hello");
+        let policy = crate::config::WorkspacePolicyConfig {
+            workspace_only: true,
+            allowed_roots: vec![],
+            forbidden_paths: vec![],
+        };
+        let metadata = task_metadata(&task, &policy);
+        assert_eq!(metadata.get("workspace_only"), Some(&"true".to_string()));
+        assert!(metadata.contains_key("subagent_task_id"));
+        assert!(metadata.contains_key("subagent_task_name"));
+    }
+
+    #[tokio::test]
+    async fn audit_logger_records_subagent_events() {
+        let logger = Arc::new(crate::security::AuditLogger::new(
+            crate::security::AuditConfig {
+                enabled: true,
+                log_path: std::path::PathBuf::from("/tmp/borgclaw_audit_test.jsonl"),
+                buffer_size: 100,
+                verbose: false,
+            },
+        ));
+
+        let root = std::env::temp_dir()
+            .join(format!("borgclaw_subagent_audit_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let (sender, _receiver) = mpsc::channel(4);
+        let coordinator = SubAgentCoordinator::with_configs(
+            AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            MemoryConfig {
+                database_path: root.join("memory.db"),
+                ..Default::default()
+            },
+            crate::config::SchedulerConfig::default(),
+            SkillsConfig::default(),
+            McpConfig::default(),
+            SecurityConfig::default(),
+            sender,
+        )
+        .with_audit_logger(logger.clone());
+
+        let task_id = coordinator
+            .submit(SubAgentBuilder::new("audit-test").build("hello"))
+            .await;
+        let _ = coordinator.execute(&task_id).await;
+
+        let entries = logger.recent_entries(10).await;
+        std::fs::remove_dir_all(&root).unwrap();
+
+        // Should have at least task_started and task_completed events
+        assert!(entries.len() >= 2);
+        let actions: Vec<&str> = entries.iter().map(|e| e.action.as_str()).collect();
+        assert!(actions.contains(&"task_started") || actions.contains(&"task_completed"));
     }
 }
