@@ -110,17 +110,136 @@ google.send_email(
 
 ### Drive
 
+#### File Operations
+
 ```rust
+let drive = google.drive();
+
 // Upload file
-let file = google.upload_file(
+let file = drive.upload_file(
     "document.txt",
     b"content".to_vec(),
     "text/plain",
     Some("folder_id")
 ).await?;
 
+// Download file
+let content = drive.download_file("file_id").await?;
+
 // Search files
-let files = google.search_files("name contains 'report'").await?;
+let files = drive.search_files("name contains 'report'").await?;
+
+// Get file details with links
+let details = drive.get_file_details("file_id").await?;
+println!("View: {}", details.web_view_link.unwrap_or_default());
+```
+
+#### Folder Management
+
+```rust
+// Create folder
+let folder = drive.create_folder("My Folder", Some("parent_id")).await?;
+
+// Create folder in root
+let root_folder = drive.create_folder("New Folder", None).await?;
+
+// List folders
+let folders = drive.list_folders(Some("parent_id"), 50).await?;
+
+// List folders in root
+let root_folders = drive.list_folders(None, 50).await?;
+```
+
+#### File Organization
+
+```rust
+// Move file to different folder
+let updated = drive.move_file("file_id", "new_folder_id").await?;
+
+// Copy file
+let copy = drive.copy_file("file_id", "Copy of document.txt").await?;
+
+// Delete file (move to trash)
+drive.delete_file("file_id", false).await?;
+
+// Permanently delete file
+// ⚠️ Requires approval - destructive operation
+drive.delete_file("file_id", true).await?;
+```
+
+#### Sharing & Permissions
+
+```rust
+// Share with specific user
+// ⚠️ Requires approval
+let perm = drive.share_file(
+    "file_id",
+    Some("user@example.com"),
+    "writer",  // owner, writer, reader, commenter
+    false
+).await?;
+
+// Make file publicly readable
+// ⚠️ Requires approval
+let public = drive.share_file(
+    "file_id",
+    None,  // No specific user
+    "reader",
+    true   // Allow discovery
+).await?;
+
+// List permissions
+let perms = drive.list_permissions("file_id").await?;
+for perm in perms {
+    println!("{}: {}", perm.role, perm.email_address.unwrap_or_default());
+}
+
+// Remove permission
+// ⚠️ Requires approval
+drive.remove_permission("file_id", "permission_id").await?;
+```
+
+#### Batch Operations
+
+```rust
+// Upload multiple files
+let files_to_upload = vec![
+    ("file1.txt".to_string(), b"content1".to_vec(), "text/plain".to_string()),
+    ("file2.txt".to_string(), b"content2".to_vec(), "text/plain".to_string()),
+    ("image.png".to_string(), image_bytes, "image/png".to_string()),
+];
+let uploaded = drive.batch_upload(files_to_upload, Some("folder_id")).await?;
+
+// Share multiple files
+let shares = vec![
+    ("file1_id".to_string(), "user1@example.com".to_string(), "reader".to_string()),
+    ("file2_id".to_string(), "user2@example.com".to_string(), "writer".to_string()),
+];
+// ⚠️ Requires approval (batch share)
+let results = drive.batch_share(shares).await?;
+```
+
+#### Approval Gates
+
+The following operations require explicit user approval due to their destructive or security-sensitive nature:
+
+| Operation | Risk | Approval Required |
+|-----------|------|-------------------|
+| `share_file` | Data exposure | Yes |
+| `remove_permission` | Access revocation | Yes |
+| `delete_file` (permanent) | Data loss | Yes |
+| `batch_share` | Bulk data exposure | Yes |
+
+Approval workflow:
+1. System prepares operation and returns confirmation token
+2. User confirms via UI or separate approval call
+3. Operation executes within 60-second timeout
+
+```rust
+// Example of approval-required operation
+let confirmation = drive.prepare_delete_file("file_id", true).await?;
+// User confirms...
+drive.confirm_destructive_op(&confirmation.token).await?;
 ```
 
 ### Calendar
