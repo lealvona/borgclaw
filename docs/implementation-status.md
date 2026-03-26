@@ -96,4 +96,4 @@ None. All documented features are fully implemented.
 
 ## Historical Note
 
-This project has reached feature completeness as of version 1.10.2. All major phases (Core Runtime, Shared Routing, Memory and Scheduling, Skills and Integrations, Hardening and UX) have been implemented according to the documented contract.
+This project has reached feature completeness as of version 1.11.0. All major phases (Core Runtime, Shared Routing, Memory and Scheduling, Skills and Integrations, Hardening and UX) have been implemented according to the documented contract.
