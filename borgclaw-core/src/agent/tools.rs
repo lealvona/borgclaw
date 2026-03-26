@@ -19,6 +19,78 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+/// Tool retry policy configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolRetryPolicy {
+    /// Maximum number of retry attempts (0 = no retry)
+    pub max_retries: u32,
+    /// Initial delay between retries in milliseconds
+    pub initial_delay_ms: u64,
+    /// Maximum delay between retries in milliseconds
+    pub max_delay_ms: u64,
+    /// Exponential backoff multiplier
+    pub backoff_multiplier: f64,
+    /// Add random jitter to delay (0.0-1.0)
+    pub jitter_factor: f64,
+}
+
+impl Default for ToolRetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_retries: 0,
+            initial_delay_ms: 1000,
+            max_delay_ms: 60000,
+            backoff_multiplier: 2.0,
+            jitter_factor: 0.1,
+        }
+    }
+}
+
+impl ToolRetryPolicy {
+    /// Create a standard retry policy with exponential backoff
+    pub fn exponential(max_retries: u32) -> Self {
+        Self {
+            max_retries,
+            initial_delay_ms: 1000,
+            max_delay_ms: 60000,
+            backoff_multiplier: 2.0,
+            jitter_factor: 0.1,
+        }
+    }
+
+    /// Create a policy with custom initial delay
+    pub fn with_initial_delay(mut self, delay_ms: u64) -> Self {
+        self.initial_delay_ms = delay_ms;
+        self
+    }
+
+    /// Create a policy with custom max delay
+    pub fn with_max_delay(mut self, delay_ms: u64) -> Self {
+        self.max_delay_ms = delay_ms;
+        self
+    }
+
+    /// Calculate delay for a specific retry attempt
+    pub fn calculate_delay(&self, attempt: u32) -> u64 {
+        if attempt == 0 {
+            return 0;
+        }
+
+        let base_delay = self.initial_delay_ms as f64
+            * self.backoff_multiplier.powi(attempt as i32 - 1);
+        let capped_delay = base_delay.min(self.max_delay_ms as f64);
+
+        // Add jitter
+        if self.jitter_factor > 0.0 {
+            let jitter_range = capped_delay * self.jitter_factor;
+            let jitter = rand::random::<f64>() * jitter_range - (jitter_range / 2.0);
+            (capped_delay + jitter) as u64
+        } else {
+            capped_delay as u64
+        }
+    }
+}
+
 /// Tool definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tool {
@@ -32,6 +104,8 @@ pub struct Tool {
     pub requires_approval: bool,
     /// Categories/tags
     pub tags: Vec<String>,
+    /// Retry policy for this tool
+    pub retry_policy: ToolRetryPolicy,
 }
 
 impl Tool {
@@ -42,6 +116,7 @@ impl Tool {
             input_schema: ToolSchema::default(),
             requires_approval: false,
             tags: Vec::new(),
+            retry_policy: ToolRetryPolicy::default(),
         }
     }
 
@@ -58,6 +133,20 @@ impl Tool {
     pub fn with_tags(mut self, tags: Vec<String>) -> Self {
         self.tags = tags;
         self
+    }
+
+    pub fn with_retry_policy(mut self, policy: ToolRetryPolicy) -> Self {
+        self.retry_policy = policy;
+        self
+    }
+
+    /// Execute a function with retry logic according to this tool's policy
+    pub async fn execute_with_retry<F, Fut>(&self, mut operation: F) -> ToolResult
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = ToolResult>,
+    {
+        execute_with_retry(&self.retry_policy, &self.name, move || operation()).await
     }
 }
 
@@ -182,6 +271,93 @@ impl ToolResult {
         self.metadata.insert(key.into(), value.into());
         self
     }
+
+    /// Check if the result indicates a retryable error
+    pub fn is_retryable(&self) -> bool {
+        if self.success {
+            return false;
+        }
+
+        // Check error type or message for transient errors
+        if let Some(ref error_type) = self.error_type {
+            match error_type.as_str() {
+                "NetworkError" | "TimeoutError" | "RateLimitError" | "TransientError" => return true,
+                _ => {}
+            }
+        }
+
+        // Check error message for common retryable patterns
+        let retryable_patterns = [
+            "timeout",
+            "timed out",
+            "connection refused",
+            "connection reset",
+            "temporary",
+            "rate limit",
+            "too many requests",
+            "503",
+            "502",
+            "504",
+            "network error",
+        ];
+
+        let output_lower = self.output.to_lowercase();
+        retryable_patterns.iter().any(|pattern| output_lower.contains(pattern))
+    }
+}
+
+/// Execute an operation with retry logic according to a retry policy
+pub async fn execute_with_retry<F, Fut>(
+    policy: &ToolRetryPolicy,
+    tool_name: &str,
+    mut operation: F,
+) -> ToolResult
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = ToolResult>,
+{
+    let mut last_result = operation().await;
+
+    // If success or no retries configured, return immediately
+    if last_result.success || policy.max_retries == 0 {
+        return last_result;
+    }
+
+    // Check if the error is retryable
+    if !last_result.is_retryable() {
+        return last_result.with_metadata("retry_skipped", "error_not_retryable");
+    }
+
+    // Attempt retries
+    for attempt in 1..=policy.max_retries {
+        let delay_ms = policy.calculate_delay(attempt);
+
+        tracing::info!(
+            "Tool '{}' failed, retrying in {}ms (attempt {}/{})",
+            tool_name,
+            delay_ms,
+            attempt,
+            policy.max_retries
+        );
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+
+        last_result = operation().await;
+
+        if last_result.success {
+            return last_result.with_metadata("retry_attempts", attempt.to_string());
+        }
+
+        // If error is no longer retryable, stop
+        if !last_result.is_retryable() {
+            break;
+        }
+    }
+
+    last_result.with_metadata(
+        "retry_exhausted",
+        format!("{}/{} attempts", policy.max_retries, policy.max_retries),
+    )
 }
 
 #[derive(Clone)]
@@ -5585,6 +5761,221 @@ for line in sys.stdin:
         )
         .await
         .unwrap()
+    }
+
+    #[test]
+    fn tool_retry_policy_calculates_exponential_backoff() {
+        let policy = ToolRetryPolicy::exponential(3);
+
+        // First retry should be around initial_delay
+        let delay1 = policy.calculate_delay(1);
+        assert!(delay1 >= 900 && delay1 <= 1100); // 1000ms with 10% jitter
+
+        // Second retry should be around 2x initial_delay
+        let delay2 = policy.calculate_delay(2);
+        assert!(delay2 >= 1800 && delay2 <= 2200); // 2000ms with 10% jitter
+
+        // Third retry should be around 4x initial_delay
+        let delay3 = policy.calculate_delay(3);
+        assert!(delay3 >= 3600 && delay3 <= 4400); // 4000ms with 10% jitter
+    }
+
+    #[test]
+    fn tool_retry_policy_respects_max_delay() {
+        let policy = ToolRetryPolicy::exponential(10)
+            .with_initial_delay(1000)
+            .with_max_delay(5000);
+
+        // High attempt numbers should be capped at max_delay
+        let delay = policy.calculate_delay(10);
+        assert!(delay <= 5500); // max_delay + jitter
+    }
+
+    #[tokio::test]
+    async fn execute_with_retry_succeeds_immediately_on_success() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let policy = ToolRetryPolicy::exponential(3);
+        let call_count = Arc::new(AtomicUsize::new(0));
+
+        let result = {
+            let call_count = call_count.clone();
+            execute_with_retry(&policy, "test_tool", move || {
+                let call_count = call_count.clone();
+                async move {
+                    call_count.fetch_add(1, Ordering::SeqCst);
+                    ToolResult::ok("success")
+                }
+            }).await
+        };
+
+        assert!(result.success);
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+        assert!(!result.metadata.contains_key("retry_attempts"));
+    }
+
+    #[tokio::test]
+    async fn execute_with_retry_retries_on_failure_then_succeeds() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let policy = ToolRetryPolicy {
+            max_retries: 3,
+            initial_delay_ms: 10, // Short delay for testing
+            max_delay_ms: 100,
+            backoff_multiplier: 2.0,
+            jitter_factor: 0.0, // No jitter for predictable testing
+        };
+        let call_count = Arc::new(AtomicUsize::new(0));
+
+        let result = {
+            let call_count = call_count.clone();
+            execute_with_retry(&policy, "test_tool", move || {
+                let call_count = call_count.clone();
+                async move {
+                    let count = call_count.fetch_add(1, Ordering::SeqCst) + 1;
+                    if count < 3 {
+                        ToolResult::err("network timeout")
+                            .with_metadata("error_type", "TimeoutError")
+                    } else {
+                        ToolResult::ok("success")
+                    }
+                }
+            })
+            .await
+        };
+
+        assert!(result.success);
+        assert_eq!(call_count.load(Ordering::SeqCst), 3);
+        assert_eq!(
+            result.metadata.get("retry_attempts"),
+            Some(&"2".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_with_retry_gives_up_after_max_retries() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let policy = ToolRetryPolicy {
+            max_retries: 2,
+            initial_delay_ms: 10,
+            max_delay_ms: 100,
+            backoff_multiplier: 2.0,
+            jitter_factor: 0.0,
+        };
+        let call_count = Arc::new(AtomicUsize::new(0));
+
+        let result = {
+            let call_count = call_count.clone();
+            execute_with_retry(
+                &policy,
+                "test_tool",
+                move || {
+                    let call_count = call_count.clone();
+                    async move {
+                        call_count.fetch_add(1, Ordering::SeqCst);
+                        ToolResult::err("timeout").with_metadata("error_type", "TimeoutError")
+                    }
+                },
+            )
+            .await
+        };
+
+        assert!(!result.success);
+        assert_eq!(call_count.load(Ordering::SeqCst), 3); // Initial + 2 retries
+        assert!(result.metadata.contains_key("retry_exhausted"));
+    }
+
+    #[tokio::test]
+    async fn execute_with_retry_skips_non_retryable_errors() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let policy = ToolRetryPolicy::exponential(3);
+        let call_count = Arc::new(AtomicUsize::new(0));
+
+        let result = {
+            let call_count = call_count.clone();
+            execute_with_retry(
+                &policy, "test_tool", move || {
+                let call_count = call_count.clone();
+                async move {
+                    call_count.fetch_add(1, Ordering::SeqCst);
+                    ToolResult::err("validation failed") // Not retryable
+                }
+            }).await
+        };
+
+        assert!(!result.success);
+        assert_eq!(call_count.load(Ordering::SeqCst), 1); // No retries
+        assert_eq!(result.metadata.get("retry_skipped"), Some(&"error_not_retryable".to_string()));
+    }
+
+    #[test]
+    fn tool_result_detects_retryable_errors() {
+        // Retryable errors
+        let timeout_result = ToolResult::err("connection timeout").with_metadata("error_type", "TimeoutError");
+        assert!(timeout_result.is_retryable());
+
+        let network_result = ToolResult::err("network error").with_metadata("error_type", "NetworkError");
+        assert!(network_result.is_retryable());
+
+        let rate_limit_result = ToolResult::err("rate limited").with_metadata("error_type", "RateLimitError");
+        assert!(rate_limit_result.is_retryable());
+
+        let http_503 = ToolResult::err("Service Unavailable: 503");
+        assert!(http_503.is_retryable());
+
+        // Non-retryable errors
+        let success_result = ToolResult::ok("success");
+        assert!(!success_result.is_retryable());
+
+        let validation_result = ToolResult::err("invalid input");
+        assert!(!validation_result.is_retryable());
+
+        let auth_result = ToolResult::err("unauthorized").with_metadata("error_type", "AuthError");
+        assert!(!auth_result.is_retryable());
+    }
+
+    #[tokio::test]
+    async fn tool_execute_with_retry_uses_tool_policy() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let tool = Tool::new("test_tool", "Test tool")
+            .with_retry_policy(ToolRetryPolicy {
+                max_retries: 2,
+                initial_delay_ms: 10,
+                max_delay_ms: 100,
+                backoff_multiplier: 2.0,
+                jitter_factor: 0.0,
+            });
+
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let result = {
+            let call_count = call_count.clone();
+            tool.execute_with_retry(move || {
+                let call_count = call_count.clone();
+                async move {
+                    let count = call_count.fetch_add(1, Ordering::SeqCst) + 1;
+                    if count < 2 {
+                        ToolResult::err("timeout").with_metadata("error_type", "TimeoutError")
+                    } else {
+                        ToolResult::ok("success")
+                    }
+                }
+            }).await
+        };
+
+        assert!(result.success);
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            result.metadata.get("retry_attempts"),
+            Some(&"1".to_string())
+        );
     }
 }
 
