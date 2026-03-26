@@ -137,6 +137,11 @@ enum SkillsAction {
         #[arg(short, long)]
         force: bool,
     },
+    /// Inspect a packaged skill archive
+    Inspect {
+        /// Path to packaged skill file (.tar.gz)
+        path: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -526,6 +531,14 @@ async fn skills_action(config: &AppConfig, action: SkillsAction) {
                     }
                 }
                 Err(err) => println!("✗ Failed to publish skill: {}", err),
+            }
+        }
+        SkillsAction::Inspect { path } => {
+            println!("Skill package contents");
+            println!("======================");
+            match inspect_skill_package(&path) {
+                Ok(()) => {}
+                Err(err) => println!("✗ Failed to inspect package: {}", err),
             }
         }
     }
@@ -2989,6 +3002,20 @@ async fn package_skill(
     let manifest = borgclaw_core::skills::SkillManifest::parse(&manifest_content)
         .map_err(|e| format!("Failed to parse SKILL.md: {}", e))?;
 
+    if manifest.description.is_empty() {
+        println!("⚠ Warning: SKILL.md has empty description");
+    }
+
+    println!(
+        "Packaging skill: {} v{} ({} commands)",
+        manifest.name,
+        manifest.version,
+        manifest.commands.len()
+    );
+    if let Some(min) = &manifest.min_version {
+        println!("  min_version: {}", min);
+    }
+
     let skill_name = manifest.name;
     let version = manifest.version;
 
@@ -3074,6 +3101,9 @@ async fn publish_skill(
         return Err("Package file must be a .tar.gz archive".to_string());
     }
 
+    // Validate SKILL.md exists and is parseable in the archive
+    validate_archive_skill_md(package_path)?;
+
     // Extract package metadata
     let package_metadata = extract_package_metadata(package_path)?;
     let skill_name = package_metadata
@@ -3110,6 +3140,123 @@ async fn publish_skill(
         package_id,
         public_url: Some(format!("{}/skills/{}", registry_url, skill_name)),
     })
+}
+
+/// Inspect the contents of a packaged skill archive
+fn inspect_skill_package(package_path: &std::path::Path) -> Result<(), String> {
+    use std::io::Read;
+
+    let tar_gz = std::fs::File::open(package_path)
+        .map_err(|e| format!("Failed to open package: {}", e))?;
+    let dec = flate2::read::GzDecoder::new(tar_gz);
+    let mut archive = tar::Archive::new(dec);
+
+    let mut files: Vec<(String, u64)> = Vec::new();
+    let mut skill_md_content = None;
+    let mut metadata_content = None;
+
+    for entry in archive
+        .entries()
+        .map_err(|e| format!("Failed to read archive: {}", e))?
+    {
+        let mut entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+        let path = entry
+            .path()
+            .map_err(|e| e.to_string())?
+            .to_string_lossy()
+            .to_string();
+        let size = entry.size();
+        files.push((path.clone(), size));
+
+        if path == "SKILL.md" || path.ends_with("/SKILL.md") {
+            let mut content = String::new();
+            entry.read_to_string(&mut content).ok();
+            skill_md_content = Some(content);
+        } else if path == "borgclaw-package.json" {
+            let mut content = String::new();
+            entry.read_to_string(&mut content).ok();
+            metadata_content = Some(content);
+        }
+    }
+
+    println!("Files ({}):", files.len());
+    for (path, size) in &files {
+        println!("  {} ({} bytes)", path, size);
+    }
+
+    if let Some(meta) = metadata_content {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&meta) {
+            println!("\nMetadata:");
+            if let Some(name) = parsed.get("name").and_then(|v| v.as_str()) {
+                println!("  name: {}", name);
+            }
+            if let Some(version) = parsed.get("version").and_then(|v| v.as_str()) {
+                println!("  version: {}", version);
+            }
+            if let Some(at) = parsed.get("packaged_at").and_then(|v| v.as_str()) {
+                println!("  packaged_at: {}", at);
+            }
+        }
+    }
+
+    if let Some(content) = skill_md_content {
+        match borgclaw_core::skills::SkillManifest::parse(&content) {
+            Ok(manifest) => {
+                println!("\nManifest:");
+                println!("  name: {}", manifest.name);
+                println!("  version: {}", manifest.version);
+                if !manifest.description.is_empty() {
+                    println!("  description: {}", manifest.description);
+                }
+                println!("  commands: {}", manifest.commands.len());
+                if let Some(min) = &manifest.min_version {
+                    println!("  min_version: {}", min);
+                }
+            }
+            Err(e) => println!("\n⚠ SKILL.md parse error: {}", e),
+        }
+    } else {
+        println!("\n⚠ No SKILL.md found in archive");
+    }
+
+    Ok(())
+}
+
+/// Validate that a skill archive contains a valid SKILL.md
+fn validate_archive_skill_md(package_path: &std::path::Path) -> Result<(), String> {
+    use std::io::Read;
+
+    let tar_gz = std::fs::File::open(package_path)
+        .map_err(|e| format!("Failed to open package: {}", e))?;
+    let dec = flate2::read::GzDecoder::new(tar_gz);
+    let mut archive = tar::Archive::new(dec);
+
+    for entry in archive
+        .entries()
+        .map_err(|e| format!("Failed to read archive: {}", e))?
+    {
+        let mut entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+        let path = entry
+            .path()
+            .map_err(|e| e.to_string())?
+            .to_string_lossy()
+            .to_string();
+
+        if path == "SKILL.md" || path.ends_with("/SKILL.md") {
+            let mut content = String::new();
+            entry
+                .read_to_string(&mut content)
+                .map_err(|e| format!("Failed to read SKILL.md: {}", e))?;
+            let manifest = borgclaw_core::skills::SkillManifest::parse(&content)
+                .map_err(|e| format!("Invalid SKILL.md: {}", e))?;
+            if manifest.name.is_empty() {
+                return Err("SKILL.md has empty name".to_string());
+            }
+            return Ok(());
+        }
+    }
+
+    Err("Archive does not contain a SKILL.md".to_string())
 }
 
 /// Extract metadata from a package archive
@@ -4272,6 +4419,69 @@ mod skill_packaging_tests {
         assert!(paths.contains(&"src/main.rs".to_string()));
         assert!(paths.contains(&"src/lib.rs".to_string()));
         assert!(paths.contains(&"borgclaw-package.json".to_string()));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inspect_skill_package_lists_contents() {
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_inspect_test_{}", uuid::Uuid::new_v4()));
+        let skill_dir = create_test_skill_dir(&root, "inspect-skill");
+        let output = root.join("inspect-skill-1.0.0.tar.gz");
+
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(package_skill(&skill_dir, Some(&output)))
+            .unwrap();
+
+        // inspect_skill_package should succeed and not return an error
+        let result = inspect_skill_package(&output);
+        assert!(result.is_ok());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn validate_archive_skill_md_passes_valid_package() {
+        let root = std::env::temp_dir()
+            .join(format!("borgclaw_validate_test_{}", uuid::Uuid::new_v4()));
+        let skill_dir = create_test_skill_dir(&root, "valid-skill");
+        let output = root.join("valid-skill-1.0.0.tar.gz");
+
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(package_skill(&skill_dir, Some(&output)))
+            .unwrap();
+
+        assert!(validate_archive_skill_md(&output).is_ok());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn validate_archive_skill_md_rejects_archive_without_skill_md() {
+        let root = std::env::temp_dir()
+            .join(format!("borgclaw_validate_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let output = root.join("no-skill.tar.gz");
+        let tar_gz = std::fs::File::create(&output).unwrap();
+        let enc = flate2::write::GzEncoder::new(tar_gz, flate2::Compression::default());
+        let mut tar = tar::Builder::new(enc);
+
+        let mut header = tar::Header::new_gnu();
+        header.set_size(4);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append_data(&mut header, "README.md", "test".as_bytes())
+            .unwrap();
+
+        let enc = tar.into_inner().unwrap();
+        enc.finish().unwrap();
+
+        let result = validate_archive_skill_md(&output);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("does not contain a SKILL.md"));
 
         std::fs::remove_dir_all(root).unwrap();
     }
