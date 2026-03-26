@@ -3789,6 +3789,179 @@ fn clear_screen() {
 }
 
 #[cfg(test)]
+mod skill_packaging_tests {
+    use super::*;
+    use std::path::Path;
+
+    fn create_test_skill_dir(root: &Path, name: &str) -> PathBuf {
+        let skill_dir = root.join(name);
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            format!(
+                "name: {}\nversion: 1.0.0\ndescription: Test skill\n## Instructions\nTest instructions.\n",
+                name
+            ),
+        )
+        .unwrap();
+        skill_dir
+    }
+
+    #[test]
+    fn package_skill_creates_valid_tar_gz() {
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_package_test_{}", uuid::Uuid::new_v4()));
+        let skill_dir = create_test_skill_dir(&root, "test-skill");
+        let output = root.join("test-skill-1.0.0.tar.gz");
+
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(package_skill(&skill_dir, Some(&output)));
+
+        assert!(result.is_ok());
+        assert!(output.exists());
+
+        // Verify we can extract metadata from the created package
+        let metadata = extract_package_metadata(&output).unwrap();
+        assert_eq!(metadata["name"].as_str().unwrap(), "test-skill");
+        assert_eq!(metadata["version"].as_str().unwrap(), "1.0.0");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn package_skill_rejects_missing_skill_md() {
+        let root = std::env::temp_dir()
+            .join(format!("borgclaw_package_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let output = root.join("test.tar.gz");
+
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(package_skill(&root, Some(&output)));
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("SKILL.md"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn package_skill_rejects_non_directory() {
+        let root = std::env::temp_dir()
+            .join(format!("borgclaw_package_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("not-a-directory");
+        std::fs::write(&file, "test").unwrap();
+
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(package_skill(&file, None));
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not a directory"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn package_skill_includes_metadata_file() {
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_package_test_{}", uuid::Uuid::new_v4()));
+        let skill_dir = create_test_skill_dir(&root, "metadata-test");
+        let output = root.join("metadata-test.tar.gz");
+
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(package_skill(&skill_dir, Some(&output)))
+            .unwrap();
+
+        // Verify borgclaw-package.json exists in archive
+        let metadata = extract_package_metadata(&output).unwrap();
+        assert!(metadata["packaged_at"].as_str().is_some());
+        assert_eq!(metadata["packaged_by"].as_str().unwrap(), "borgclaw-cli");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extract_package_metadata_fails_for_missing_metadata() {
+        let root = std::env::temp_dir()
+            .join(format!("borgclaw_package_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        // Create a valid tar.gz without metadata file
+        let output = root.join("invalid.tar.gz");
+        let tar_gz = std::fs::File::create(&output).unwrap();
+        let enc = flate2::write::GzEncoder::new(tar_gz, flate2::Compression::default());
+        let mut tar = tar::Builder::new(enc);
+
+        let mut header = tar::Header::new_gnu();
+        header.set_size(12);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append_data(&mut header, "just-a-file.txt", "test content".as_bytes())
+            .unwrap();
+
+        let enc = tar.into_inner().unwrap();
+        enc.finish().unwrap();
+
+        let result = extract_package_metadata(&output);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("Package metadata not found"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn create_skill_archive_preserves_directory_structure() {
+        let root = std::env::temp_dir()
+            .join(format!("borgclaw_package_test_{}", uuid::Uuid::new_v4()));
+        let skill_dir = root.join("complex-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "name: complex\nversion: 2.0.0\ndescription: Complex skill\n## Instructions\n",
+        )
+        .unwrap();
+
+        // Create subdirectory with files
+        let subdir = skill_dir.join("src");
+        std::fs::create_dir_all(&subdir).unwrap();
+        std::fs::write(subdir.join("main.rs"), "// main code").unwrap();
+        std::fs::write(subdir.join("lib.rs"), "// lib code").unwrap();
+
+        let output = root.join("complex.tar.gz");
+        create_skill_archive(&skill_dir, &output, "complex", "2.0.0").unwrap();
+
+        // Verify archive was created
+        assert!(output.exists());
+
+        // Extract and verify structure
+        use std::io::Read;
+        let tar_gz = std::fs::File::open(&output).unwrap();
+        let dec = flate2::read::GzDecoder::new(tar_gz);
+        let mut archive = tar::Archive::new(dec);
+
+        let entries: Vec<_> = archive.entries().unwrap().collect();
+        let paths: Vec<_> = entries
+            .iter()
+            .filter_map(|e| e.as_ref().ok())
+            .map(|e| e.path().unwrap().to_string_lossy().to_string())
+            .collect();
+
+        assert!(paths.contains(&"SKILL.md".to_string()));
+        assert!(paths.contains(&"src/main.rs".to_string()));
+        assert!(paths.contains(&"src/lib.rs".to_string()));
+        assert!(paths.contains(&"borgclaw-package.json".to_string()));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
 mod cli_path_tests {
     use super::cli_path_available;
     use std::path::Path;
