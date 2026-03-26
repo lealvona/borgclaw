@@ -1,4 +1,4 @@
-//! Webhook channel implementation for HTTP triggers and callbacks
+//! Webhook channel implementation for HTTP triggers and callbacks with restart recovery
 
 use super::{
     Channel, ChannelConfig, ChannelError, ChannelStatus, ChannelType, InboundMessage,
@@ -8,9 +8,22 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::task::JoinHandle;
+
+/// Persistent state for restart recovery
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebhookState {
+    /// Total webhooks processed
+    pub total_webhooks: u64,
+    /// Last activity timestamp
+    pub last_activity: Option<chrono::DateTime<chrono::Utc>>,
+    /// Trigger statistics
+    pub trigger_stats: HashMap<String, u64>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookTrigger {
@@ -94,9 +107,13 @@ impl WebhookTrigger {
 pub struct WebhookChannel {
     channel_type: ChannelType,
     status: Arc<RwLock<ChannelStatus>>,
-    msg_count: AtomicU64,
+    msg_count: Arc<AtomicU64>,
     triggers: Arc<RwLock<Vec<WebhookTrigger>>>,
     rate_limits: Arc<RwLock<HashMap<String, Vec<chrono::DateTime<chrono::Utc>>>>>,
+    state_path: Option<PathBuf>,
+    running: Arc<AtomicBool>,
+    loop_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    trigger_stats: Arc<RwLock<HashMap<String, u64>>>,
 }
 
 impl WebhookChannel {
@@ -104,15 +121,87 @@ impl WebhookChannel {
         Self {
             channel_type: ChannelType::new("webhook"),
             status: Arc::new(RwLock::new(ChannelStatus::disconnected())),
-            msg_count: AtomicU64::new(0),
+            msg_count: Arc::new(AtomicU64::new(0)),
             triggers: Arc::new(RwLock::new(Vec::new())),
             rate_limits: Arc::new(RwLock::new(HashMap::new())),
+            state_path: None,
+            running: Arc::new(AtomicBool::new(false)),
+            loop_handle: Arc::new(Mutex::new(None)),
+            trigger_stats: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    pub fn with_state_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.state_path = Some(path.into());
+        self
+    }
+
+    /// Load persisted state for restart recovery
+    fn load_state(&self) -> WebhookState {
+        if let Some(ref path) = self.state_path {
+            if let Ok(contents) = std::fs::read_to_string(path) {
+                if let Ok(state) = serde_json::from_str(&contents) {
+                    return state;
+                }
+            }
+        }
+        WebhookState::default()
+    }
+
+    /// Persist state for restart recovery
+    async fn persist_state(&self) {
+        if let Some(ref path) = self.state_path {
+            let state = WebhookState {
+                total_webhooks: self.msg_count.load(Ordering::Relaxed),
+                last_activity: self.status.read().await.last_activity,
+                trigger_stats: self.trigger_stats.read().await.clone(),
+            };
+            if let Ok(contents) = serde_json::to_string_pretty(&state) {
+                let _ = std::fs::write(path, contents);
+            }
+        }
+    }
+
+    /// Check if restart recovery state is available
+    pub fn has_restart_state(&self) -> bool {
+        self.state_path.as_ref().map_or(false, |p| p.exists())
+    }
+
+    /// Get total webhook count for restart recovery
+    pub fn total_webhooks(&self) -> u64 {
+        self.msg_count.load(Ordering::Relaxed)
     }
 
     pub async fn register_trigger(&self, trigger: WebhookTrigger) {
         let mut triggers = self.triggers.write().await;
         triggers.push(trigger);
+    }
+
+    /// Start background state persistence loop
+    async fn start_state_persistence(&self) {
+        let state_path = self.state_path.clone();
+        let status = self.status.clone();
+        let msg_count = self.msg_count.clone();
+        let trigger_stats = self.trigger_stats.clone();
+        let running = self.running.clone();
+
+        let handle = tokio::spawn(async move {
+            while running.load(Ordering::Relaxed) {
+                if let Some(ref path) = state_path {
+                    let state = WebhookState {
+                        total_webhooks: msg_count.load(Ordering::Relaxed),
+                        last_activity: status.read().await.last_activity,
+                        trigger_stats: trigger_stats.read().await.clone(),
+                    };
+                    if let Ok(contents) = serde_json::to_string_pretty(&state) {
+                        let _ = std::fs::write(path, contents);
+                    }
+                }
+                tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+            }
+        });
+
+        *self.loop_handle.lock().await = Some(handle);
     }
 
     pub async fn remove_trigger(&self, id: &str) -> bool {
@@ -219,6 +308,10 @@ impl WebhookChannel {
             let mut status = self.status.write().await;
             status.last_activity = Some(Utc::now());
         }
+        {
+            let mut stats = self.trigger_stats.write().await;
+            *stats.entry(trigger.id.clone()).or_insert(0) += 1;
+        }
 
         sender
             .send(inbound)
@@ -248,6 +341,14 @@ impl Channel for WebhookChannel {
     }
 
     async fn init(&mut self, _config: &ChannelConfig) -> Result<(), ChannelError> {
+        // Load persisted state for restart recovery
+        let state = self.load_state();
+        self.msg_count.store(state.total_webhooks, Ordering::Relaxed);
+        *self.trigger_stats.write().await = state.trigger_stats;
+        if let Some(last_activity) = state.last_activity {
+            self.status.write().await.last_activity = Some(last_activity);
+        }
+
         *self.status.write().await = ChannelStatus::connected();
         Ok(())
     }
@@ -256,6 +357,26 @@ impl Channel for WebhookChannel {
         &self,
         _sender: mpsc::Sender<InboundMessage>,
     ) -> Result<(), ChannelError> {
+        if !self.status.read().await.connected {
+            return Err(ChannelError::ConnectionFailed(
+                "Channel not initialized".to_string(),
+            ));
+        }
+
+        // Duplicate-start rejection using AtomicBool compare_exchange
+        if self
+            .running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err(ChannelError::ConnectionFailed(
+                "Webhook state persistence already running".to_string(),
+            ));
+        }
+
+        // Start background state persistence loop
+        self.start_state_persistence().await;
+
         Ok(())
     }
 
@@ -277,6 +398,17 @@ impl Channel for WebhookChannel {
     }
 
     async fn shutdown(&self) -> Result<(), ChannelError> {
+        // Stop the background loop
+        self.running.store(false, Ordering::SeqCst);
+
+        // Abort the loop handle if present
+        if let Some(handle) = self.loop_handle.lock().await.take() {
+            handle.abort();
+        }
+
+        // Persist final state
+        self.persist_state().await;
+
         *self.status.write().await = ChannelStatus::disconnected();
         Ok(())
     }
@@ -509,5 +641,145 @@ mod tests {
         let inbound = rx.recv().await.unwrap();
         assert_eq!(response.body["trigger_id"], "notify_slack");
         assert_eq!(inbound.sender.id, "notify_slack");
+    }
+
+    #[tokio::test]
+    async fn webhook_start_receiving_rejects_duplicate_starts() {
+        let mut channel = WebhookChannel::new();
+        let (tx, _rx) = mpsc::channel(1);
+
+        // Initialize channel first
+        channel
+            .init(&ChannelConfig {
+                channel_type: ChannelType::new("webhook"),
+                enabled: true,
+                credentials: None,
+                allow_from: vec![],
+                dm_policy: crate::config::DmPolicy::Open,
+                extra: HashMap::new(),
+            })
+            .await
+            .unwrap();
+
+        // First start should succeed
+        let result1 = channel.start_receiving(tx.clone()).await;
+        assert!(result1.is_ok());
+
+        // Second start should fail with duplicate error
+        let result2 = channel.start_receiving(tx).await;
+        assert!(result2.is_err());
+        assert!(result2
+            .unwrap_err()
+            .to_string()
+            .contains("already running"));
+
+        // Clean up
+        let _ = channel.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn webhook_shutdown_stops_state_persistence() {
+        let root = std::env::temp_dir()
+            .join(format!("borgclaw_webhook_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let state_path = root.join("webhook_state.json");
+
+        let mut channel = WebhookChannel::new().with_state_path(&state_path);
+        let (tx, _rx) = mpsc::channel(1);
+
+        // Initialize channel first
+        channel
+            .init(
+                &ChannelConfig {
+                    channel_type: ChannelType::new("webhook"),
+                    enabled: true,
+                    credentials: None,
+                    allow_from: vec![],
+                    dm_policy: crate::config::DmPolicy::Open,
+                    extra: HashMap::new(),
+                })
+            .await
+            .unwrap();
+
+        // Start and process some webhooks
+        channel.start_receiving(tx.clone()).await.unwrap();
+
+        channel
+            .register_trigger(WebhookTrigger::new("test", "/webhook").with_id("test-trigger"))
+            .await;
+
+        // Process a webhook
+        let (req_tx, mut req_rx) = mpsc::channel(1);
+        channel
+            .handle_request(
+                "/webhook",
+                "POST",
+                HashMap::from([("x-forwarded-for".to_string(), "127.0.0.1".to_string())]),
+                br#"{"content":"test"}"#.to_vec(),
+                req_tx,
+            )
+            .await
+            .unwrap();
+
+        let _ = req_rx.recv().await;
+
+        // Force immediate state persistence
+        channel.persist_state().await;
+
+        // Verify state was persisted
+        assert!(state_path.exists());
+        let contents = std::fs::read_to_string(&state_path).unwrap();
+        let state: WebhookState = serde_json::from_str(&contents).unwrap();
+        assert_eq!(state.total_webhooks, 1);
+        assert!(state.trigger_stats.contains_key("test-trigger"));
+
+        // Shutdown
+        channel.shutdown().await.unwrap();
+
+        // Clean up
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn webhook_init_loads_persisted_state() {
+        let root = std::env::temp_dir()
+            .join(format!("borgclaw_webhook_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let state_path = root.join("webhook_state.json");
+
+        // Create persisted state
+        let state = WebhookState {
+            total_webhooks: 42,
+            last_activity: Some(Utc::now()),
+            trigger_stats: HashMap::from([("test-trigger".to_string(), 10)]),
+        };
+        std::fs::write(
+            &state_path,
+            serde_json::to_string_pretty(&state).unwrap(),
+        )
+        .unwrap();
+
+        // Create channel and init (should load state)
+        let mut channel = WebhookChannel::new().with_state_path(&state_path);
+        channel
+            .init(&ChannelConfig {
+                channel_type: ChannelType::new("webhook"),
+                enabled: true,
+                credentials: None,
+                allow_from: vec![],
+                dm_policy: crate::config::DmPolicy::Open,
+                extra: HashMap::new(),
+            })
+            .await
+            .unwrap();
+
+        // Verify state was loaded
+        assert_eq!(channel.total_webhooks(), 42);
+        assert!(channel.has_restart_state());
+        let stats = channel.trigger_stats.read().await;
+        assert_eq!(stats.get("test-trigger"), Some(&10));
+
+        // Clean up
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

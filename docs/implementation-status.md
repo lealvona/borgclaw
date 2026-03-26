@@ -42,8 +42,9 @@ Last reviewed: March 21, 2026, with upstream inspiration follow-up through March
 - Several skill families have meaningful shared tool exposure, but not full operational completeness.
 - Background execution now persists scheduler job state and run history, heartbeat task state, and sub-agent task state locally. Scheduler, heartbeat, and sub-agent retry/dead-letter semantics are landed.
 - CLI `status`/`doctor` now report persisted scheduler, heartbeat, and sub-agent recovery-state files, including task and dead-letter counts when available.
-- Signal polling now has duplicate-start rejection and tracked shutdown for its background receive loop, but broader restart recovery behavior across transports is still incomplete.
-- Telegram polling now has duplicate-start rejection and tracked shutdown for its background receive loop, but broader restart recovery behavior across transports is still incomplete.
+- Signal polling now has duplicate-start rejection and tracked shutdown for its background receive loop.
+- Telegram polling now has duplicate-start rejection and tracked shutdown for its background receive loop.
+- Webhook channel now has duplicate-start rejection, shutdown tracking, and state persistence for restart recovery.
 - GitHub, Google, and browser now all have local shared-runtime happy-path coverage, but broader operational completeness across those families is still incomplete.
 - Managed schedule/backup/recovery operator workflows are now complete with full CRUD operations.
 - CLI exposes full schedule management: `schedules list`, `schedules show <id>`, `schedules create`, `schedules delete`, `schedules pause <id>`, `schedules resume <id>`.
