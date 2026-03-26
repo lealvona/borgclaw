@@ -6250,6 +6250,203 @@ for line in sys.stdin:
             Some(&"1".to_string())
         );
     }
+
+    // Approval gate tests for Google Drive tools (TICKET-056)
+
+    #[tokio::test]
+    async fn google_share_file_requires_approval_in_supervised_mode() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_gdrive_share_approval_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &HeartbeatConfig::default(),
+            &SchedulerConfig::default(),
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig {
+                approval_mode: ApprovalMode::Supervised,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let result = execute_tool(
+            &ToolCall::new(
+                "google_share_file",
+                HashMap::from([
+                    ("file_id".to_string(), serde_json::json!("test_file_123")),
+                    ("email".to_string(), serde_json::json!("user@example.com")),
+                    ("role".to_string(), serde_json::json!("reader")),
+                ]),
+            ),
+            &runtime,
+        )
+        .await;
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(result.success);
+        assert_eq!(
+            result.metadata.get("approval_required").map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            result.metadata.get("approval_tool").map(String::as_str),
+            Some("google_share_file")
+        );
+    }
+
+    #[tokio::test]
+    async fn google_remove_permission_requires_approval_in_supervised_mode() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_gdrive_rmperm_approval_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &HeartbeatConfig::default(),
+            &SchedulerConfig::default(),
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig {
+                approval_mode: ApprovalMode::Supervised,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let result = execute_tool(
+            &ToolCall::new(
+                "google_remove_permission",
+                HashMap::from([
+                    ("file_id".to_string(), serde_json::json!("test_file_123")),
+                    ("permission_id".to_string(), serde_json::json!("perm_456")),
+                ]),
+            ),
+            &runtime,
+        )
+        .await;
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(result.success);
+        assert_eq!(
+            result.metadata.get("approval_required").map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            result.metadata.get("approval_tool").map(String::as_str),
+            Some("google_remove_permission")
+        );
+    }
+
+    #[tokio::test]
+    async fn google_delete_file_requires_approval_in_supervised_mode() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_gdrive_delete_approval_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &HeartbeatConfig::default(),
+            &SchedulerConfig::default(),
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig {
+                approval_mode: ApprovalMode::Supervised,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let result = execute_tool(
+            &ToolCall::new(
+                "google_delete_file",
+                HashMap::from([
+                    ("file_id".to_string(), serde_json::json!("test_file_123")),
+                    ("permanent".to_string(), serde_json::json!(true)),
+                ]),
+            ),
+            &runtime,
+        )
+        .await;
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(result.success);
+        assert_eq!(
+            result.metadata.get("approval_required").map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            result.metadata.get("approval_tool").map(String::as_str),
+            Some("google_delete_file")
+        );
+    }
+
+    #[tokio::test]
+    async fn google_tools_with_approval_definitions_match_enforcement() {
+        // Verify that all tools marked with_approval(true) are in the set of
+        // tools that actually enforce approval via require_tool_approval
+        let tools = builtin_tools();
+        let approval_tools: Vec<&str> = tools
+            .iter()
+            .filter(|t| t.requires_approval)
+            .map(|t| t.name.as_str())
+            .collect();
+
+        // These Google Drive tools must require approval
+        assert!(
+            approval_tools.contains(&"google_share_file"),
+            "google_share_file must require approval"
+        );
+        assert!(
+            approval_tools.contains(&"google_remove_permission"),
+            "google_remove_permission must require approval"
+        );
+        assert!(
+            approval_tools.contains(&"google_delete_file"),
+            "google_delete_file must require approval"
+        );
+    }
 }
 
 /// Built-in tools

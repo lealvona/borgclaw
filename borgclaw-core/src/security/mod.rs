@@ -718,10 +718,23 @@ impl SecurityLayer {
         match mode {
             ApprovalMode::ReadOnly => true,
             ApprovalMode::Supervised => {
-                // Only dangerous tools need approval
+                // Dangerous tools that need approval
                 matches!(
                     tool_name,
-                    "execute_command" | "write_file" | "delete" | "plugin_invoke" | "mcp_call_tool"
+                    "execute_command"
+                        | "write_file"
+                        | "delete"
+                        | "plugin_invoke"
+                        | "mcp_call_tool"
+                        | "google_share_file"
+                        | "google_remove_permission"
+                        | "google_delete_file"
+                        | "google_delete_email"
+                        | "google_trash_email"
+                        | "google_delete_event"
+                        | "github_delete_file"
+                        | "github_delete_branch"
+                        | "github_merge_pr"
                 )
             }
             ApprovalMode::Autonomous => false,
