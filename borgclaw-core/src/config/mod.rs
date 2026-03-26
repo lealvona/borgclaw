@@ -234,6 +234,12 @@ pub struct SecurityConfig {
     pub vault: VaultConfig,
     /// Workspace file/path policy
     pub workspace: WorkspacePolicyConfig,
+    /// Enable SSRF protection
+    pub ssrf_protection: bool,
+    /// SSRF allowlist - additional hosts to allow (regex patterns)
+    pub ssrf_allowlist: Vec<String>,
+    /// SSRF blocklist - additional hosts to block (regex patterns)
+    pub ssrf_blocklist: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -303,6 +309,9 @@ impl Default for SecurityConfig {
             secrets_path: PathBuf::from(".borgclaw/secrets.enc"),
             vault: VaultConfig::default(),
             workspace: WorkspacePolicyConfig::default(),
+            ssrf_protection: true,
+            ssrf_allowlist: Vec::new(),
+            ssrf_blocklist: Vec::new(),
         }
     }
 }

@@ -438,6 +438,22 @@ impl SecurityLayer {
     }
 
     pub fn with_config(config: SecurityConfig) -> Self {
+        let mut ssrf_guard = SsrfGuard::new();
+
+        // Apply SSRF allowlist patterns
+        for pattern in &config.ssrf_allowlist {
+            if let Err(e) = ssrf_guard.allow_host(pattern) {
+                tracing::warn!("Invalid SSRF allowlist pattern '{}': {}", pattern, e);
+            }
+        }
+
+        // Apply SSRF blocklist patterns
+        for pattern in &config.ssrf_blocklist {
+            if let Err(e) = ssrf_guard.block_host(pattern) {
+                tracing::warn!("Invalid SSRF blocklist pattern '{}': {}", pattern, e);
+            }
+        }
+
         Self {
             config: config.clone(),
             command_allowlist: compile_allowlist(&config),
@@ -454,7 +470,7 @@ impl SecurityLayer {
             wasm: config
                 .wasm_sandbox
                 .then(|| WasmSandbox::new(config.wasm_max_instances)),
-            ssrf_guard: SsrfGuard::new(),
+            ssrf_guard,
         }
     }
 
@@ -478,6 +494,9 @@ impl SecurityLayer {
 
     /// Validate URL against SSRF attacks
     pub fn validate_url(&self, url: &str) -> Result<(), SsrfError> {
+        if !self.config.ssrf_protection {
+            return Ok(());
+        }
         self.ssrf_guard.validate_url(url)
     }
 

@@ -1245,7 +1245,7 @@ fn apply_component_action(
     title: &str,
     chapter: &str,
     action: &str,
-    theme: &ColorfulTheme,
+    _theme: &ColorfulTheme,
     registry: &ProviderRegistry,
 ) -> Result<(), String> {
     let title = title.trim().to_ascii_lowercase();
