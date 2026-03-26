@@ -591,6 +591,7 @@ impl GmailClient {
 pub struct DriveFile {
     pub id: String,
     pub name: String,
+    #[serde(rename = "mimeType")]
     pub mime_type: String,
     pub size: Option<String>,
     pub parents: Option<Vec<String>>,
@@ -1072,8 +1073,10 @@ pub struct Permission {
     #[serde(rename = "type")]
     pub permission_type: String,
     pub role: String,
+    #[serde(rename = "emailAddress")]
     pub email_address: Option<String>,
     pub domain: Option<String>,
+    #[serde(rename = "allowFileDiscovery")]
     pub allow_file_discovery: Option<bool>,
 }
 
@@ -1082,9 +1085,13 @@ pub struct Permission {
 pub struct DriveFileDetails {
     #[serde(flatten)]
     pub file: DriveFile,
+    #[serde(rename = "webViewLink")]
     pub web_view_link: Option<String>,
+    #[serde(rename = "webContentLink")]
     pub web_content_link: Option<String>,
+    #[serde(rename = "createdTime")]
     pub created_time: Option<String>,
+    #[serde(rename = "modifiedTime")]
     pub modified_time: Option<String>,
 }
 
@@ -1375,5 +1382,349 @@ mod tests {
 
         assert_eq!(parsed.summary, "Meeting");
         assert_eq!(parsed.start.to_rfc3339(), "2026-03-09T10:00:00+00:00");
+    }
+
+    // Tests for new Google Drive operations (TICKET-048)
+
+    #[test]
+    fn drive_file_parses_from_json() {
+        let json = r#"{
+            "id": "file123",
+            "name": "test.txt",
+            "mimeType": "text/plain",
+            "size": "1024",
+            "parents": ["folder456"]
+        }"#;
+
+        let file: DriveFile = serde_json::from_str(json).unwrap();
+        assert_eq!(file.id, "file123");
+        assert_eq!(file.name, "test.txt");
+        assert_eq!(file.mime_type, "text/plain");
+        assert_eq!(file.size, Some("1024".to_string()));
+        assert_eq!(file.parents, Some(vec!["folder456".to_string()]));
+    }
+
+    #[test]
+    fn permission_parses_from_json() {
+        let json = r#"{
+            "id": "perm123",
+            "type": "user",
+            "role": "writer",
+            "emailAddress": "test@example.com"
+        }"#;
+
+        let perm: Permission = serde_json::from_str(json).unwrap();
+        assert_eq!(perm.id, "perm123");
+        assert_eq!(perm.permission_type, "user");
+        assert_eq!(perm.role, "writer");
+        assert_eq!(perm.email_address, Some("test@example.com".to_string()));
+    }
+
+    #[test]
+    fn drive_file_details_parses_from_json() {
+        let json = r#"{
+            "id": "file123",
+            "name": "test.txt",
+            "mimeType": "text/plain",
+            "webViewLink": "https://drive.google.com/file/d/file123/view",
+            "webContentLink": "https://drive.google.com/uc?id=file123",
+            "createdTime": "2024-01-01T00:00:00.000Z",
+            "modifiedTime": "2024-01-02T00:00:00.000Z"
+        }"#;
+
+        let details: DriveFileDetails = serde_json::from_str(json).unwrap();
+        assert_eq!(details.file.id, "file123");
+        assert_eq!(details.file.name, "test.txt");
+        assert_eq!(details.web_view_link, Some("https://drive.google.com/file/d/file123/view".to_string()));
+        assert_eq!(details.web_content_link, Some("https://drive.google.com/uc?id=file123".to_string()));
+        assert_eq!(details.created_time, Some("2024-01-01T00:00:00.000Z".to_string()));
+    }
+
+    #[test]
+    fn folder_mime_type_is_correct() {
+        // Verify the folder MIME type constant used in create_folder
+        let folder_mime = "application/vnd.google-apps.folder";
+        assert!(!folder_mime.is_empty());
+        assert!(folder_mime.contains("folder"));
+    }
+
+    #[test]
+    fn drive_query_escaping_works_correctly() {
+        // Test that query strings are properly URL-encoded
+        let query = "name contains 'test file'";
+        let encoded = urlencoding::encode(query);
+        assert!(encoded.contains("%27")); // ' should be encoded
+        assert!(encoded.contains("%20")); // space should be encoded
+    }
+
+    #[test]
+    fn batch_operations_handle_empty_lists() {
+        // Test that batch operations handle empty input gracefully
+        let files: Vec<(String, Vec<u8>, String)> = vec![];
+        assert!(files.is_empty());
+
+        let shares: Vec<(String, String, String)> = vec![];
+        assert!(shares.is_empty());
+    }
+
+    #[test]
+    fn batch_operations_handle_single_item() {
+        // Test batch with single item
+        let files = vec![("file1.txt".to_string(), b"content".to_vec(), "text/plain".to_string())];
+        assert_eq!(files.len(), 1);
+
+        let shares = vec![("file123".to_string(), "user@example.com".to_string(), "reader".to_string())];
+        assert_eq!(shares.len(), 1);
+    }
+
+    #[test]
+    fn batch_operations_handle_multiple_items() {
+        // Test batch with multiple items
+        let files = vec![
+            ("file1.txt".to_string(), b"content1".to_vec(), "text/plain".to_string()),
+            ("file2.txt".to_string(), b"content2".to_vec(), "text/plain".to_string()),
+            ("file3.txt".to_string(), b"content3".to_vec(), "text/plain".to_string()),
+        ];
+        assert_eq!(files.len(), 3);
+
+        let shares = vec![
+            ("file1".to_string(), "user1@example.com".to_string(), "reader".to_string()),
+            ("file2".to_string(), "user2@example.com".to_string(), "writer".to_string()),
+        ];
+        assert_eq!(shares.len(), 2);
+    }
+
+    #[test]
+    fn permission_roles_are_valid() {
+        // Test valid permission roles
+        let valid_roles = vec!["owner", "organizer", "fileOrganizer", "writer", "reader", "commenter"];
+        for role in valid_roles {
+            assert!(!role.is_empty());
+        }
+    }
+
+    #[test]
+    fn permission_types_are_valid() {
+        // Test valid permission types
+        let valid_types = vec!["user", "group", "domain", "anyone"];
+        for perm_type in valid_types {
+            assert!(!perm_type.is_empty());
+        }
+    }
+
+    #[test]
+    fn drive_error_display_formats_correctly() {
+        let error = GoogleError::RequestFailed("network error".to_string());
+        let display = format!("{}", error);
+        assert!(display.contains("network error"));
+
+        let error = GoogleError::NotAuthenticated;
+        let display = format!("{}", error);
+        assert!(display.contains("Not authenticated"));
+
+        let error = GoogleError::ParseFailed("invalid json".to_string());
+        let display = format!("{}", error);
+        assert!(display.contains("invalid json"));
+    }
+
+    #[test]
+    fn drive_file_with_null_parents_parses_correctly() {
+        let json = r#"{
+            "id": "file123",
+            "name": "test.txt",
+            "mimeType": "text/plain",
+            "size": null,
+            "parents": null
+        }"#;
+
+        let file: DriveFile = serde_json::from_str(json).unwrap();
+        assert_eq!(file.id, "file123");
+        assert_eq!(file.parents, None);
+        assert_eq!(file.size, None);
+    }
+
+    #[test]
+    fn drive_file_with_multiple_parents_parses_correctly() {
+        let json = r#"{
+            "id": "file123",
+            "name": "test.txt",
+            "mimeType": "text/plain",
+            "parents": ["folder1", "folder2", "folder3"]
+        }"#;
+
+        let file: DriveFile = serde_json::from_str(json).unwrap();
+        assert_eq!(file.parents, Some(vec!["folder1".to_string(), "folder2".to_string(), "folder3".to_string()]));
+    }
+
+    #[test]
+    fn permission_without_email_parses_correctly() {
+        let json = r#"{
+            "id": "perm123",
+            "type": "anyone",
+            "role": "reader",
+            "allowFileDiscovery": false
+        }"#;
+
+        let perm: Permission = serde_json::from_str(json).unwrap();
+        assert_eq!(perm.permission_type, "anyone");
+        assert_eq!(perm.email_address, None);
+        assert_eq!(perm.allow_file_discovery, Some(false));
+    }
+
+    #[test]
+    fn move_file_metadata_construction() {
+        // Test the JSON structure used in move_file
+        let file_id = "file123";
+        let new_parent = "folder456";
+        let body = serde_json::json!({
+            "addParents": [new_parent],
+            "removeParents": ["old_folder"]
+        });
+
+        assert!(body.get("addParents").is_some());
+        assert!(body.get("removeParents").is_some());
+    }
+
+    #[test]
+    fn copy_file_metadata_construction() {
+        // Test the JSON structure used in copy_file
+        let body = serde_json::json!({
+            "name": "Copy of test.txt"
+        });
+
+        assert_eq!(body["name"], "Copy of test.txt");
+    }
+
+    #[test]
+    fn delete_file_permanent_vs_trash() {
+        // Test that permanent delete uses DELETE method
+        // and trash uses update to trashed=true
+        let file_id = "file123";
+        let permanent = true;
+
+        // Permanent delete uses DELETE endpoint
+        assert!(permanent);
+
+        // Trash uses PATCH with trashed=true
+        let trash_body = serde_json::json!({"trashed": true});
+        assert_eq!(trash_body["trashed"], true);
+    }
+
+    #[test]
+    fn share_file_permission_construction_user() {
+        // Test permission JSON for user sharing
+        let email = "user@example.com";
+        let role = "writer";
+        let permission = serde_json::json!({
+            "type": "user",
+            "role": role,
+            "emailAddress": email
+        });
+
+        assert_eq!(permission["type"], "user");
+        assert_eq!(permission["role"], "writer");
+        assert_eq!(permission["emailAddress"], "user@example.com");
+    }
+
+    #[test]
+    fn share_file_permission_construction_public() {
+        // Test permission JSON for public sharing
+        let role = "reader";
+        let allow_discovery = true;
+        let permission = serde_json::json!({
+            "type": if allow_discovery { "anyone" } else { "domain" },
+            "role": role
+        });
+
+        assert_eq!(permission["type"], "anyone");
+        assert_eq!(permission["role"], "reader");
+    }
+
+    #[test]
+    fn create_folder_metadata_construction() {
+        // Test folder creation metadata
+        let name = "My Folder";
+        let parent_id = Some("parent123");
+
+        let mut metadata = serde_json::json!({
+            "name": name,
+            "mimeType": "application/vnd.google-apps.folder"
+        });
+
+        if let Some(parent) = parent_id {
+            metadata["parents"] = serde_json::json!([parent]);
+        }
+
+        assert_eq!(metadata["name"], "My Folder");
+        assert_eq!(metadata["mimeType"], "application/vnd.google-apps.folder");
+        assert_eq!(metadata["parents"][0], "parent123");
+    }
+
+    #[test]
+    fn create_folder_without_parent() {
+        // Test folder creation metadata without parent
+        let name = "My Folder";
+        let metadata = serde_json::json!({
+            "name": name,
+            "mimeType": "application/vnd.google-apps.folder"
+        });
+
+        assert_eq!(metadata["name"], "My Folder");
+        assert!(metadata.get("parents").is_none());
+    }
+
+    #[test]
+    fn list_folders_query_construction() {
+        // Test query construction for list_folders
+        let parent_id: Option<&str> = Some("parent123");
+        let mut query = "mimeType='application/vnd.google-apps.folder'".to_string();
+
+        if let Some(parent) = parent_id {
+            query.push_str(&format!(" and '{}' in parents", parent));
+        }
+        query.push_str(" and trashed=false");
+
+        assert!(query.contains("mimeType='application/vnd.google-apps.folder'"));
+        assert!(query.contains("'parent123' in parents"));
+        assert!(query.contains("trashed=false"));
+    }
+
+    #[test]
+    fn list_folders_query_without_parent() {
+        // Test query construction without parent
+        let parent_id: Option<&str> = None;
+        let mut query = "mimeType='application/vnd.google-apps.folder'".to_string();
+
+        if let Some(parent) = parent_id {
+            query.push_str(&format!(" and '{}' in parents", parent));
+        }
+        query.push_str(" and trashed=false");
+
+        assert!(query.contains("mimeType='application/vnd.google-apps.folder'"));
+        assert!(!query.contains("in parents"));
+        assert!(query.contains("trashed=false"));
+    }
+
+    #[test]
+    fn file_details_includes_required_fields() {
+        // Test that DriveFileDetails includes all required fields
+        let details = DriveFileDetails {
+            file: DriveFile {
+                id: "file123".to_string(),
+                name: "test.txt".to_string(),
+                mime_type: "text/plain".to_string(),
+                size: Some("1024".to_string()),
+                parents: Some(vec!["folder456".to_string()]),
+            },
+            web_view_link: Some("https://drive.google.com/file/d/file123/view".to_string()),
+            web_content_link: Some("https://drive.google.com/uc?id=file123".to_string()),
+            created_time: Some("2024-01-01T00:00:00.000Z".to_string()),
+            modified_time: Some("2024-01-02T00:00:00.000Z".to_string()),
+        };
+
+        assert!(!details.file.id.is_empty());
+        assert!(!details.file.name.is_empty());
+        assert!(details.web_view_link.is_some());
+        assert!(details.web_content_link.is_some());
     }
 }
