@@ -37,6 +37,7 @@ Last reviewed: March 21, 2026, with upstream inspiration follow-up through March
 
 ## Temporary Limitations That Must Stay Explicit
 
+- Skill registry publishing/package workflow is still planned-only.
 - Remote skill installs currently persist manifest content, not companion assets.
 - Several skill families have meaningful shared tool exposure, but not full operational completeness.
 - Background execution now persists scheduler job state and run history, heartbeat task state, and sub-agent task state locally. Scheduler, heartbeat, and sub-agent retry/dead-letter semantics are landed.
@@ -48,11 +49,9 @@ Last reviewed: March 21, 2026, with upstream inspiration follow-up through March
 - Managed schedule/backup/recovery operator workflows are now complete with full CRUD operations.
 - CLI exposes full schedule management: `schedules list`, `schedules show <id>`, `schedules create`, `schedules delete`, `schedules pause <id>`, `schedules resume <id>`.
 - CLI exposes full backup management: `backup export <path>`, `backup import <path>`, `backup verify <path>`.
+- Skill registry publishing/package workflow is still planned-only.
 - `self-test` now fails when persisted scheduler, heartbeat, or sub-agent state contains dead-lettered tasks, making stalled recovery state visible in the health path.
 - CLI `doctor` now summarizes aggregate MCP reachability failures across configured servers, but deeper transport-facing retry diagnostics still remain.
 - The shared router now enforces explicit channel disablement, so configured `enabled = false` remote channels are rejected instead of silently routing.
 - The gateway now rejects disabled WebSocket upgrades at the transport boundary instead of accepting the connection and failing only later in message routing.
 - Webhook `429` responses now include `Retry-After`, and provider API calls now feature automatic retry with exponential backoff on 429 responses (respecting `Retry-After` headers).
-- Tool-level retry policies with exponential backoff and jitter are now available per-tool, distinct from provider-level retry.
-- System prompts now dynamically inject current date/time on every invocation to prevent stale session errors.
-- Skill registry packaging/publishing workflow is now complete with `borgclaw skills package` and `borgclaw skills publish` commands.
