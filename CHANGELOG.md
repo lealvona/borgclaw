@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.12.1 - 2026-03-26
+
+### Polish
+
+**README Redesign (TICKET-069)**
+- New hypercube metaphor: "Six Faces. One Stack. Zero Compromise."
+- Visual ASCII cube architecture diagram
+- Six faces organization: Channels, Memory, Skills, Security, Providers, Runtime
+- Cleaner feature tables with emoji indicators
+- Polished layout with centered badges and footer
+
 ## 1.12.0 - 2026-03-26
 
 ### Features
