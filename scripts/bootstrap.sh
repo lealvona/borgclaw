@@ -60,6 +60,26 @@ check_command bw || true
 check_command op || true
 
 echo ""
+echo "[borgclaw] Checking for previous builds..."
+if [ -d "target" ]; then
+    echo ""
+    echo "WARNING: Found existing target/ directory with previous build artifacts."
+    echo "         This can cause issues with stale dependencies."
+    echo ""
+    read -p "Delete target/ directory and all build artifacts? [y/N] " -n 1 -r
+    echo ""
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "  Removing target/ directory..."
+        rm -rf target
+        echo "  ✓ Clean complete"
+    else
+        echo "  Skipping cleanup (may use stale artifacts)"
+    fi
+else
+    echo "  ✓ No previous builds found"
+fi
+
+echo ""
 echo "[borgclaw] Building workspace..."
 cargo build --release
 

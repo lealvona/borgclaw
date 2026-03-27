@@ -58,6 +58,25 @@ Test-Command "bw" | Out-Null
 Test-Command "op" | Out-Null
 
 Write-Host ""
+Write-Host "[borgclaw] Checking for previous builds..." -ForegroundColor Yellow
+if (Test-Path "target") {
+    Write-Host ""
+    Write-Host "WARNING: Found existing target/ directory with previous build artifacts." -ForegroundColor Yellow
+    Write-Host "         This can cause issues with stale dependencies." -ForegroundColor Yellow
+    Write-Host ""
+    $cleanup = Read-Host "Delete target/ directory and all build artifacts? [y/N]"
+    if ($cleanup -eq 'y' -or $cleanup -eq 'Y') {
+        Write-Host "  Removing target/ directory..." -ForegroundColor Gray
+        Remove-Item -Recurse -Force "target"
+        Write-Host "  ✓ Clean complete" -ForegroundColor Green
+    } else {
+        Write-Host "  Skipping cleanup (may use stale artifacts)" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "  ✓ No previous builds found" -ForegroundColor Green
+}
+
+Write-Host ""
 Write-Host "[borgclaw] Building workspace..." -ForegroundColor Yellow
 cargo build --release
 
