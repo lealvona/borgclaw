@@ -9,8 +9,14 @@ resolver = "2"
 [workspace.package]
 version = "1.13.0"
 edition = "2021"
-authors = ["BorgClaw Team"]
+authors = ["BorgClaw Team <borgclaw@example.com>"]
 license = "MIT"
+description = "A multi-valent AI agent framework - one mind, many capabilities"
+homepage = "https://github.com/lealvona/borgclaw"
+repository = "https://github.com/lealvona/borgclaw"
+keywords = ["ai", "agent", "llm", "automation", "chatbot", "telegram", "rust"]
+categories = ["command-line-utilities", "web-programming", "development-tools"]
+rust-version = "1.75"
 
 [workspace.dependencies]
 borgclaw-core = { path = "borgclaw-core" }

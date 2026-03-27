@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: BorgClaw Documentation
+    url: https://github.com/lealvona/borgclaw/tree/main/docs
+    about: Check the documentation before opening an issue
+  - name: Discussions
+    url: https://github.com/lealvona/borgclaw/discussions
+    about: Ask questions and share ideas here
