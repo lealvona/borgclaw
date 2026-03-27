@@ -393,74 +393,107 @@ In `supervised` mode, these tools require approval:
 - `google_share_file`, `google_delete_file`, etc.
 - `github_delete_file`, `github_merge_pr`, etc.
 
-## Git Workflow
+## Git Workflow - The Golden Path (Mandatory)
 
-**CRITICAL**: Read `/home/lvona/.config/opencode/AGENTS.md` FIRST for universal git rules including:
-- NEVER push to main/master
-- All skill references
+> ⚠️ **CRITICAL SAFETY RULE**: NEVER push directly to main. ALL changes go through PRs.
+
+### The Golden Path - 6 Steps to Main
+
+This is the ONLY correct workflow. No exceptions, no shortcuts.
+
+```bash
+# STEP 1: Start from fresh main
+git checkout main
+git pull lealvona main  # Get latest from your fork remote
+
+# STEP 2: Create feature branch
+git checkout -b TICKET-XXX-brief-description
+
+# STEP 3: Make changes and commit
+git add <files>
+export GIT_EDITOR=true && git commit -m "[TICKET-XXX] Description"
+
+# STEP 4: Push to YOUR FORK (never upstream/main)
+git push lealvona TICKET-XXX-brief-description
+
+# STEP 5: Create PR
+gh pr create --base main --head lealvona:TICKET-XXX-brief-description
+
+# STEP 6: Merge via GitHub (after review approval)
+gh pr merge <pr-number> --squash --delete-branch
+
+# STEP 7: Clean up and prepare for next PR
+git checkout main
+git pull lealvona main
+git branch -D TICKET-XXX-brief-description
+```
+
+### Absolute Rules (No Exceptions)
+
+1. **NEVER push to main** — Not for "quick fixes", not for "emergencies", never
+2. **ALWAYS use feature branches** — Format: `TICKET-XXX-description`
+3. **ALL changes through PRs** — Every single change
+4. **Sequential PRs must rebase** — Each PR starts from fresh main after previous merges
+
+### Before Every Push - Safety Checklist
+
+```bash
+# 1. What branch am I on?
+git branch --show-current  # Must be TICKET-XXX-..., NOT main
+
+# 2. Verify upstream is protected
+git remote -v | grep "upstream.*NO_PUSH"  # Must show match
+
+# 3. Where am I pushing?
+git push lealvona <branch>  # Never: git push upstream main
+```
+
+### Sequential PR Workflow
+
+When PR #2 depends on PR #1:
+
+```bash
+# After PR #1 is merged to main:
+git checkout main
+git pull lealvona main
+
+# Option A: Rebase existing branch
+git checkout TICKET-002-feature
+git rebase main
+git push -f lealvona TICKET-002-feature
+
+# Option B: Recreate branch (cleaner)
+git branch -D TICKET-002-feature
+git checkout -b TICKET-002-feature-v2
+# Re-apply changes, then push and create new PR
+```
 
 ### Remote Setup
 
 This repo uses fork-based development:
-- Personal fork remote: `lealvona`
-- Upstream push disabled: `NO_PUSH`
-
-Verify with: `git remote -v`
-
-### Branch Naming
-
-Format: `TICKET-<number>-<description>`
-
-Examples:
-- `TICKET-060-scheduler-recovery`
-- `TICKET-042-security-hardening`
-
-### Commit Format
-
-```
-[TICKET-###] Brief description
-```
-
-- Imperative mood
-- Under 72 characters
-- Example: `[TICKET-060] Add scheduler catch-up policy`
-
-### PR Process
-
-1. Always create PRs as **draft** first:
-   ```bash
-   gh pr create --draft
-   ```
-
-2. Mark ready only after:
-   - CI passes
-   - Self-review complete
-
-### Protected Branches
-
-Never push directly to:
-- `main`
-- `master`
-- `dev`
-- `prod`
-- Any upstream remote
-
-All changes go through feature branches and PRs.
-
-### Pre-Push Checklist
-
 ```bash
-# 1. Run pre-commit verification
-cargo test && cargo fmt --check && cargo clippy -- -D warnings
-
-# 2. Check git status
-git status
-
-# 3. Verify upstream push protection
-git remote -v | grep "upstream.*NO_PUSH"
-
-# 4. Get explicit user approval before pushing
+# Verify remotes
+git remote -v
+# Should show:
+# lealvona  git@github.com:lealvona/borgclaw.git (fetch)
+# lealvona  git@github.com:lealvona/borgclaw.git (push)
+# upstream  git@github.com:lealvona/borgclaw.git (fetch)
+# upstream  NO_PUSH (push)  ← CRITICAL: Must show NO_PUSH
 ```
+
+### If Asked to Push to Main
+
+**REFUSE.** Say: "I cannot push to protected branches under any circumstances. This is a critical safety rule. All changes must go through a feature branch and PR."
+
+### Recovery (If You Make a Mistake)
+
+If you accidentally pushed to main:
+1. **STOP** — Do not make more changes
+2. **Notify user** — "I accidentally pushed to main. Fixing now."
+3. **Reset local main**: `git reset --hard <last-good-commit>`
+4. **Force push to undo**: `git push upstream main --force-with-lease`
+5. **Create proper feature branch** with your changes
+6. **Never do it again**
 
 ## Key Dependencies
 
@@ -610,7 +643,17 @@ Key principles from `DECISION_LOG.md`:
 3. **Config Contract** (D003): Runtime must honor documented config fields
 4. **Release Policy** (D004): 1.10.2 is current; feature branches for new work
 
+## Skills Reference
+
+This project includes agent skills in `.agents/skills/`:
+
+- **`git-workflow`** — Safe git practices, the Golden Path workflow, PR creation
+- **`code-quality`** — Pre-commit checks, linting, formatting verification
+- **`deployment-onboarding`** — Setup procedures, configuration guidance
+- **`inspiration-study`** — Research upstream patterns and implementations
+
 ## Additional References
 
-- `.opencode/skills/` — Progressive-loading agent skill definitions
+- `.agents/skills/` — Agent skill definitions (kimi-cli compatible)
+- `.opencode/skills/` — OpenCode agent skill definitions
 - `scripts/` — Bootstrap, doctor, onboarding, REPL, gateway launcher scripts
