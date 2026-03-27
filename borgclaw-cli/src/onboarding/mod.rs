@@ -2233,7 +2233,7 @@ async fn fetch_models(
                 Ok(out)
             }
         }
-        "kimi" | "minimax" | "z" => {
+        "kimi" => {
             // OpenAI-compatible model listing
             let mut req = client.get(&provider.models_endpoint);
             if let Some(k) = api_key {
@@ -2258,6 +2258,10 @@ async fn fetch_models(
                 return Err(format!("No models returned from {}", provider.display));
             }
             Ok(out)
+        }
+        "minimax" | "z" => {
+            // These providers don't support model listing - use static models
+            Ok(provider.static_models.clone())
         }
         _ => Err(format!("Unknown provider: {}", provider.id)),
     }

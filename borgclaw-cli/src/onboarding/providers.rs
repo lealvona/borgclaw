@@ -172,8 +172,8 @@ impl ProviderRegistry {
             ProviderDef {
                 id: "kimi".to_string(),
                 display: "Kimi (Moonshot)".to_string(),
-                api_base: "https://api.moonshot.cn/v1".to_string(),
-                models_endpoint: "https://api.moonshot.cn/v1/models".to_string(),
+                api_base: "https://api.moonshot.ai/v1".to_string(),
+                models_endpoint: "https://api.moonshot.ai/v1/models".to_string(),
                 api_key_env: Some("KIMI_API_KEY".to_string()),
                 default_model: "kimi-k2.5".to_string(),
                 static_models: vec!["kimi-k2.5".to_string(), "kimi-k2".to_string()],
@@ -186,8 +186,8 @@ impl ProviderRegistry {
             ProviderDef {
                 id: "minimax".to_string(),
                 display: "MiniMax".to_string(),
-                api_base: "https://api.minimax.chat/v1".to_string(),
-                models_endpoint: "https://api.minimax.chat/v1/models".to_string(),
+                api_base: "https://api.minimax.io/v1".to_string(),
+                models_endpoint: "".to_string(),  // Model listing not supported
                 api_key_env: Some("MINIMAX_API_KEY".to_string()),
                 default_model: "MiniMax-M2.7".to_string(),
                 static_models: vec!["MiniMax-M2.7".to_string(), "MiniMax-M2.5".to_string(), "MiniMax-M2.1".to_string()],
@@ -200,8 +200,8 @@ impl ProviderRegistry {
             ProviderDef {
                 id: "z".to_string(),
                 display: "Z.ai".to_string(),
-                api_base: "https://api.z.ai/v1".to_string(),
-                models_endpoint: "https://api.z.ai/v1/models".to_string(),
+                api_base: "https://api.z.ai/api/paas/v4".to_string(),
+                models_endpoint: "".to_string(),  // Model listing not supported
                 api_key_env: Some("Z_API_KEY".to_string()),
                 default_model: "glm-4.7".to_string(),
                 static_models: vec!["glm-4.7".to_string(), "glm-4.6".to_string(), "glm-4.5".to_string()],
