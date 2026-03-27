@@ -1578,7 +1578,6 @@ async fn generate_env_file(
         "WEBHOOK_SECRET",
         "ELEVENLABS_API_KEY",
         "OPENWEBUI_API_KEY",
-        "GOOGLE_CLIENT_ID",
         "GOOGLE_CLIENT_SECRET",
         "YOURLS_PASSWORD",
     ];
@@ -1639,6 +1638,80 @@ async fn provider_env_entry(config: &AppConfig) -> Option<(String, String)> {
         .get_secret(env_key)
         .await
         .map(|value| (env_key.to_string(), value))
+}
+
+async fn integration_env_entries(config: &AppConfig) -> Vec<(String, String)> {
+    let mut entries = Vec::new();
+
+    for key in [
+        "GITHUB_TOKEN",
+        "GOOGLE_CLIENT_ID",
+        "GOOGLE_CLIENT_SECRET",
+        "OPENWEBUI_API_KEY",
+        "ELEVENLABS_API_KEY",
+        "YOURLS_PASSWORD",
+    ] {
+        if let Some(value) = config_secret_entry(config, key).await {
+            entries.push((key.to_string(), value));
+        }
+    }
+
+    entries
+}
+
+async fn channel_env_entries(config: &AppConfig) -> Vec<(String, String)> {
+    let mut entries = Vec::new();
+
+    if let Some(value) = channel_credentials_entry(config, "telegram", "TELEGRAM_BOT_TOKEN").await {
+        entries.push(("TELEGRAM_BOT_TOKEN".to_string(), value));
+    }
+
+    if let Some(value) = channel_secret_entry(config, "webhook", "secret", "WEBHOOK_SECRET").await {
+        entries.push(("WEBHOOK_SECRET".to_string(), value));
+    }
+
+    entries
+}
+
+async fn channel_secret_entry(
+    config: &AppConfig,
+    channel_name: &str,
+    key: &str,
+    env_key: &str,
+) -> Option<String> {
+    let channel = config.channels.get(channel_name)?;
+    let configured = channel.extra.get(key)?.as_str()?;
+    if configured != format!("${{{}}}", env_key) {
+        return None;
+    }
+
+    config_secret_entry(config, env_key).await
+}
+
+async fn channel_credentials_entry(
+    config: &AppConfig,
+    channel_name: &str,
+    env_key: &str,
+) -> Option<String> {
+    let channel = config.channels.get(channel_name)?;
+    let configured = channel.credentials.as_deref()?;
+    if configured != format!("${{{}}}", env_key) {
+        return None;
+    }
+
+    config_secret_entry(config, env_key).await
+}
+
+async fn config_secret_entry(config: &AppConfig, env_key: &str) -> Option<String> {
+    if let Ok(value) = std::env::var(env_key) {
+        if !value.trim().is_empty() {
+            return Some(value);
+        }
+    }
+
+    SecurityLayer::with_config(config.security.clone())
+        .get_secret(env_key)
+        .await
 }
 
 async fn resolve_provider_api_key(config: &AppConfig, provider: &ProviderDef) -> Option<String> {
@@ -1800,9 +1873,9 @@ mod tests {
     }
 
     #[test]
-    fn generate_env_excludes_secrets_stays_in_encrypted_store() {
+    fn generate_env_includes_skill_integration_secrets_from_secure_store() {
         let root = std::env::temp_dir().join(format!(
-            "borgclaw_onboarding_secret_env_test_{}",
+            "borgclaw_onboarding_skill_env_test_{}",
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(&root).unwrap();
@@ -1860,24 +1933,12 @@ mod tests {
             .block_on(generate_env_file(&config, &HashMap::new(), &env_path))
             .unwrap();
 
-        // Verify secrets are NOT in .env (they stay in encrypted store)
         let env = std::fs::read_to_string(&env_path).unwrap();
-        assert!(!env.contains("ghp-secret"), "GITHUB_TOKEN should not be in .env");
-        assert!(!env.contains("google-client-id"), "GOOGLE_CLIENT_ID should not be in .env");
-        assert!(!env.contains("google-client-secret"), "GOOGLE_CLIENT_SECRET should not be in .env");
-        assert!(!env.contains("eleven-secret"), "ELEVENLABS_API_KEY should not be in .env");
-        assert!(!env.contains("yourls-secret"), "YOURLS_PASSWORD should not be in .env");
-
-        // Verify secrets are still retrievable from encrypted store
-        let security = SecurityLayer::with_config(config.security.clone());
-        assert_eq!(
-            runtime.block_on(security.get_secret("GITHUB_TOKEN")),
-            Some("ghp-secret".to_string())
-        );
-        assert_eq!(
-            runtime.block_on(security.get_secret("GOOGLE_CLIENT_ID")),
-            Some("google-client-id".to_string())
-        );
+        assert!(env.contains("GITHUB_TOKEN=ghp-secret"));
+        assert!(env.contains("GOOGLE_CLIENT_ID=google-client-id"));
+        assert!(env.contains("GOOGLE_CLIENT_SECRET=google-client-secret"));
+        assert!(env.contains("ELEVENLABS_API_KEY=eleven-secret"));
+        assert!(env.contains("YOURLS_PASSWORD=yourls-secret"));
 
         std::fs::remove_dir_all(root).unwrap();
     }
