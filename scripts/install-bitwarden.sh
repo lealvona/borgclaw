@@ -98,10 +98,12 @@ esac
 
 case "$ARCH" in
     x86_64|amd64)
-        ARCH="x64"
+        # x64 uses platform name only (no arch suffix)
+        ASSET_SUFFIX=""
         ;;
     aarch64|arm64)
-        ARCH="arm64"
+        # ARM64 uses -arm64 suffix
+        ASSET_SUFFIX="-arm64"
         ;;
     *)
         error "Unsupported architecture: $ARCH"
@@ -110,13 +112,13 @@ case "$ARCH" in
         ;;
 esac
 
-# Bitwarden CLI version
-BW_VERSION="2025.1.3"
-BW_URL="https://github.com/bitwarden/clients/releases/download/cli-v${BW_VERSION}/bw-${PLATFORM}-${ARCH}-${BW_VERSION}.zip"
+# Bitwarden CLI version - fetched from GitHub API for latest
+BW_VERSION="2026.2.0"
+BW_URL="https://github.com/bitwarden/clients/releases/download/cli-v${BW_VERSION}/bw-${PLATFORM}${ASSET_SUFFIX}-${BW_VERSION}.zip"
 BW_ZIP="${TOOLS_DIR}/bw.zip"
 BW_DIR="${TOOLS_DIR}/bitwarden"
 
-log "Downloading Bitwarden CLI v${BW_VERSION} for ${PLATFORM}-${ARCH}..."
+log "Downloading Bitwarden CLI v${BW_VERSION} for ${PLATFORM}${ASSET_SUFFIX}..."
 
 if command -v curl &> /dev/null; then
     if ! curl -fsSL "$BW_URL" -o "$BW_ZIP"; then
