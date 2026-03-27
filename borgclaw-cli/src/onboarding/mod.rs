@@ -64,6 +64,52 @@ pub struct InitOutcome {
     pub start: StartTarget,
 }
 
+fn print_provider_info(provider_id: &str) {
+    println!();
+    match provider_id {
+        "openai" => {
+            println!("{} OpenAI provides GPT models including GPT-4 and GPT-3.5.", paint(INFO, "ℹ"));
+            println!("{} Get your API key at: https://platform.openai.com/api-keys", paint(INFO, "→"));
+            println!("{} Pricing: https://openai.com/pricing", paint(INFO, "→"));
+        }
+        "anthropic" => {
+            println!("{} Anthropic provides Claude models with strong reasoning capabilities.", paint(INFO, "ℹ"));
+            println!("{} Get your API key at: https://console.anthropic.com/settings/keys", paint(INFO, "→"));
+            println!("{} Pricing: https://www.anthropic.com/pricing", paint(INFO, "→"));
+        }
+        "google" => {
+            println!("{} Google provides Gemini models with multimodal capabilities.", paint(INFO, "ℹ"));
+            println!("{} Get your API key at: https://makersuite.google.com/app/apikey", paint(INFO, "→"));
+            println!("{} Pricing: https://ai.google.dev/pricing", paint(INFO, "→"));
+        }
+        "kimi" => {
+            println!("{} Kimi (Moonshot) provides kimi-k2.5 with 256K context and agent swarm capabilities.", paint(INFO, "ℹ"));
+            println!("{} Get your API key at: https://platform.moonshot.ai/", paint(INFO, "→"));
+            println!("{} Docs: https://platform.moonshot.ai/docs", paint(INFO, "→"));
+        }
+        "minimax" => {
+            println!("{} MiniMax provides M2.7 series models optimized for agentic workflows.", paint(INFO, "ℹ"));
+            println!("{} Get your API key at: https://platform.minimax.io/", paint(INFO, "→"));
+            println!("{} Docs: https://platform.minimax.io/docs", paint(INFO, "→"));
+        }
+        "z" => {
+            println!("{} Z.ai provides GLM-4.7 series models with strong coding capabilities.", paint(INFO, "ℹ"));
+            println!("{} Get your API key at: https://z.ai/model-api", paint(INFO, "→"));
+            println!("{} Docs: https://docs.z.ai/", paint(INFO, "→"));
+        }
+        "ollama" => {
+            println!("{} Ollama runs models locally - no API key needed!", paint(INFO, "ℹ"));
+            println!("{} Install from: https://ollama.com/download", paint(INFO, "→"));
+            println!("{} Pull models: ollama pull llama3", paint(INFO, "→"));
+        }
+        _ => {
+            println!("{} Custom OpenAI-compatible provider.", paint(INFO, "ℹ"));
+            println!("{} Ensure your provider supports the OpenAI API format.", paint(INFO, "→"));
+        }
+    }
+    println!();
+}
+
 pub async fn run_init(
     config_path: &PathBuf,
     mut config: AppConfig,
@@ -323,12 +369,14 @@ async fn configure_provider_and_model(
         paint(MANDATORY, "[MANDATORY] Provider and model selection")
     );
     println!(
-        "{}",
-        paint(
-            WARN,
-            "Ramifications: cloud providers send prompt data externally; Ollama keeps data local."
-        )
+        "{} This chooses the AI brain for BorgClaw. Select from commercial APIs (OpenAI, Anthropic, etc.) or local models.",
+        paint(INFO, "ℹ")
     );
+    println!(
+        "{} Cloud providers send prompts externally; Ollama keeps everything local on your machine.",
+        paint(WARN, "⚠")
+    );
+    println!();
 
     let providers = ordered_providers(registry);
     let labels: Vec<String> = providers
@@ -379,6 +427,10 @@ async fn configure_provider_and_model(
             .api_key_env
             .clone()
             .unwrap_or_else(|| "BORGCLAW_API_KEY".to_string());
+        
+        // Show provider-specific info with links
+        print_provider_info(&provider.id);
+        
         let update_key = if quick {
             true
         } else {
@@ -409,12 +461,18 @@ async fn configure_channels(
 ) -> Result<(), String> {
     println!("{}", paint(OPTIONAL, "[OPTIONAL] Channel configuration"));
     println!(
-        "{}",
-        paint(
-            WARN,
-            "Ramifications: Telegram/Signal route message metadata through third-party services."
-        )
+        "{} Channels are how BorgClaw communicates - choose where you want to interact with your agent.",
+        paint(INFO, "ℹ")
     );
+    println!(
+        "{} Telegram/Signal route metadata externally; CLI and local WebSocket stay private.",
+        paint(WARN, "⚠")
+    );
+    println!(
+        "{} Telegram Bot Father: https://t.me/BotFather | Signal: https://signal.org/download/",
+        paint(INFO, "→")
+    );
+    println!();
     if quick {
         let ws = config
             .channels

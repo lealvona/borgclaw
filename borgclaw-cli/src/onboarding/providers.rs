@@ -175,8 +175,8 @@ impl ProviderRegistry {
                 api_base: "https://api.moonshot.cn/v1".to_string(),
                 models_endpoint: "https://api.moonshot.cn/v1/models".to_string(),
                 api_key_env: Some("KIMI_API_KEY".to_string()),
-                default_model: "k2".to_string(),
-                static_models: vec!["k2".to_string(), "k2.5".to_string()],
+                default_model: "kimi-k2.5".to_string(),
+                static_models: vec!["kimi-k2.5".to_string(), "kimi-k2".to_string()],
                 requires_auth: true,
                 ..Default::default()
             },
@@ -189,8 +189,8 @@ impl ProviderRegistry {
                 api_base: "https://api.minimax.chat/v1".to_string(),
                 models_endpoint: "https://api.minimax.chat/v1/models".to_string(),
                 api_key_env: Some("MINIMAX_API_KEY".to_string()),
-                default_model: "m2.5".to_string(),
-                static_models: vec!["m2.5".to_string(), "m2.77".to_string()],
+                default_model: "MiniMax-M2.7".to_string(),
+                static_models: vec!["MiniMax-M2.7".to_string(), "MiniMax-M2.5".to_string(), "MiniMax-M2.1".to_string()],
                 requires_auth: true,
                 ..Default::default()
             },
@@ -203,8 +203,8 @@ impl ProviderRegistry {
                 api_base: "https://api.z.ai/v1".to_string(),
                 models_endpoint: "https://api.z.ai/v1/models".to_string(),
                 api_key_env: Some("Z_API_KEY".to_string()),
-                default_model: "GLM-5".to_string(),
-                static_models: vec!["GLM-5".to_string(), "GLM-5-Flash".to_string()],
+                default_model: "glm-4.7".to_string(),
+                static_models: vec!["glm-4.7".to_string(), "glm-4.6".to_string(), "glm-4.5".to_string()],
                 requires_auth: true,
                 ..Default::default()
             },
