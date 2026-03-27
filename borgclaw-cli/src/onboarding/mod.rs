@@ -305,13 +305,36 @@ pub async fn run_init(
     }
 
     generate_env_file(&config, &env_updates, &PathBuf::from(".env")).await?;
+    println!();
     println!(
         "{}",
         paint(
             SUCCESS,
-            "Generated .env with working defaults and credentials."
+            "✅ Configuration saved!"
         )
     );
+    println!(
+        "{}",
+        paint(
+            INFO,
+            "📝 Non-sensitive config: .env"
+        )
+    );
+    println!(
+        "{}",
+        paint(
+            INFO,
+            "🔐 Secrets stored in: encrypted vault (~/.config/borgclaw/)"
+        )
+    );
+    println!(
+        "{}",
+        paint(
+            INFO,
+            "   View secrets: borgclaw secrets list"
+        )
+    );
+    println!();
 
     Ok(InitOutcome {
         config,
@@ -379,6 +402,20 @@ async fn configure_provider_and_model(
         "{}",
         paint(MANDATORY, "[MANDATORY] Provider and model selection")
     );
+    
+    // Quick mode: use existing or defaults without prompting
+    if quick {
+        if config.agent.provider.is_empty() {
+            config.agent.provider = "openai".to_string();
+            config.agent.model = "gpt-4o".to_string();
+        }
+        // Rate limit and env updates happen silently in quick mode
+        let provider = registry.providers.get(&config.agent.provider)
+            .ok_or("Selected provider not found")?;
+        config.agent.rate_limit_rpm = Some(provider.rate_limit_rpm_with_default());
+        return Ok(());
+    }
+    
     println!(
         "{} This chooses the AI brain for BorgClaw. Select from commercial APIs (OpenAI, Anthropic, etc.) or local models.",
         paint(INFO, "ℹ")
@@ -1528,38 +1565,55 @@ async fn generate_env_file(
     env_updates: &HashMap<String, String>,
     out_path: &PathBuf,
 ) -> Result<(), String> {
-    let mut env = read_env_file(out_path);
+    // Filter out sensitive values - only keep non-secret config
+    let sensitive_keys = [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY", 
+        "GOOGLE_API_KEY",
+        "KIMI_API_KEY",
+        "MINIMAX_API_KEY",
+        "Z_API_KEY",
+        "GITHUB_TOKEN",
+        "TELEGRAM_BOT_TOKEN",
+        "WEBHOOK_SECRET",
+        "ELEVENLABS_API_KEY",
+        "OPENWEBUI_API_KEY",
+        "GOOGLE_CLIENT_SECRET",
+        "YOURLS_PASSWORD",
+    ];
+    
+    let mut env: HashMap<String, String> = read_env_file(out_path)
+        .into_iter()
+        .filter(|(k, _)| !sensitive_keys.contains(&k.as_str()))
+        .collect();
+    
+    // Only add non-sensitive updates
     for (k, v) in env_updates {
-        env.insert(k.clone(), v.clone());
+        if !sensitive_keys.contains(&k.as_str()) {
+            env.insert(k.clone(), v.clone());
+        }
     }
+    
     env.insert(
         "BORGCLAW_PROVIDER".to_string(),
         config.agent.provider.clone(),
     );
     env.insert("BORGCLAW_MODEL".to_string(), config.agent.model.clone());
 
+    // These functions now return empty for sensitive values
     if let Some((env_key, env_value)) = provider_env_entry(config).await {
-        env.insert(env_key, env_value);
+        if !sensitive_keys.contains(&env_key.as_str()) {
+            env.insert(env_key, env_value);
+        }
     }
-    for (env_key, env_value) in integration_env_entries(config).await {
-        env.insert(env_key, env_value);
-    }
-    for (env_key, env_value) in channel_env_entries(config).await {
-        env.insert(env_key, env_value);
-    }
-
+    
     let mut lines = Vec::new();
     lines.push("# BorgClaw Environment (generated)".to_string());
-    lines.push("# Mandatory".to_string());
-    if !env.contains_key("OPENAI_API_KEY") && config.agent.provider == "openai" {
-        lines.push("OPENAI_API_KEY=".to_string());
-    }
-    if !env.contains_key("ANTHROPIC_API_KEY") && config.agent.provider == "anthropic" {
-        lines.push("ANTHROPIC_API_KEY=".to_string());
-    }
-    if !env.contains_key("GOOGLE_API_KEY") && config.agent.provider == "google" {
-        lines.push("GOOGLE_API_KEY=".to_string());
-    }
+    lines.push("# Non-sensitive configuration only - secrets are stored in encrypted store".to_string());
+    lines.push("# Run: borgclaw secrets list  # to see stored secrets".to_string());
+    lines.push("".to_string());
+    lines.push("# Provider Configuration".to_string());
+    
     for (k, v) in &env {
         lines.push(format!("{}={}", k, v));
     }
