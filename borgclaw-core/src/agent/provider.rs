@@ -603,19 +603,46 @@ impl ChatProvider for OllamaProvider {
 }
 
 /// Macro to generate OpenAI-compatible providers
+/// 
+/// API base URL can be overridden via {PROVIDER}_API_BASE env var
+/// e.g., OPENAI_API_BASE, ANTHROPIC_API_BASE, KIMI_API_BASE, etc.
 macro_rules! openai_compatible_provider {
-    ($name:ident, $env_key:expr, $base_url:expr) => {
+    ($name:ident, $env_key:expr, $default_base_url:expr) => {
         struct $name {
             api_key: String,
             http: reqwest::Client,
+            base_url: String,
         }
 
         impl $name {
             async fn from_security(config: &SecurityConfig) -> Result<Self, ProviderError> {
+                let api_key = resolve_provider_secret(config, $env_key).await?;
+                // Allow API base URL override via env var
+                let base_url = Self::resolve_base_url();
                 Ok(Self {
-                    api_key: resolve_provider_secret(config, $env_key).await?,
+                    api_key,
                     http: reqwest::Client::new(),
+                    base_url,
                 })
+            }
+            
+            fn resolve_base_url() -> String {
+                // Extract provider name from the struct name (e.g., "KimiProvider" -> "KIMI")
+                let provider_name = stringify!($name)
+                    .trim_end_matches("Provider")
+                    .to_uppercase();
+                let env_var_name = format!("{}_API_BASE", provider_name);
+                
+                // Check for env var override
+                if let Ok(custom_base) = std::env::var(&env_var_name) {
+                    if !custom_base.is_empty() {
+                        tracing::info!("Using custom API base from {}: {}", env_var_name, custom_base);
+                        return custom_base.trim_end_matches('/').to_string();
+                    }
+                }
+                
+                // Fallback to default
+                $default_base_url.to_string()
             }
         }
 
@@ -645,9 +672,10 @@ macro_rules! openai_compatible_provider {
                     content: String,
                 }
 
+                let url = format!("{}/chat/completions", self.base_url);
                 let response = self
                     .http
-                    .post(concat!($base_url, "/chat/completions"))
+                    .post(&url)
                     .bearer_auth(&self.api_key)
                     .json(&Body {
                         model: &request.model,
@@ -692,8 +720,8 @@ macro_rules! openai_compatible_provider {
 
 // Generate OpenAI-compatible providers
 openai_compatible_provider!(KimiProvider, "KIMI_API_KEY", "https://api.moonshot.cn/v1");
-openai_compatible_provider!(MiniMaxProvider, "MINIMAX_API_KEY", "https://api.minimax.chat/v1");
-openai_compatible_provider!(ZProvider, "Z_API_KEY", "https://api.z.ai/v1");
+openai_compatible_provider!(MiniMaxProvider, "MINIMAX_API_KEY", "https://api.minimax.io/v1");
+openai_compatible_provider!(ZProvider, "Z_API_KEY", "https://api.z.ai/api/paas/v4");
 
 #[cfg(test)]
 mod tests {

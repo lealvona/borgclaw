@@ -327,7 +327,7 @@ fn default_models_endpoint(id: &str, api_base: &str) -> String {
         "anthropic" => format!("{api_base}/models"),
         "google" => "https://generativelanguage.googleapis.com/v1beta/models".to_string(),
         "kimi" => "https://api.moonshot.cn/v1/models".to_string(),
-        "minimax" => "https://api.minimax.chat/v1/models".to_string(),
+        "minimax" => "https://api.minimax.io/v1/models".to_string(),  // Note: MiniMax doesn't actually support this endpoint
         "z" => "https://api.z.ai/v1/models".to_string(),
         "ollama" => "http://localhost:11434/api/tags".to_string(),
         _ => format!("{}/models", api_base.trim_end_matches('/')),
