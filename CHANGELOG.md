@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.13.0 - 2026-03-26
+
+### Polish
+
+**README Redesign (TICKET-069)**
+- New hypercube metaphor: "Six Faces. One Mind. Infinite Adaptation."
+- Collective theme: assimilation of tools into unified consciousness
+- Visual ASCII cube architecture diagram
+- Six faces organization: Channels, Memory, Skills, Security, Providers, Runtime
+- Cleaner feature tables with emoji indicators
+- Polished layout with centered badges and footer
+- "We are the sum of many technologies" positioning
+
+## 1.12.0 - 2026-03-26
+
+### Features
+
+**New LLM Provider Support (PR #202)**
+- **Kimi (Moonshot)** - Full OpenAI-compatible API support
+  - Chat completions via `api.moonshot.cn/v1`
+  - Live model fetching from API
+  - 30 RPM rate limiting
+  - Environment variable: `KIMI_API_KEY`
+  
+- **MiniMax** - Full OpenAI-compatible API support
+  - Chat completions via `api.minimax.chat/v1`
+  - Live model fetching from API
+  - 30 RPM rate limiting
+  - Environment variable: `MINIMAX_API_KEY`
+  
+- **Z.ai** - Full OpenAI-compatible API support
+  - Chat completions via `api.z.ai/v1`
+  - Live model fetching from API
+  - 30 RPM rate limiting
+  - Environment variable: `Z_API_KEY`
+
+All three providers are now first-class citizens alongside OpenAI, Anthropic, Google, and Ollama.
+
 ## 1.11.0 - 2026-03-26
 
 ### Features
