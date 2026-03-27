@@ -144,11 +144,20 @@ fi
 echo ""
 echo "[borgclaw] Running configuration wizard..."
 
+# Use release binary if available (built by bootstrap), otherwise use cargo run
+if [ -f "target/release/borgclaw" ]; then
+    echo "[borgclaw] Using release binary (from bootstrap)"
+    BORGCLAW_BIN="target/release/borgclaw"
+else
+    echo "[borgclaw] Building and running debug binary..."
+    BORGCLAW_BIN="cargo run --bin borgclaw --"
+fi
+
 if [ "$QUICK_MODE" = true ]; then
     echo "[borgclaw] Running in QUICK mode (minimal configuration)"
-    cargo run --bin borgclaw -- init --quick
+    $BORGCLAW_BIN init --quick
 else
-    cargo run --bin borgclaw -- init
+    $BORGCLAW_BIN init
 fi
 
 echo ""
