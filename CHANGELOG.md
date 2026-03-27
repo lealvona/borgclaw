@@ -1,15 +1,17 @@
 # Changelog
 
-## 1.12.1 - 2026-03-26
+## 1.13.0 - 2026-03-26
 
 ### Polish
 
 **README Redesign (TICKET-069)**
-- New hypercube metaphor: "Six Faces. One Stack. Zero Compromise."
+- New hypercube metaphor: "Six Faces. One Mind. Infinite Adaptation."
+- Collective theme: assimilation of tools into unified consciousness
 - Visual ASCII cube architecture diagram
 - Six faces organization: Channels, Memory, Skills, Security, Providers, Runtime
 - Cleaner feature tables with emoji indicators
 - Polished layout with centered badges and footer
+- "We are the sum of many technologies" positioning
 
 ## 1.12.0 - 2026-03-26
 
