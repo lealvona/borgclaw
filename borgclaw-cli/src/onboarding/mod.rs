@@ -1595,6 +1595,19 @@ async fn generate_env_file(
         }
     }
     
+    // Normalize known bad model names (migration from old buggy values)
+    let normalized_model = match config.agent.model.as_str() {
+        "m2.77" => "MiniMax-M2.7",
+        "m2.5" => "MiniMax-M2.5", 
+        "m2.7" => "MiniMax-M2.7",
+        "k2.5" => "kimi-k2.5",
+        other => other,
+    };
+    if normalized_model != config.agent.model {
+        println!("{} Fixed deprecated model name: {} -> {}", paint(WARN, "⚠"), config.agent.model, normalized_model);
+        config.agent.model = normalized_model.to_string();
+    }
+    
     env.insert(
         "BORGCLAW_PROVIDER".to_string(),
         config.agent.provider.clone(),
