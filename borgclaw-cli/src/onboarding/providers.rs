@@ -187,10 +187,16 @@ impl ProviderRegistry {
                 id: "minimax".to_string(),
                 display: "MiniMax".to_string(),
                 api_base: "https://api.minimax.io/v1".to_string(),
-                models_endpoint: "".to_string(),  // Model listing not supported
+                models_endpoint: "".to_string(),  // Model listing not supported - see https://github.com/MiniMax-AI/MiniMax-M2/issues/60
                 api_key_env: Some("MINIMAX_API_KEY".to_string()),
                 default_model: "MiniMax-M2.7".to_string(),
-                static_models: vec!["MiniMax-M2.7".to_string(), "MiniMax-M2.5".to_string(), "MiniMax-M2.1".to_string()],
+                // Updated model list from https://platform.minimax.io/docs/guides/models-intro (Mar 2026)
+                static_models: vec![
+                    "MiniMax-M2.7".to_string(),
+                    "MiniMax-M2.7-highspeed".to_string(),
+                    "MiniMax-M2.5".to_string(),
+                    "M2-her".to_string(),
+                ],
                 requires_auth: true,
                 ..Default::default()
             },
@@ -204,7 +210,17 @@ impl ProviderRegistry {
                 models_endpoint: "".to_string(),  // Model listing not supported
                 api_key_env: Some("Z_API_KEY".to_string()),
                 default_model: "glm-4.7".to_string(),
-                static_models: vec!["glm-4.7".to_string(), "glm-4.6".to_string(), "glm-4.5".to_string()],
+                // Updated model list from https://docs.z.ai/ (Mar 2026)
+                static_models: vec![
+                    "glm-4.7".to_string(),
+                    "glm-4.6".to_string(),
+                    "glm-4.5".to_string(),
+                    "glm-4".to_string(),
+                    "glm-4-air".to_string(),
+                    "glm-4-airx".to_string(),
+                    "glm-4-flash".to_string(),
+                    "glm-4v".to_string(),
+                ],
                 requires_auth: true,
                 ..Default::default()
             },
@@ -335,9 +351,25 @@ fn default_static_models(id: &str, default_model: &str) -> Vec<String> {
             "gemini-2.5-flash".to_string(),
             "gemini-2.0-flash".to_string(),
         ],
-        "kimi" => vec![default_model.to_string(), "k2.5".to_string()],
-        "minimax" => vec![default_model.to_string(), "m2.77".to_string()],
-        "z" => vec![default_model.to_string(), "GLM-5-Flash".to_string()],
+        // Note: These providers don't support /v1/models endpoint, so we return full static lists
+        "kimi" => vec![
+            default_model.to_string(),
+            "kimi-k2.5".to_string(),
+            "kimi-k2".to_string(),
+        ],
+        "minimax" => vec![
+            "MiniMax-M2.7".to_string(),
+            "MiniMax-M2.7-highspeed".to_string(),
+            "MiniMax-M2.5".to_string(),
+            "M2-her".to_string(),
+        ],
+        "z" => vec![
+            "glm-4.7".to_string(),
+            "glm-4.6".to_string(),
+            "glm-4.5".to_string(),
+            "glm-4".to_string(),
+            "glm-4-air".to_string(),
+        ],
         "ollama" => vec![default_model.to_string(), "mistral".to_string()],
         _ => vec![default_model.to_string()],
     }
