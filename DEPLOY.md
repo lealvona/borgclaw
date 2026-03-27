@@ -7,17 +7,20 @@
 git clone https://github.com/lealvona/borgclaw.git
 cd borgclaw
 
-# 2. Build release binaries
+# 2. Run bootstrap (installs dependencies)
+./scripts/bootstrap.sh
+
+# 3. Build release binaries
 cargo build --release
 
-# 3. Copy binaries to system path (optional)
+# 4. Copy binaries to system path (optional)
 sudo cp target/release/borgclaw /usr/local/bin/
 sudo cp target/release/borgclaw-gateway /usr/local/bin/
 
-# 4. Initialize configuration
+# 5. Initialize configuration
 borgclaw init
 
-# 5. Run system check
+# 6. Run system check
 borgclaw doctor
 borgclaw self-test
 ```
@@ -51,7 +54,29 @@ sudo systemctl enable borgclaw
 sudo systemctl start borgclaw
 ```
 
-### Docker (Optional)
+### Optional Tool Installation
+
+BorgClaw includes helper scripts to install optional dependencies:
+
+### Whisper.cpp (Speech-to-Text)
+```bash
+./scripts/install-whisper.sh
+```
+Installs whisper.cpp for local speech-to-text processing.
+
+### Bitwarden CLI (Secret Vault)
+```bash
+./scripts/install-bitwarden.sh
+```
+Installs Bitwarden CLI for external secret vault integration. Automatically configures PATH in your shell profile.
+
+### Playwright (Browser Automation)
+```bash
+./scripts/install-playwright.sh
+```
+Installs Playwright for web browser automation capabilities.
+
+## Docker (Optional)
 
 See `docker/` directory for containerized deployment.
 
