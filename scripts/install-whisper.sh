@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Fix libcurl version warnings by using system libraries
+# (Some systems have conflicting libcurl in /usr/local/lib)
+export LD_LIBRARY_PATH=""
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TOOLS_DIR="${ROOT_DIR}/.local/tools"
 mkdir -p "$TOOLS_DIR"
