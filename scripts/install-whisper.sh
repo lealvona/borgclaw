@@ -126,12 +126,49 @@ else
     log "Model already exists, skipping download"
 fi
 
+# Create symlink for easy access
+mkdir -p "${ROOT_DIR}/.local/bin"
+if [ -L "${ROOT_DIR}/.local/bin/whisper-cli" ]; then
+    rm "${ROOT_DIR}/.local/bin/whisper-cli"
+fi
+ln -sf "${WHISPER_DIR}/build/bin/whisper-cli" "${ROOT_DIR}/.local/bin/whisper-cli"
+
 # Verify installation
 if [ -f "${WHISPER_DIR}/build/bin/whisper-cli" ]; then
     log "✓ whisper.cpp installed successfully"
     log "  Binary: ${WHISPER_DIR}/build/bin/whisper-cli"
+    log "  Symlink: ${ROOT_DIR}/.local/bin/whisper-cli"
     if [ -f "models/ggml-base.en.bin" ]; then
         log "  Model: ${WHISPER_DIR}/models/ggml-base.en.bin"
+    fi
+    
+    # Auto-configure PATH in shell rc file
+    SHELL_NAME=$(basename "$SHELL")
+    case "$SHELL_NAME" in
+        zsh)
+            RC_FILE="$HOME/.zshrc"
+            ;;
+        bash)
+            RC_FILE="$HOME/.bashrc"
+            ;;
+        *)
+            RC_FILE="$HOME/.profile"
+            ;;
+    esac
+    
+    PATH_EXPORT="export PATH=\"${ROOT_DIR}/.local/bin:\$PATH\""
+    
+    if [ -f "$RC_FILE" ]; then
+        if ! grep -qF "$PATH_EXPORT" "$RC_FILE" 2>/dev/null; then
+            log "Adding PATH to ${RC_FILE}..."
+            echo "" >> "$RC_FILE"
+            echo "# BorgClaw tools (added by install-whisper.sh)" >> "$RC_FILE"
+            echo "$PATH_EXPORT" >> "$RC_FILE"
+            log "✓ PATH added to ${RC_FILE}"
+            warn "⚠ Run 'source ${RC_FILE}' or restart your shell to use 'whisper-cli' command"
+        else
+            log "PATH already configured in ${RC_FILE}"
+        fi
     fi
 else
     error "✗ Installation verification failed"
