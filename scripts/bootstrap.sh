@@ -76,10 +76,16 @@ fi
 echo ""
 echo "[borgclaw] Checking optional components..."
 
-if command -v node &> /dev/null; then
+# Check for Playwright
+if [ -f ".local/tools/playwright/playwright-bridge.js" ] && [ -d ".local/tools/playwright/node_modules" ]; then
     echo ""
-    echo "[borgclaw] Node.js detected. Install Playwright?"
-    echo "  ./scripts/install-playwright.sh"
+    echo -e "\033[0;32m✓\033[0m Playwright: Installed (.local/tools/playwright)"
+else
+    if command -v node &> /dev/null; then
+        echo ""
+        echo "[borgclaw] Node.js detected. Install Playwright?"
+        echo "  ./scripts/install-playwright.sh"
+    fi
 fi
 
 echo ""
