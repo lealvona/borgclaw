@@ -1,0 +1,55 @@
+name: Feature Request
+description: Suggest an idea for BorgClaw
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a new feature! Let us know what you'd like to see added to the collective.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Is your feature request related to a problem?
+      description: A clear and concise description of what the problem is
+      placeholder: I'm always frustrated when...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Describe the solution you'd like
+      description: A clear and concise description of what you want to happen
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Describe alternatives you've considered
+      description: A clear and concise description of any alternative solutions or features you've considered
+
+  - type: dropdown
+    id: face
+    attributes:
+      label: Which face of the hypercube?
+      description: Which area of BorgClaw would this feature affect?
+      options:
+        - Channels (Telegram, Signal, WebSocket, etc.)
+        - Memory (Storage, search, sessions)
+        - Skills (GitHub, Google, Browser, etc.)
+        - Security (WASM, secrets, vault)
+        - Providers (LLM integrations)
+        - Runtime (Scheduler, heartbeat)
+        - Core / Agent
+        - Not sure
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add any other context, screenshots, or examples about the feature request here
