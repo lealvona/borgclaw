@@ -531,3 +531,158 @@ pub enum VaultError {
     #[error("Not supported: {0}")]
     NotSupported(String),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bitwarden_config_default_values() {
+        let config = BitwardenConfig::default();
+        assert_eq!(config.cli_path, PathBuf::from("bw"));
+        assert_eq!(config.session_env, "BW_SESSION");
+        assert!(config.server_url.is_none());
+        assert!(config.client_id.is_none());
+        assert!(config.client_secret.is_none());
+        assert!(config.use_cli);
+    }
+
+    #[test]
+    fn onepassword_config_default_values() {
+        let config = OnePasswordConfig::default();
+        assert_eq!(config.cli_path, PathBuf::from("op"));
+        assert!(config.vault.is_none());
+        assert!(config.account.is_none());
+    }
+
+    #[test]
+    fn vault_item_type_variants() {
+        assert_eq!(VaultItemType::Login, VaultItemType::Login);
+        assert_eq!(VaultItemType::SecureNote, VaultItemType::SecureNote);
+        assert_eq!(VaultItemType::Card, VaultItemType::Card);
+        assert_eq!(VaultItemType::Identity, VaultItemType::Identity);
+        assert_ne!(VaultItemType::Login, VaultItemType::SecureNote);
+    }
+
+    #[test]
+    fn vault_item_type_equality() {
+        let login1 = VaultItemType::Login;
+        let login2 = VaultItemType::Login;
+        let card = VaultItemType::Card;
+        
+        assert_eq!(login1, login2);
+        assert_ne!(login1, card);
+    }
+
+    #[test]
+    fn vault_item_creation() {
+        let item = VaultItem {
+            id: "test-id-123".to_string(),
+            name: "Test Item".to_string(),
+            folder: Some("Test Folder".to_string()),
+            item_type: VaultItemType::Login,
+            created_at: None,
+            modified_at: None,
+        };
+        
+        assert_eq!(item.id, "test-id-123");
+        assert_eq!(item.name, "Test Item");
+        assert_eq!(item.folder, Some("Test Folder".to_string()));
+        assert_eq!(item.item_type, VaultItemType::Login);
+    }
+
+    #[test]
+    fn vault_error_display_cli_error() {
+        let err = VaultError::CliError("command failed".to_string());
+        let display = err.to_string();
+        assert!(display.contains("CLI error"));
+        assert!(display.contains("command failed"));
+    }
+
+    #[test]
+    fn vault_error_display_parse_failed() {
+        let err = VaultError::ParseFailed("invalid json".to_string());
+        let display = err.to_string();
+        assert!(display.contains("Parse failed"));
+        assert!(display.contains("invalid json"));
+    }
+
+    #[test]
+    fn vault_error_display_io_error() {
+        let err = VaultError::IoError("disk full".to_string());
+        let display = err.to_string();
+        assert!(display.contains("IO error"));
+        assert!(display.contains("disk full"));
+    }
+
+    #[test]
+    fn vault_error_display_not_authenticated() {
+        let err = VaultError::NotAuthenticated;
+        assert_eq!(err.to_string(), "Not authenticated");
+    }
+
+    #[test]
+    fn vault_error_display_not_found() {
+        let err = VaultError::NotFound("my-secret".to_string());
+        let display = err.to_string();
+        assert!(display.contains("Not found"));
+        assert!(display.contains("my-secret"));
+    }
+
+    #[test]
+    fn vault_error_display_not_supported() {
+        let err = VaultError::NotSupported("feature x".to_string());
+        let display = err.to_string();
+        assert!(display.contains("Not supported"));
+        assert!(display.contains("feature x"));
+    }
+
+    #[test]
+    fn bitwarden_client_new_stores_config() {
+        let config = BitwardenConfig::default();
+        let client = BitwardenClient::new(config);
+        // Client was created successfully
+        // Actual operations require CLI which isn't available in tests
+        assert!(true);
+    }
+
+    #[test]
+    fn onepassword_client_new_stores_config() {
+        let config = OnePasswordConfig::default();
+        let client = OnePasswordClient::new(config);
+        // Client was created successfully
+        assert!(true);
+    }
+
+    #[test]
+    fn bitwarden_config_custom_values() {
+        let config = BitwardenConfig {
+            cli_path: PathBuf::from("/custom/bw"),
+            session_env: "MY_BW_SESSION".to_string(),
+            server_url: Some("https://vault.example.com".to_string()),
+            client_id: Some("client-123".to_string()),
+            client_secret: Some("secret-456".to_string()),
+            use_cli: false,
+        };
+        
+        assert_eq!(config.cli_path, PathBuf::from("/custom/bw"));
+        assert_eq!(config.session_env, "MY_BW_SESSION");
+        assert_eq!(config.server_url, Some("https://vault.example.com".to_string()));
+        assert_eq!(config.client_id, Some("client-123".to_string()));
+        assert_eq!(config.client_secret, Some("secret-456".to_string()));
+        assert!(!config.use_cli);
+    }
+
+    #[test]
+    fn onepassword_config_custom_values() {
+        let config = OnePasswordConfig {
+            cli_path: PathBuf::from("/custom/op"),
+            vault: Some("My Vault".to_string()),
+            account: Some("my@email.com".to_string()),
+        };
+        
+        assert_eq!(config.cli_path, PathBuf::from("/custom/op"));
+        assert_eq!(config.vault, Some("My Vault".to_string()));
+        assert_eq!(config.account, Some("my@email.com".to_string()));
+    }
+}

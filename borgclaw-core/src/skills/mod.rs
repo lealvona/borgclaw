@@ -129,3 +129,89 @@ pub enum SkillsError {
     #[error("Skill not found: {0}")]
     NotFound(String),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir() -> PathBuf {
+        std::env::temp_dir().join(format!("borgclaw_test_{}", uuid::Uuid::new_v4()))
+    }
+
+    #[tokio::test]
+    async fn skills_registry_new_creates_empty() {
+        let temp_path = temp_dir();
+        let registry = SkillsRegistry::new(temp_path.clone());
+        
+        let list = registry.list().await;
+        assert!(list.is_empty());
+        
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&temp_path);
+    }
+
+    #[tokio::test]
+    async fn skills_registry_load_all_empty_dir() {
+        let temp_path = temp_dir();
+        std::fs::create_dir_all(&temp_path).unwrap();
+        
+        let registry = SkillsRegistry::new(temp_path.clone());
+        
+        let result = registry.load_all().await;
+        assert!(result.is_ok());
+        
+        let list = registry.list().await;
+        assert!(list.is_empty());
+        
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&temp_path);
+    }
+
+    #[tokio::test]
+    async fn skills_registry_load_all_nonexistent_dir() {
+        let temp_path = temp_dir();
+        let registry = SkillsRegistry::new(temp_path);
+        
+        let result = registry.load_all().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn skills_registry_get_returns_none_for_empty() {
+        let temp_path = temp_dir();
+        let registry = SkillsRegistry::new(temp_path.clone());
+        
+        let skill = registry.get("nonexistent").await;
+        assert!(skill.is_none());
+        
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&temp_path);
+    }
+
+    #[tokio::test]
+    async fn skills_registry_get_by_command_returns_none_for_empty() {
+        let temp_path = temp_dir();
+        let registry = SkillsRegistry::new(temp_path.clone());
+        
+        let skill = registry.get_by_command("unknown").await;
+        assert!(skill.is_none());
+        
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&temp_path);
+    }
+
+    #[test]
+    fn skills_error_display_messages() {
+        let io_err = SkillsError::IoError("disk full".to_string());
+        assert!(io_err.to_string().contains("IO error"));
+        assert!(io_err.to_string().contains("disk full"));
+
+        let parse_err = SkillsError::ParseError("invalid syntax".to_string());
+        assert!(parse_err.to_string().contains("Parse error"));
+        assert!(parse_err.to_string().contains("invalid syntax"));
+
+        let not_found_err = SkillsError::NotFound("skill-x".to_string());
+        assert!(not_found_err.to_string().contains("Skill not found"));
+        assert!(not_found_err.to_string().contains("skill-x"));
+    }
+}

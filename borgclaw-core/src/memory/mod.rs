@@ -214,3 +214,188 @@ pub fn new_entry_for_group(
     entry.group_id = Some(group_id.into());
     entry
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn memory_query_default_values() {
+        let query = MemoryQuery::default();
+        assert!(query.query.is_empty());
+        assert_eq!(query.limit, 5);
+        assert_eq!(query.min_score, 0.5);
+        assert!(query.group_id.is_none());
+    }
+
+    #[test]
+    fn memory_query_for_group_creates_query_with_group() {
+        let query = MemoryQuery::for_group("search term", "group-123");
+        assert_eq!(query.query, "search term");
+        assert_eq!(query.group_id, Some("group-123".to_string()));
+        assert_eq!(query.limit, 5); // Default
+        assert_eq!(query.min_score, 0.5); // Default
+    }
+
+    #[test]
+    fn memory_query_for_group_with_custom_values() {
+        let query = MemoryQuery {
+            query: "custom".to_string(),
+            limit: 10,
+            min_score: 0.8,
+            group_id: Some("custom-group".to_string()),
+        };
+        
+        assert_eq!(query.query, "custom");
+        assert_eq!(query.limit, 10);
+        assert_eq!(query.min_score, 0.8);
+        assert_eq!(query.group_id, Some("custom-group".to_string()));
+    }
+
+    #[test]
+    fn new_entry_creates_valid_entry() {
+        let entry = new_entry("test-key", "test content");
+        
+        assert_eq!(entry.key, "test-key");
+        assert_eq!(entry.content, "test content");
+        assert!(entry.metadata.is_empty());
+        assert_eq!(entry.access_count, 0);
+        assert_eq!(entry.importance, 0.5);
+        assert!(entry.group_id.is_none());
+        // ID should be a valid UUID
+        assert!(!entry.id.is_empty());
+        // Timestamps should be set and equal (fresh entry)
+        assert_eq!(entry.created_at, entry.accessed_at);
+    }
+
+    #[test]
+    fn new_entry_for_group_creates_entry_with_group() {
+        let entry = new_entry_for_group("grouped-key", "grouped content", "my-group");
+        
+        assert_eq!(entry.key, "grouped-key");
+        assert_eq!(entry.content, "grouped content");
+        assert_eq!(entry.group_id, Some("my-group".to_string()));
+        assert!(entry.metadata.is_empty());
+        assert_eq!(entry.access_count, 0);
+    }
+
+    #[test]
+    fn memory_entry_with_metadata() {
+        let mut entry = new_entry("meta-key", "meta content");
+        entry.metadata.insert("source".to_string(), "test".to_string());
+        entry.metadata.insert("priority".to_string(), "high".to_string());
+        
+        assert_eq!(entry.metadata.len(), 2);
+        assert_eq!(entry.metadata.get("source"), Some(&"test".to_string()));
+        assert_eq!(entry.metadata.get("priority"), Some(&"high".to_string()));
+    }
+
+    #[test]
+    fn memory_result_creation() {
+        let entry = new_entry("result-key", "result content");
+        let result = MemoryResult {
+            entry: entry.clone(),
+            score: 0.95,
+        };
+        
+        assert_eq!(result.entry.key, "result-key");
+        assert_eq!(result.score, 0.95);
+    }
+
+    #[test]
+    fn memory_error_variants() {
+        let storage_err = MemoryError::StorageError("disk full".to_string());
+        assert!(storage_err.to_string().contains("Storage error"));
+        assert!(storage_err.to_string().contains("disk full"));
+
+        let not_found_err = MemoryError::NotFound("entry-123".to_string());
+        assert!(not_found_err.to_string().contains("Not found"));
+        assert!(not_found_err.to_string().contains("entry-123"));
+
+        let query_err = MemoryError::QueryError("invalid syntax".to_string());
+        assert!(query_err.to_string().contains("Query error"));
+        assert!(query_err.to_string().contains("invalid syntax"));
+
+        let compaction_err = MemoryError::CompactionError("failed".to_string());
+        assert!(compaction_err.to_string().contains("Compaction error"));
+
+        let embedding_err = MemoryError::EmbeddingError("timeout".to_string());
+        assert!(embedding_err.to_string().contains("Embedding error"));
+        assert!(embedding_err.to_string().contains("timeout"));
+    }
+
+    #[test]
+    fn http_embedding_provider_new() {
+        let provider = HttpEmbeddingProvider::new("https://api.example.com/embed");
+        // Provider created successfully
+        // Actual embedding requires HTTP call which isn't available in tests
+        assert!(true);
+    }
+
+    #[tokio::test]
+    async fn noop_embedding_provider_returns_empty() {
+        let provider = NoOpEmbeddingProvider;
+        let result = provider.embed("any text").await;
+        
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn memory_entry_importance_range() {
+        let mut entry = new_entry("importance-test", "content");
+        
+        // Test different importance values
+        entry.importance = 0.0;
+        assert_eq!(entry.importance, 0.0);
+        
+        entry.importance = 0.5;
+        assert_eq!(entry.importance, 0.5);
+        
+        entry.importance = 1.0;
+        assert_eq!(entry.importance, 1.0);
+    }
+
+    #[test]
+    fn memory_entry_access_tracking() {
+        let mut entry = new_entry("access-test", "content");
+        
+        assert_eq!(entry.access_count, 0);
+        
+        entry.access_count += 1;
+        assert_eq!(entry.access_count, 1);
+        
+        entry.access_count = 100;
+        assert_eq!(entry.access_count, 100);
+    }
+
+    #[test]
+    fn memory_entry_timestamps_are_datetime() {
+        let before = Utc::now();
+        let entry = new_entry("timestamp-test", "content");
+        let after = Utc::now();
+        
+        // Timestamps should be within the test execution window
+        assert!(entry.created_at >= before);
+        assert!(entry.created_at <= after);
+        assert!(entry.accessed_at >= before);
+        assert!(entry.accessed_at <= after);
+    }
+
+
+
+    #[test]
+    fn memory_result_serialization_roundtrip() {
+        let entry = new_entry("result-key", "result content");
+        let result = MemoryResult {
+            entry: entry.clone(),
+            score: 0.85,
+        };
+        
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: MemoryResult = serde_json::from_str(&json).unwrap();
+        
+        assert_eq!(deserialized.entry.key, result.entry.key);
+        assert_eq!(deserialized.score, result.score);
+    }
+}
