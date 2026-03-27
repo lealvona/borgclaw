@@ -52,6 +52,7 @@ pub enum StartTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExistingConfigAction {
     Reconfigure,
+    ReconfigureSection,
     Status,
     Quit,
     AddComponent,
@@ -245,6 +246,14 @@ pub async fn run_init(
             .map_err(|e| e.to_string())?;
         match existing_config_action(pick) {
             ExistingConfigAction::Reconfigure => {}
+            ExistingConfigAction::ReconfigureSection => {
+                reconfigure_section(&mut config, &registry, &theme, &mut env_updates).await?;
+                generate_env_file(&config, &env_updates, &PathBuf::from(".env")).await?;
+                return Ok(InitOutcome {
+                    config,
+                    start: StartTarget::None,
+                });
+            }
             ExistingConfigAction::Status => {
                 print_summary(&config);
                 return Ok(InitOutcome {
@@ -320,7 +329,8 @@ fn start_target_from(s: &str) -> StartTarget {
 
 fn existing_config_choices() -> Vec<&'static str> {
     vec![
-        "Reconfigure",
+        "Reconfigure all (full wizard)",
+        "Reconfigure specific section...",
         "Status",
         "Quit",
         "Add component via wizard",
@@ -332,11 +342,12 @@ fn existing_config_choices() -> Vec<&'static str> {
 fn existing_config_action(pick: usize) -> ExistingConfigAction {
     match pick {
         0 => ExistingConfigAction::Reconfigure,
-        1 => ExistingConfigAction::Status,
-        2 => ExistingConfigAction::Quit,
-        3 => ExistingConfigAction::AddComponent,
-        4 => ExistingConfigAction::DeleteComponent,
-        5 => ExistingConfigAction::RegenerateEnv,
+        1 => ExistingConfigAction::ReconfigureSection,
+        2 => ExistingConfigAction::Status,
+        3 => ExistingConfigAction::Quit,
+        4 => ExistingConfigAction::AddComponent,
+        5 => ExistingConfigAction::DeleteComponent,
+        6 => ExistingConfigAction::RegenerateEnv,
         _ => ExistingConfigAction::Reconfigure,
     }
 }
@@ -1414,6 +1425,53 @@ fn component_wizard(
         .interact_text()
         .map_err(|e| e.to_string())?;
     apply_component_action(config, &title, &chapter, action, theme, registry)
+}
+
+async fn reconfigure_section(
+    config: &mut AppConfig,
+    registry: &ProviderRegistry,
+    theme: &ColorfulTheme,
+    env_updates: &mut HashMap<String, String>,
+) -> Result<(), String> {
+    println!();
+    println!("{}", paint(HEADER, "Reconfigure Specific Section"));
+    println!("{} Select which group of settings to update:", paint(INFO, "ℹ"));
+    println!();
+
+    let sections = vec![
+        ("Provider & Model", "AI brain configuration (OpenAI, Anthropic, local models)"),
+        ("Channels", "Communication interfaces (Telegram, Signal, WebSocket, Webhook)"),
+        ("Security", "WASM sandbox, secrets, encryption settings"),
+        ("Memory", "SQLite settings, session management, context windows"),
+        ("Skills Registry", "GitHub, Google Workspace, browser automation"),
+        ("Skill Integrations", "STT/TTS, image generation, URL shortener"),
+    ];
+
+    let labels: Vec<String> = sections
+        .iter()
+        .map(|(name, desc)| format!("{} - {}", paint(HEADER, name), desc))
+        .collect();
+
+    let selection = Select::with_theme(theme)
+        .with_prompt("Choose section to reconfigure")
+        .items(&labels)
+        .default(0)
+        .interact()
+        .map_err(|e| e.to_string())?;
+
+    match selection {
+        0 => configure_provider_and_model(config, registry, theme, env_updates, false).await?,
+        1 => configure_channels(config, theme, false, env_updates).await?,
+        2 => configure_security(config, theme, false)?,
+        3 => configure_memory(config, theme, false)?,
+        4 => configure_skills_registry(config, theme, false)?,
+        5 => configure_skill_integrations(config, theme, false, env_updates).await?,
+        _ => {}
+    }
+
+    println!();
+    println!("{}", paint(SUCCESS, "Section updated successfully!"));
+    Ok(())
 }
 
 fn build_postgres_connection(theme: &ColorfulTheme) -> Result<String, String> {
