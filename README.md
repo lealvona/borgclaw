@@ -1,21 +1,10 @@
 <div align="center">
 
-```
-    ╔═══════════════════════════════════════════════════════════╗
-    ║                                                           ║
-    ║     ██████  ██████   ██████   ██████ ██      ██   ██      ║
-    ║     ██   ██ ██   ██ ██       ██      ██      ██   ██      ║
-    ║     ██████  ██████  ██   ███ ██   ███ ██      ███████      ║
-    ║     ██   ██ ██   ██ ██    ██ ██    ██ ██           ██      ║
-    ║     ██████  ██   ██  ██████   ██████  ███████      ██      ║
-    ║                                                           ║
-    ║                                                           ║
-    ╚═══════════════════════════════════════════════════════════╝
-```
+<img src="docs/assets/borgclaw-logo.svg" alt="BorgClaw Logo" width="400">
 
 **The Hypercube Agent Collective**
 
-[![Version](https://img.shields.io/badge/version-1.12.1-00d4aa?style=for-the-badge)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.13.0-00d4aa?style=for-the-badge)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.75+-orange?style=for-the-badge&logo=rust)](https://rustup.rs)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](LICENSE)
 
@@ -76,29 +65,21 @@ cargo run --bin borgclaw -- init
 
 ## 🏗️ Collective Architecture
 
-```
-                    ╭──────────────────────╮
-                   ╱   ⬆️ CHANNELS FACE     ╲
-                  ╱  Telegram • Signal • WS  ╲
-                 ╱────────────────────────────╲
-                ╱                              ╲
-      ⬅️ SKILLS ╱                                ╲ ➡️ SECURITY
-       FACE    ╱                                  ╲   FACE
-               │      ┌─────────────────┐         │
-               │      │                 │         │
-               │      │   AGENT CORE    │         │
-               │      │   🧠 The Cube   │         │
-               │      │                 │         │
-               │      └─────────────────┘         │
-                ╲                                  ╱
-                 ╲   🔲 PROVIDERS FACE             ╱
-                  ╲  OpenAI • Anthropic • Ollama  ╱
-                   ╲─────────────────────────────╱
-                    ╲   ⬇️ MEMORY FACE           ╱
-                     ╲  SQLite • Sessions •     ╱
-                      ╲ Solutions • Heartbeat  ╱
-                       ╰──────────────────────╯
-```
+BorgClaw is structured as a hypercube—six faces surrounding a unified core. Each face presents a different capability to the outside world, while the central intelligence coordinates them as one.
+
+**The Core** maintains state, reasoning, and coordination across all faces.
+
+**⬆️ Top Face — Channels** interfaces with the world through Telegram, Signal, webhooks, CLI, and WebSocket connections. Every message, regardless of origin, feeds into the same collective consciousness.
+
+**⬇️ Bottom Face — Memory** anchors everything to persistent storage. Hybrid search, session management, solution patterns, and scheduled tasks all reside here, ensuring continuity across conversations.
+
+**⬅️ Left Face — Skills** extends capability through integrations: GitHub, Google Workspace, browser automation, speech, images, and more. Each skill is a specialized appendage the collective can deploy at will.
+
+**➡️ Right Face — Security** guards every interaction. WASM sandboxing, SSRF protection, secret management, and injection defense form an impermeable barrier around the core.
+
+**🔲 Front Face — Neural Processors** (LLM Providers) powers cognition. OpenAI, Anthropic, Google, Kimi, MiniMax, Z.ai, and Ollama all plug into the same reasoning engine, selectable per task.
+
+**🔳 Back Face — Runtime** keeps everything operational. Scheduler, heartbeat, sub-agents, and recovery systems ensure the collective never sleeps, never forgets, never stops.
 
 ---
 

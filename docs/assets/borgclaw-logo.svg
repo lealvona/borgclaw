@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400">
+  <defs>
+    <!-- Gradients -->
+    <linearGradient id="cubeTop" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#00d4aa;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#00a884;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="cubeLeft" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#008f6b;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#006b4f;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="cubeRight" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#00c49a;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#009e7a;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="clawGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ff6b6b;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#ee5a5a;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#cc4444;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="clawTip" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ff8585;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#ff6b6b;stop-opacity:1" />
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="2" dy="4" stdDeviation="3" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="400" height="400" fill="#0d1117"/>
+  
+  <!-- Claw - Back/Behind elements (darker, smaller) -->
+  <g transform="translate(200, 180) scale(0.7)">
+    <!-- Claw arm segments emanating from behind -->
+    <!-- Left arm -->
+    <path d="M -80 -100 Q -120 -60 -100 0 L -70 20" 
+          fill="none" stroke="#993333" stroke-width="12" stroke-linecap="round"/>
+    <!-- Center arm -->
+    <path d="M 0 -120 Q 0 -70 0 -10 L 0 25" 
+          fill="none" stroke="#993333" stroke-width="12" stroke-linecap="round"/>
+    <!-- Right arm -->
+    <path d="M 80 -100 Q 120 -60 100 0 L 70 20" 
+          fill="none" stroke="#993333" stroke-width="12" stroke-linecap="round"/>
+  </g>
+  
+  <!-- The Cube -->
+  <g transform="translate(200, 220)" filter="url(#shadow)">
+    <!-- Cube bottom/depth -->
+    <polygon points="0,60 -70,20 -70,-40 0,0 70,-40 70,20" fill="#004d3a"/>
+    
+    <!-- Cube left face -->
+    <polygon points="-70,-40 0,-80 0,0 -70,40" fill="url(#cubeLeft)"/>
+    
+    <!-- Cube right face -->
+    <polygon points="0,-80 70,-40 70,40 0,0" fill="url(#cubeRight)"/>
+    
+    <!-- Cube top face -->
+    <polygon points="-70,-40 0,-80 70,-40 0,0" fill="url(#cubeTop)"/>
+    
+    <!-- Cube edges for definition -->
+    <polygon points="-70,-40 0,-80 70,-40 0,0" fill="none" stroke="#00f5c4" stroke-width="2" opacity="0.6"/>
+    <polygon points="-70,-40 0,0 -70,40" fill="none" stroke="#00f5c4" stroke-width="2" opacity="0.4"/>
+    <polygon points="70,-40 0,0 70,40" fill="none" stroke="#00f5c4" stroke-width="2" opacity="0.4"/>
+  </g>
+  
+  <!-- Claw - Front elements (arcing toward viewer, grasping) -->
+  <g transform="translate(200, 220)" filter="url(#glow)">
+    <!-- Left claw finger - arcing from back left to front -->
+    <path d="M -60 -20 Q -90 10 -60 50 Q -40 70 -20 60" 
+          fill="none" stroke="url(#clawGradient)" stroke-width="14" stroke-linecap="round"/>
+    <!-- Left claw tip -->
+    <path d="M -20 60 L -5 75 L -15 80 Z" fill="url(#clawTip)"/>
+    
+    <!-- Center claw finger - coming from directly behind -->
+    <path d="M 0 -30 Q -10 20 0 70 Q 5 85 15 80" 
+          fill="none" stroke="url(#clawGradient)" stroke-width="14" stroke-linecap="round"/>
+    <!-- Center claw tip -->
+    <path d="M 15 80 L 30 85 L 20 70 Z" fill="url(#clawTip)"/>
+    
+    <!-- Right claw finger - arcing from back right to front -->
+    <path d="M 60 -20 Q 90 10 60 50 Q 40 70 20 60" 
+          fill="none" stroke="url(#clawGradient)" stroke-width="14" stroke-linecap="round"/>
+    <!-- Right claw tip -->
+    <path d="M 20 60 L 35 75 L 25 80 Z" fill="url(#clawTip)"/>
+    
+    <!-- Mechanical joints on claws -->
+    <circle cx="-60" cy="-20" r="6" fill="#aa3333"/>
+    <circle cx="0" cy="-30" r="6" fill="#aa3333"/>
+    <circle cx="60" cy="-20" r="6" fill="#aa3333"/>
+    <circle cx="-60" cy="50" r="5" fill="#cc4444"/>
+    <circle cx="60" cy="50" r="5" fill="#cc4444"/>
+  </g>
+  
+  <!-- Text -->
+  <text x="200" y="350" text-anchor="middle" font-family="monospace" font-size="28" font-weight="bold" fill="#00d4aa" filter="url(#glow)">BORGCLAW</text>
+  <text x="200" y="375" text-anchor="middle" font-family="monospace" font-size="11" fill="#8b949e">THE HYPERCUBE COLLECTIVE</text>
+</svg>
