@@ -4,7 +4,7 @@
 
 **The Hypercube Agent Collective**
 
-[![Version](https://img.shields.io/badge/version-1.13.0-00d4aa?style=for-the-badge)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.14.0-00d4aa?style=for-the-badge)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.75+-orange?style=for-the-badge&logo=rust)](https://rustup.rs)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](LICENSE)
 

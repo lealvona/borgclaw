@@ -178,6 +178,7 @@ async fn main() {
         .route("/health", get(api_status))
         .route("/ws", get(websocket_handler))
         .route("/api/status", get(api_status))
+        .route("/api/version", get(api_version))
         .route("/api/health", get(api_health))
         .route("/api/ready", get(api_ready))
         .route("/api/metrics", get(api_metrics))
@@ -813,11 +814,12 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
             </div>
 
             <footer>
-                <p>BorgClaw v1.13.0 — Personal AI Agent Framework</p>
+                <p id="footer-version">BorgClaw — Personal AI Agent Framework</p>
                 <p style="margin-top: 8px;">
                     <a href="https://github.com/lealvona/borgclaw">GitHub</a> • 
                     <a href="/api/status">Status</a> • 
-                    <a href="/api/health">Health</a>
+                    <a href="/api/health">Health</a> •
+                    <a href="/api/version">Version</a>
                 </p>
             </footer>
         </div>
@@ -1504,6 +1506,19 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 hideConfigEditor();
             }
         });
+        
+        // Fetch and display live runtime version
+        fetch('/api/version')
+            .then(r => r.json())
+            .then(data => {
+                const versionEl = document.getElementById('footer-version');
+                if (versionEl && data.version) {
+                    versionEl.textContent = 'BorgClaw v' + data.version + ' — Personal AI Agent Framework';
+                }
+            })
+            .catch(() => {
+                // Fallback: leave static text if API fails
+            });
     </script>
 </body>
 </html>"##;
@@ -2145,6 +2160,21 @@ async fn api_status(State(state): State<GatewayState>) -> impl IntoResponse {
         "status": "running",
         "model": state.config.agent.model,
         "provider": state.config.agent.provider,
+    });
+
+    (
+        StatusCode::OK,
+        serde_json::to_string(&body).unwrap_or_default(),
+    )
+}
+
+/// Version endpoint - returns live runtime version information
+async fn api_version() -> impl IntoResponse {
+    let body = serde_json::json!({
+        "name": "BorgClaw",
+        "version": env!("CARGO_PKG_VERSION"),
+        "description": "Personal AI Agent Framework",
+        "repository": "https://github.com/lealvona/borgclaw",
     });
 
     (

@@ -1,6 +1,11 @@
 # Changelog
 
-## 1.14.0 - 2026-03-26
+> **Version Renumbering Notice (2026-03-28):**  
+> BorgClaw has been re-versioned from the 1.x series to 0.x to accurately reflect its pre-1.0 status.  
+> Historical releases 1.0.0 through 1.14.0 now correspond to 0.1.0 through 0.14.0.  
+> The codebase remains unchanged; only version numbers were updated.
+
+## 0.14.0 - 2026-03-26 (was 1.14.0)
 
 ### Features
 

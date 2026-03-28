@@ -50,6 +50,7 @@ fn load_env_file() {
 #[derive(Parser)]
 #[command(name = "borgclaw")]
 #[command(about = "BorgClaw - Personal AI Agent", long_about = None)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
