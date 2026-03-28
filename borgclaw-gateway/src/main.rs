@@ -188,6 +188,8 @@ async fn main() {
         .route("/api/connections", get(api_connections))
         .route("/api/schedules", get(api_schedules))
         .route("/api/heartbeat/tasks", get(api_heartbeat_tasks))
+        .route("/api/subagents", get(api_subagents))
+        .route("/api/mcp/servers", get(api_mcp_servers))
         .route("/api/doctor", get(api_doctor))
         .layer(cors.clone())
         .with_state(state.clone());
@@ -2614,6 +2616,63 @@ async fn api_heartbeat_tasks(State(state): State<GatewayState>) -> impl IntoResp
             "error": e.to_string()
         })),
     }
+}
+
+async fn api_subagents(State(state): State<GatewayState>) -> impl IntoResponse {
+    let path = state.config.agent.workspace.join("subagents.json");
+    if !path.exists() {
+        return axum::Json(serde_json::json!({
+            "tasks": [],
+            "count": 0,
+            "message": "No subagent state found"
+        }));
+    }
+
+    match std::fs::read_to_string(&path) {
+        Ok(content) => {
+            if let Ok(state) = serde_json::from_str::<serde_json::Value>(&content) {
+                let tasks = state.get("tasks").cloned().unwrap_or(serde_json::json!([]));
+                let count = tasks.as_array().map(|a| a.len()).unwrap_or(0);
+                axum::Json(serde_json::json!({
+                    "tasks": tasks,
+                    "count": count,
+                }))
+            } else {
+                axum::Json(serde_json::json!({
+                    "tasks": [],
+                    "count": 0,
+                    "error": "Failed to parse subagent state"
+                }))
+            }
+        }
+        Err(e) => axum::Json(serde_json::json!({
+            "tasks": [],
+            "count": 0,
+            "error": e.to_string()
+        })),
+    }
+}
+
+async fn api_mcp_servers(State(state): State<GatewayState>) -> impl IntoResponse {
+    let servers: Vec<serde_json::Value> = state
+        .config
+        .mcp
+        .servers
+        .iter()
+        .map(|(name, server)| {
+            serde_json::json!({
+                "name": name,
+                "url": server.url,
+                "transport": server.transport,
+                "enabled": !server.url.as_ref().map(|u| u.is_empty()).unwrap_or(true),
+            })
+        })
+        .collect();
+
+    axum::Json(serde_json::json!({
+        "servers": servers,
+        "count": servers.len(),
+    }))
 }
 
 async fn api_doctor(State(state): State<GatewayState>) -> impl IntoResponse {
