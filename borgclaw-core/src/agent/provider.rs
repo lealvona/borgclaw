@@ -655,10 +655,12 @@ macro_rules! openai_compatible_provider {
         #[async_trait]
         impl ChatProvider for $name {
             async fn complete(&self, request: &ProviderRequest) -> Result<String, ProviderError> {
-                tracing::debug!(
-                    "{} sending request with model: {}",
+                tracing::info!(
+                    "{} request: model={}, temperature={}, max_tokens={}",
                     stringify!($name),
-                    request.model
+                    request.model,
+                    request.temperature,
+                    request.max_tokens
                 );
                 
                 #[derive(Serialize)]
