@@ -4429,6 +4429,10 @@ mod tests {
 
     #[test]
     fn self_test_failures_surface_missing_provider_credentials() {
+        // Clear any existing provider env vars to ensure test is deterministic
+        let _ = std::env::remove_var("OPENAI_API_KEY");
+        let _ = std::env::remove_var("ANTHROPIC_API_KEY");
+        
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let mut config = temp_config();
         config.agent.workspace = std::env::temp_dir().join(format!(

@@ -161,6 +161,54 @@ else
 fi
 
 echo ""
+echo "[borgclaw] Checking secret store..."
+
+# Initialize secret store if needed
+BORGCLAW_WORKSPACE="${HOME}/.borgclaw"
+SECRETS_FILE="${BORGCLAW_WORKSPACE}/secrets.enc"
+KEY_FILE="${BORGCLAW_WORKSPACE}/secrets.enc.key"
+
+if [ -f "$SECRETS_FILE" ] && [ -f "$KEY_FILE" ]; then
+    echo -e "\033[0;32m✓\033[0m Encrypted secret store: Ready"
+else
+    echo -e "\033[0;33m○\033[0m Initializing encrypted secret store..."
+    # Create workspace directory
+    mkdir -p "$BORGCLAW_WORKSPACE"
+    
+    # Initialize by storing a test value (creates key automatically)
+    echo "init" | $BORGCLAW_BIN secrets set "borgclaw_initialized" 2>/dev/null || true
+    $BORGCLAW_BIN secrets delete "borgclaw_initialized" 2>/dev/null || true
+    
+    if [ -f "$KEY_FILE" ]; then
+        echo -e "\033[0;32m✓\033[0m Encryption key generated: $KEY_FILE"
+        echo ""
+        echo -e "\033[1;33m⚠ IMPORTANT: Back up your encryption key!\033[0m"
+        echo "  cp $KEY_FILE $KEY_FILE.backup"
+        echo "  Store the backup in a safe location (password manager, etc.)"
+        echo ""
+        echo "  If you lose this key, your secrets cannot be recovered!"
+    fi
+fi
+
+# Check for API keys
+API_KEYS=$($BORGCLAW_BIN secrets list 2>/dev/null | grep -c "_API_KEY" || echo "0")
+if [ "$API_KEYS" -eq 0 ]; then
+    echo ""
+    echo -e "\033[0;33m○\033[0m No API keys configured yet"
+    echo "[borgclaw] You'll need an API key to chat with the AI."
+    echo ""
+    read -p "Set up provider API key now? [Y/n] " -n 1 -r
+    echo ""
+    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+        "$ROOT_DIR/scripts/setup-provider-key.sh"
+    else
+        echo "  You can set up later with: ./scripts/setup-provider-key.sh"
+    fi
+else
+    echo -e "\033[0;32m✓\033[0m API key(s) configured: $API_KEYS"
+fi
+
+echo ""
 echo "╔════════════════════════════════════════════════════════════════╗"
 echo "║                    ✅ Setup Complete!                          ║"
 echo "╚════════════════════════════════════════════════════════════════╝"
