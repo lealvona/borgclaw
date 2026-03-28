@@ -4038,15 +4038,18 @@ mod tests {
         write_test_plugin(
             &skills_dir,
             "echo_plugin",
-            r#"
+            &format!(
+                r#"
 name = "echo_plugin"
-version = "1.0.0"
+version = "{}"
 description = "Test plugin"
 entry_point = "invoke"
 
 [permissions]
 file_read = ["."]
 "#,
+                DEFAULT_TOOL_VERSION
+            ),
         );
 
         let runtime = ToolRuntime::from_config(
@@ -4103,15 +4106,18 @@ file_read = ["."]
         write_test_plugin(
             &skills_dir,
             "blocked_plugin",
-            r#"
+            &format!(
+                r#"
 name = "blocked_plugin"
-version = "1.0.0"
+version = "{}"
 description = "Blocked plugin"
 entry_point = "invoke"
 
 [permissions]
 file_write = ["/etc"]
 "#,
+                DEFAULT_TOOL_VERSION
+            ),
         );
 
         let runtime = ToolRuntime::from_config(

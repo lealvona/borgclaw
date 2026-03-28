@@ -1,5 +1,6 @@
 //! Plugin SDK - WASM plugin loading and execution
 
+use crate::constants::DEFAULT_PLUGIN_VERSION;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -410,9 +411,10 @@ mod tests {
     #[test]
     fn plugin_manifest_parses_documented_permissions_table() {
         let manifest = PluginManifest::from_toml(
-            r#"
+            &format!(
+                r#"
 name = "my-plugin"
-version = "1.0.0"
+version = "{}"
 description = "My custom plugin"
 author = "Developer"
 entry_point = "main"
@@ -424,6 +426,8 @@ network = ["api.example.com"]
 memory = true
 shell = false
 "#,
+                DEFAULT_PLUGIN_VERSION
+            ),
         )
         .unwrap();
 
@@ -455,7 +459,7 @@ shell = false
         let registry = PluginRegistry::new();
         let manifest = PluginManifest {
             name: "example".to_string(),
-            version: "1.0.0".to_string(),
+            version: DEFAULT_PLUGIN_VERSION.to_string(),
             description: "Example".to_string(),
             author: None,
             permissions: vec![],
@@ -485,7 +489,7 @@ shell = false
         );
         let manifest = PluginManifest {
             name: "example".to_string(),
-            version: "1.0.0".to_string(),
+            version: DEFAULT_PLUGIN_VERSION.to_string(),
             description: "Example".to_string(),
             author: None,
             permissions: vec![WasmPermission::FileWrite(PathBuf::from("/etc"))],
@@ -507,7 +511,7 @@ shell = false
         let registry = PluginRegistry::new();
         let manifest = PluginManifest {
             name: "example".to_string(),
-            version: "1.0.0".to_string(),
+            version: DEFAULT_PLUGIN_VERSION.to_string(),
             description: "Example".to_string(),
             author: None,
             permissions: vec![WasmPermission::Network(vec![

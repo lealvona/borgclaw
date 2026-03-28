@@ -1,5 +1,6 @@
 //! SKILL.md parser - parses the SKILL.md standard format
 
+use crate::constants::DEFAULT_SKILL_VERSION;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -60,7 +61,7 @@ impl SkillManifest {
     /// Parse SKILL.md content
     pub fn parse(content: &str) -> Result<Self, super::SkillsError> {
         let mut name = String::new();
-        let mut version = "1.0.0".to_string();
+        let mut version = DEFAULT_SKILL_VERSION.to_string();
         let mut description = String::new();
         let mut author = None;
         let mut commands = Vec::new();
