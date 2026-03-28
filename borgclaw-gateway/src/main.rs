@@ -1821,7 +1821,7 @@ fn websocket_port(config: &AppConfig) -> u16 {
         .and_then(|channel| channel.extra.get("port"))
         .and_then(|value| value.as_integer())
         .and_then(|value| u16::try_from(value).ok())
-        .unwrap_or(18789)
+        .unwrap_or(3000)
 }
 
 fn webhook_port(config: &AppConfig) -> Option<u16> {
