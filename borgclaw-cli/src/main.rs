@@ -17,6 +17,7 @@ use borgclaw_core::{
     skills::SkillsRegistry,
 };
 use clap::{Parser, Subcommand};
+use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::{error, info};
@@ -389,10 +390,15 @@ async fn repl(config: AppConfig, _config_path: PathBuf) {
     info!("Starting BorgClaw REPL...");
     let router = MessageRouter::from_config(&config);
 
-    println!("🦞 BorgClaw REPL (type 'exit' to quit, 'help' for commands)\n");
+    // Print welcome banner
+    print_repl_banner(&config);
+
+    // Load command history if available
+    let history_path = get_repl_history_path();
+    let mut history = load_repl_history(&history_path);
 
     loop {
-        print!("> ");
+        print!("{} ", "🧊🦾".to_string().cyan());
         std::io::Write::flush(&mut std::io::stdout()).unwrap();
 
         let mut input = String::new();
@@ -405,9 +411,17 @@ async fn repl(config: AppConfig, _config_path: PathBuf) {
             continue;
         }
 
+        // Add to history
+        if !history.contains(&input.to_string()) {
+            history.push(input.to_string());
+            if history.len() > 100 {
+                history.remove(0);
+            }
+        }
+
         match parse_repl_command(input) {
             ReplCommand::Exit => {
-                println!("Goodbye!");
+                println!("{} Assimilation complete. Goodbye!", "✓".green());
                 break;
             }
             ReplCommand::Help => {
@@ -422,9 +436,14 @@ async fn repl(config: AppConfig, _config_path: PathBuf) {
                 clear_screen();
                 continue;
             }
+            ReplCommand::History => {
+                print_history(&history);
+                continue;
+            }
             ReplCommand::Message => {}
         }
 
+        // Create message
         let message = InboundMessage {
             channel: ChannelType::cli(),
             sender: Sender::new("cli").with_name("User"),
@@ -435,9 +454,124 @@ async fn repl(config: AppConfig, _config_path: PathBuf) {
         };
 
         match router.route(message).await {
-            Ok(outcome) => println!("{}", outcome.response.text),
-            Err(err) => println!("Error: {}", err),
+            Ok(outcome) => {
+                let text = process_response_text(&outcome.response.text);
+                println!("{}", text);
+            }
+            Err(err) => {
+                eprintln!("{} {}", "✗ Error:".red(), err);
+            }
         }
+    }
+
+    // Save history
+    let _ = save_repl_history(&history_path, &history);
+}
+
+/// Print the REPL welcome banner
+fn print_repl_banner(config: &AppConfig) {
+    println!("{}", "╭──────────────────────────────────────────────╮".cyan());
+    println!("{}", "│                                              │".cyan());
+    println!("{}", format!("│  🧊🦾  BorgClaw Neural Link v{:<17}│", env!("CARGO_PKG_VERSION")).cyan());
+    println!("{}", "│     The Hypercube Agent Collective           │".cyan());
+    println!("{}", "│                                              │".cyan());
+    println!("{}", format!("│  Provider: {:<34}│", config.agent.provider).cyan().to_string());
+    println!("{}", format!("│  Model:    {:<34}│", config.agent.model).cyan().to_string());
+    println!("{}", "│                                              │".cyan());
+    println!("{}", "│  Commands: help, status, clear, history    │".dimmed());
+    println!("{}", "│           exit/quit                         │".dimmed());
+    println!("{}", "╰──────────────────────────────────────────────╯".cyan());
+    println!();
+}
+
+/// Process response text to strip thinking blocks and format nicely
+fn process_response_text(text: &str) -> String {
+    // Strip <think> blocks (model reasoning)
+    let text = strip_think_blocks(text);
+    
+    // Trim whitespace
+    let text = text.trim();
+    
+    text.to_string()
+}
+
+/// Strip <think>...</think> blocks from text
+fn strip_think_blocks(text: &str) -> String {
+    let mut result = String::new();
+    let mut in_think_block = false;
+    let mut chars = text.chars().peekable();
+    
+    while let Some(ch) = chars.next() {
+        if ch == '<' {
+            if in_think_block {
+                // Check for </think>
+                let ahead: String = chars.clone().take(7).collect();
+                if ahead == "/think>" {
+                    in_think_block = false;
+                    // Skip past "/think>"
+                    for _ in 0..8 {
+                        chars.next();
+                    }
+                }
+                // Don't add '<' or content inside think block
+            } else {
+                // Check if this is the start of a think block
+                let ahead: String = chars.clone().take(5).collect();
+                if ahead == "think" {
+                    in_think_block = true;
+                    // Skip past "think>"
+                    for _ in 0..6 {
+                        chars.next();
+                    }
+                } else {
+                    // Not a think tag, add the '<'
+                    result.push(ch);
+                }
+            }
+        } else if !in_think_block {
+            result.push(ch);
+        }
+        // If in_think_block, don't add anything
+    }
+    
+    result
+}
+
+/// Get path to REPL history file
+fn get_repl_history_path() -> std::path::PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("borgclaw")
+        .join("repl_history")
+}
+
+/// Load REPL history from file
+fn load_repl_history(path: &std::path::Path) -> Vec<String> {
+    if let Ok(content) = std::fs::read_to_string(path) {
+        content.lines().map(|s| s.to_string()).collect()
+    } else {
+        Vec::new()
+    }
+}
+
+/// Save REPL history to file
+fn save_repl_history(path: &std::path::Path, history: &[String]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, history.join("\n"))
+}
+
+/// Print command history
+fn print_history(history: &[String]) {
+    if history.is_empty() {
+        println!("{} No history yet", "ℹ".blue());
+        return;
+    }
+    
+    println!("{}", "Command History:".cyan().bold());
+    for (i, cmd) in history.iter().enumerate().rev().take(20) {
+        println!("  {:>3}. {}", i + 1, cmd);
     }
 }
 
@@ -3682,9 +3816,30 @@ mod tests {
         assert_eq!(parse_repl_command("exit"), ReplCommand::Exit);
         assert_eq!(parse_repl_command("quit"), ReplCommand::Exit);
         assert_eq!(parse_repl_command("help"), ReplCommand::Help);
+        assert_eq!(parse_repl_command("?"), ReplCommand::Help);
         assert_eq!(parse_repl_command("status"), ReplCommand::Status);
         assert_eq!(parse_repl_command("clear"), ReplCommand::Clear);
+        assert_eq!(parse_repl_command("history"), ReplCommand::History);
+        assert_eq!(parse_repl_command("hist"), ReplCommand::History);
         assert_eq!(parse_repl_command("hello"), ReplCommand::Message);
+    }
+
+    #[test]
+    fn strip_think_blocks_removes_reasoning_content() {
+        let input = "Hello <think>this is reasoning</think> world";
+        assert_eq!(strip_think_blocks(input), "Hello world");
+
+        let input_with_newlines = "Response\n<think>\nMulti-line\nreasoning\n</think>\nMore text";
+        assert_eq!(strip_think_blocks(input_with_newlines), "Response\nMore text");
+
+        let no_think = "Just regular text";
+        assert_eq!(strip_think_blocks(no_think), "Just regular text");
+
+        let empty_think = "Before <think></think> After";
+        assert_eq!(strip_think_blocks(empty_think), "Before After");
+        
+        let multiple_thinks = "Start <think>first</think> middle <think>second</think> end";
+        assert_eq!(strip_think_blocks(multiple_thinks), "Start middle end");
     }
 
     #[test]
@@ -4319,11 +4474,18 @@ mod tests {
 }
 
 fn print_help() {
-    println!("Commands:");
-    println!("  exit, quit   - Exit the REPL");
-    println!("  help         - Show this help message");
-    println!("  status       - Show agent status");
-    println!("  clear        - Clear screen");
+    println!("{}", "Available Commands:".cyan().bold());
+    println!();
+    println!("  {}  {:12} - {}", "🚪".yellow(), "exit, quit", "Exit the REPL");
+    println!("  {}  {:12} - {}", "❓".yellow(), "help", "Show this help message");
+    println!("  {}  {:12} - {}", "📊".yellow(), "status", "Show agent and system status");
+    println!("  {}  {:12} - {}", "🧹".yellow(), "clear", "Clear the screen");
+    println!("  {}  {:12} - {}", "📜".yellow(), "history", "Show command history");
+    println!();
+    println!("{}", "Tips:".dimmed().bold());
+    println!("  • Type any message to chat with the agent");
+    println!("  • Use {} to enable verbose timing output", "BORGCLAW_REPL_VERBOSE=1".cyan());
+    println!("  • Command history is saved between sessions");
 }
 
 const CLEAR_SCREEN_SEQUENCE: &str = "\x1B[2J\x1B[H";
@@ -4334,15 +4496,17 @@ enum ReplCommand {
     Help,
     Status,
     Clear,
+    History,
     Message,
 }
 
 fn parse_repl_command(input: &str) -> ReplCommand {
     match input {
         "exit" | "quit" => ReplCommand::Exit,
-        "help" => ReplCommand::Help,
+        "help" | "?" => ReplCommand::Help,
         "status" => ReplCommand::Status,
         "clear" => ReplCommand::Clear,
+        "history" | "hist" => ReplCommand::History,
         _ => ReplCommand::Message,
     }
 }
