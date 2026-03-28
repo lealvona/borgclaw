@@ -190,28 +190,118 @@ impl SimpleAgent {
         self.tools.push(tool);
     }
 
-    fn system_prompt(&self) -> Option<String> {
-        let path = self.config.soul_path.as_ref()?;
-        let base_prompt = std::fs::read_to_string(path).ok()?;
+    /// Generate the complete system prompt for the LLM
+    /// This combines:
+    /// 1. Base identity (from file or default)
+    /// 2. Tool descriptions
+    /// 3. Capability context
+    /// 4. Current time
+    fn system_prompt(&self) -> String {
+        // Get base prompt from file if available, otherwise use default
+        let base_identity = if let Some(path) = self.config.soul_path.as_ref() {
+            std::fs::read_to_string(path).unwrap_or_else(|_| self.default_identity())
+        } else {
+            self.default_identity()
+        };
+
+        // Build tools section
+        let tools_section = self.build_tools_section();
+        
+        // Build capability context
+        let capability_section = self.build_capability_section();
 
         // Inject current date/time to prevent stale session errors
-        // This is dynamic and not cached - critical for accurate time-based responses
         let now = chrono::Local::now();
         let datetime_str = now.format("%Y-%m-%d %H:%M:%S %Z").to_string();
-        let date_str = now.format("%Y-%m-%d").to_string();
-        let time_str = now.format("%H:%M:%S").to_string();
-        let timezone_str = now.format("%Z").to_string();
 
-        let injected = format!(
-            "{}\n\n[SYSTEM CONTEXT - CURRENT TIME]\nCurrent date and time: {}\nDate: {}\nTime: {}\nTimezone: {}\n[END SYSTEM CONTEXT]",
-            base_prompt,
-            datetime_str,
-            date_str,
-            time_str,
-            timezone_str
-        );
+        format!(
+            "{}\n\n{}\n\n{}\n\n[SYSTEM CONTEXT - CURRENT TIME]\nCurrent date and time: {}\n[END SYSTEM CONTEXT]",
+            base_identity,
+            tools_section,
+            capability_section,
+            datetime_str
+        )
+    }
 
-        Some(injected)
+    /// Default identity for BorgClaw when no soul file is provided
+    fn default_identity(&self) -> String {
+        format!(
+            "You are BorgClaw, a multi-valent AI agent collective. \
+You are {} (via {} provider). \
+You have access to numerous tools and can communicate through multiple channels. \
+You are autonomous, helpful, and capable of complex multi-step tasks.",
+            self.config.model,
+            self.config.provider
+        )
+    }
+
+    /// Build the tools section of the system prompt
+    fn build_tools_section(&self) -> String {
+        let mut tools_desc = String::from("## AVAILABLE TOOLS\n\n");
+        
+        if self.tools.is_empty() {
+            tools_desc.push_str("You have no special tools configured.\n");
+        } else {
+            tools_desc.push_str("You can use the following tools by invoking them with the format: @tool_name(param1=value1, param2=value2)\n\n");
+            
+            for tool in &self.tools {
+                tools_desc.push_str(&format!("- **{}**: {}\n", tool.name, tool.description));
+            }
+            
+            tools_desc.push_str("\nTo use a tool, include it in your response like: @memory_store(key=\"user_name\", value=\"Alice\")\n");
+        }
+        
+        tools_desc
+    }
+
+    /// Build the capability context section
+    fn build_capability_section(&self) -> String {
+        let mut capabilities = String::from("## YOUR CAPABILITIES\n\n");
+        
+        // Memory capability (always available)
+        capabilities.push_str("✓ **Long-term Memory**: You can store and recall information across conversations.");
+        if self.memory_config.hybrid_search {
+            capabilities.push_str(" You have hybrid search (SQLite + FTS5) enabled.");
+        }
+        capabilities.push('\n');
+        
+        // Skills capabilities
+        if self.skills_config.auto_load {
+            capabilities.push_str("✓ **Skills**: You have access to various integrations including:\n");
+            capabilities.push_str("  - GitHub (repository management, issues, PRs)\n");
+            capabilities.push_str("  - Google Workspace (Gmail, Calendar, Drive)\n");
+            capabilities.push_str("  - Browser automation (web scraping, JavaScript execution)\n");
+            capabilities.push_str("  - Speech-to-Text and Text-to-Speech\n");
+            capabilities.push_str("  - Image generation\n");
+            capabilities.push_str("  - QR code generation\n");
+            capabilities.push_str("  - URL shortening\n");
+        }
+        
+        // Scheduler capability
+        if self.scheduler_config.enabled {
+            capabilities.push_str("✓ **Scheduling**: You can schedule tasks to run periodically using cron expressions.\n");
+        }
+        
+        // Heartbeat capability
+        if self.heartbeat_config.enabled {
+            capabilities.push_str("✓ **Heartbeat**: You can run background tasks continuously.\n");
+        }
+        
+        // MCP capability
+        if !self.mcp_config.servers.is_empty() {
+            capabilities.push_str(&format!("✓ **MCP**: You can connect to {} external Model Context Protocol server(s).\n", self.mcp_config.servers.len()));
+        }
+        
+        capabilities.push_str("\n## CHANNEL AWARENESS\n\n");
+        capabilities.push_str("You can communicate through multiple channels:\n");
+        capabilities.push_str("- **CLI/REPL**: Direct terminal interface\n");
+        capabilities.push_str("- **WebSocket Gateway**: Real-time web interface at http://localhost:3000\n");
+        capabilities.push_str("- **Telegram**: Bot interface (if configured)\n");
+        capabilities.push_str("- **Signal**: Secure messaging (if configured)\n");
+        capabilities.push_str("- **Webhook**: HTTP endpoints for integrations\n");
+        capabilities.push_str("\nWhen a user mentions a channel like Telegram, Signal, etc., you should be aware that these are valid communication paths.\n");
+        
+        capabilities
     }
 
     fn ensure_session(&mut self, session_id: &SessionId, group_id: Option<String>) -> &mut Session {
@@ -342,14 +432,12 @@ impl Agent for SimpleAgent {
         let temperature = self.config.temperature;
         let max_tokens = self.config.max_tokens;
         let session = self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
-        if let Some(prompt) = system_prompt {
-            let has_system = session
-                .messages()
-                .iter()
-                .any(|msg| msg.role == MessageRole::System && msg.content == prompt);
-            if !has_system {
-                session.add_message(Message::system(prompt));
-            }
+        let has_system = session
+            .messages()
+            .iter()
+            .any(|msg| msg.role == MessageRole::System && msg.content == system_prompt);
+        if !has_system {
+            session.add_message(Message::system(system_prompt));
         }
         session.add_message(Message::user(message.clone()));
 
@@ -625,7 +713,7 @@ mod tests {
             Some(McpConfig::default()),
             Some(SecurityConfig::default()),
         );
-        let system_prompt = agent.system_prompt().unwrap();
+        let system_prompt = agent.system_prompt();
 
         // Verify base prompt is present
         assert!(system_prompt.contains(base_prompt));
@@ -633,20 +721,22 @@ mod tests {
         // Verify datetime context section is present
         assert!(system_prompt.contains("[SYSTEM CONTEXT - CURRENT TIME]"));
         assert!(system_prompt.contains("Current date and time:"));
-        assert!(system_prompt.contains("Date:"));
-        assert!(system_prompt.contains("Time:"));
-        assert!(system_prompt.contains("Timezone:"));
         assert!(system_prompt.contains("[END SYSTEM CONTEXT]"));
 
         // Verify the format looks correct (YYYY-MM-DD HH:MM:SS)
         assert!(system_prompt.contains("Current date and time: 20")); // Should start with 20xx year
+
+        // Verify capability sections are present (tools and capabilities are always added)
+        assert!(system_prompt.contains("AVAILABLE TOOLS"));
+        assert!(system_prompt.contains("YOUR CAPABILITIES"));
+        assert!(system_prompt.contains("CHANNEL AWARENESS"));
 
         // Clean up
         std::fs::remove_dir_all(temp_dir).unwrap();
     }
 
     #[test]
-    fn system_prompt_returns_none_without_soul_path() {
+    fn system_prompt_generates_default_without_soul_path() {
         use crate::config::AgentConfig;
         use crate::config::{McpConfig, MemoryConfig, SecurityConfig, SkillsConfig};
 
@@ -664,11 +754,16 @@ mod tests {
             Some(McpConfig::default()),
             Some(SecurityConfig::default()),
         );
-        assert!(agent.system_prompt().is_none());
+        let prompt = agent.system_prompt();
+        
+        // Should generate default identity
+        assert!(prompt.contains("BorgClaw"));
+        assert!(prompt.contains("AVAILABLE TOOLS"));
+        assert!(prompt.contains("YOUR CAPABILITIES"));
     }
 
     #[test]
-    fn system_prompt_returns_none_for_missing_file() {
+    fn system_prompt_uses_default_for_missing_file() {
         use crate::config::AgentConfig;
         use crate::config::{McpConfig, MemoryConfig, SecurityConfig, SkillsConfig};
 
@@ -686,7 +781,11 @@ mod tests {
             Some(McpConfig::default()),
             Some(SecurityConfig::default()),
         );
-        assert!(agent.system_prompt().is_none());
+        let prompt = agent.system_prompt();
+        
+        // Should fall back to default identity
+        assert!(prompt.contains("BorgClaw"));
+        assert!(prompt.contains("AVAILABLE TOOLS"));
     }
 
     #[test]
@@ -716,10 +815,10 @@ mod tests {
         );
 
         // Get first prompt
-        let prompt1 = agent.system_prompt().unwrap();
+        let prompt1 = agent.system_prompt();
 
         // Get second prompt (should have different timestamp)
-        let prompt2 = agent.system_prompt().unwrap();
+        let prompt2 = agent.system_prompt();
 
         // Both should contain the datetime section but may have different timestamps
         assert!(prompt1.contains("Current date and time:"));
