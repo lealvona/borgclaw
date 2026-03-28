@@ -57,22 +57,24 @@
 
 ---
 
-## D004: Cut MVP Release As 1.0.0 And Hold Further Releases Until 1.1.0
-**Decision**: Mark the current documented-contract MVP as `1.0.0`, then continue subsequent work on feature branches without cutting another release until `1.1.0`.
+## D004: Cut MVP Release As 0.1.0 And Hold Further Releases Until 0.2.0
+**Decision**: Mark the current documented-contract MVP as `0.1.0`, then continue subsequent work on feature branches without cutting another release until `0.2.0`.
 
 **Rationale**:
 - The repo has crossed out of prototype-only status and now has a coherent documented MVP surface.
-- A stable `1.0.0` release line makes post-MVP work easier to isolate without mixing release-candidate and ongoing feature work.
-- The user explicitly requested a `1.0` release followed by feature-branch-only development until `1.1`.
+- Starting with `0.1.0` (instead of `1.0.0`) accurately reflects the project's pre-1.0 maturity.
+- A stable `0.1.0` release line makes post-MVP work easier to isolate without mixing release-candidate and ongoing feature work.
+- The user explicitly requested a re-versioning to the 0.x series to better align with current development status.
 
 **Alternatives Considered**:
-- Continue shipping more `0.x` releases while finishing the remaining roadmap.
-- Cut repeated point releases immediately after `1.0.0`.
+- Continue shipping `1.x` releases (rejected: incorrectly implies post-1.0 stability).
+- Cut repeated point releases immediately after `0.1.0`.
 
 **Impact**:
-- Workspace package version moves to `1.0.0`.
+- Workspace package version moves to `0.14.0` (reflecting 14 releases of development).
 - `CHANGELOG.md` becomes the release-history source of truth.
-- Post-`1.0.0` implementation continues behind feature branches, with the next coordinated release target set to `1.1.0`.
+- Post-`0.1.0` implementation continues behind feature branches, with the next coordinated release target set to `0.2.0`.
+- Historical tags v1.0.0-v1.14.0 will be replaced with v0.1.0-v0.14.0.
 
 ---
 
