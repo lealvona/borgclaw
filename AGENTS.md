@@ -536,6 +536,49 @@ If you accidentally pushed to main:
 | `mcp/` | MCP client | Model Context Protocol client |
 | `config/` | `AppConfig`, `SecurityConfig` | TOML configuration |
 
+### Gateway Configuration API
+
+The gateway exposes configuration via REST API and a visual web editor.
+
+**GET /api/config**
+Returns full configuration including:
+```json
+{
+  "agent": { "model": "...", "provider": "...", "workspace": "..." },
+  "channels": { "websocket": {...}, "webhook": {...} },
+  "memory": { "hybrid_search": true, "session_max_entries": 1000 },
+  "security": { "approval_mode": "Autonomous", "pairing_enabled": true, ... },
+  "skills": { "github_configured": true, "auto_load": true, ... },
+  "mcp": { "servers": [...] }
+}
+```
+
+**POST /api/config**
+Update configuration with partial updates:
+```json
+{
+  "agent": { "model": "gpt-4o", "provider": "openai" },
+  "security": { "approval_mode": "Supervised" },
+  "memory": { "hybrid_search": true }
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "message": "Configuration updated successfully",
+  "changes": ["agent.model = gpt-4o", "security.approval_mode = Supervised"],
+  "requires_restart": true
+}
+```
+
+**Implementation Notes:**
+- Configuration is stored in `GatewayState.config_path` (Arc<PathBuf>)
+- Updates are written to disk using `toml::to_string_pretty()`
+- The UI uses JavaScript to load (`fetch('/api/config')`) and save (`POST /api/config`)
+- Approval mode strings are mapped to `ApprovalMode` enum: "readonly" → ReadOnly, "supervised" → Supervised, "autonomous" → Autonomous
+
 ### Configuration File
 
 Default config location: `~/.config/borgclaw/config.toml`
@@ -580,6 +623,30 @@ cargo run --bin borgclaw -- init
 cargo run --bin borgclaw -- self-test
 ```
 
+### Gateway Web Interface
+
+The gateway (`borgclaw-gateway`) provides a web dashboard at `http://localhost:3000`:
+
+**Features:**
+- **Live Chat** — Send messages to agent via browser
+- **Real-time Metrics** — Connection counts, messages, uptime
+- **Configuration Editor** — Visual config management (see below)
+- **API Explorer** — Browse all HTTP endpoints
+- **Health Checks** — Run diagnostics
+
+**Configuration Editor:**
+- Access via sidebar menu or keyboard shortcut `Ctrl+,`
+- Tabbed interface: Agent, Channels, Security, Memory, Skills
+- Changes saved to config file automatically
+- Returns list of changes and restart requirements
+
+**API Endpoints:**
+- `GET /api/config` — Full configuration (JSON)
+- `POST /api/config` — Update configuration
+- `GET /api/metrics` — Real-time metrics
+- `GET /api/connections` — Active WebSocket clients
+- `GET /api/doctor` — Health check results
+
 ### CLI Commands
 
 ```bash
@@ -616,6 +683,7 @@ borgclaw secrets set API_KEY
 - `CHANGELOG.md` — Release history
 - `docs/quickstart.md` — Step-by-step setup
 - `docs/onboarding.md` — Configuration wizard
+- `docs/gateway.md` — Web dashboard and API documentation
 - `docs/channels.md` — Messaging integrations
 - `docs/memory.md` — Storage and retrieval
 - `docs/skills.md` — Tool integrations

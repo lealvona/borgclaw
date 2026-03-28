@@ -784,10 +784,10 @@ pub struct McpServerConfig {
 pub fn load_config(path: &PathBuf) -> Result<AppConfig, config::ConfigError> {
     let content = std::fs::read_to_string(path)?;
     let mut config: AppConfig = toml::from_str(&content).map_err(config::ConfigError::Parse)?;
-    
+
     // Normalize deprecated model names
     config.agent.model = normalize_model_name(&config.agent.model);
-    
+
     Ok(config)
 }
 
@@ -1270,14 +1270,14 @@ mod tests {
 
         // Serialize to TOML
         let toml_str = toml::to_string_pretty(&config).unwrap();
-        
+
         // Verify the model is in the TOML
         assert!(toml_str.contains("model = \"MiniMax-M2.7\""));
         assert!(toml_str.contains("provider = \"minimax\""));
 
         // Deserialize back
         let loaded: AppConfig = toml::from_str(&toml_str).unwrap();
-        
+
         // Verify the model is preserved
         assert_eq!(loaded.agent.provider, "minimax");
         assert_eq!(loaded.agent.model, "MiniMax-M2.7");

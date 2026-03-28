@@ -569,7 +569,7 @@ mod tests {
         let login1 = VaultItemType::Login;
         let login2 = VaultItemType::Login;
         let card = VaultItemType::Card;
-        
+
         assert_eq!(login1, login2);
         assert_ne!(login1, card);
     }
@@ -584,7 +584,7 @@ mod tests {
             created_at: None,
             modified_at: None,
         };
-        
+
         assert_eq!(item.id, "test-id-123");
         assert_eq!(item.name, "Test Item");
         assert_eq!(item.folder, Some("Test Folder".to_string()));
@@ -664,10 +664,13 @@ mod tests {
             client_secret: Some("secret-456".to_string()),
             use_cli: false,
         };
-        
+
         assert_eq!(config.cli_path, PathBuf::from("/custom/bw"));
         assert_eq!(config.session_env, "MY_BW_SESSION");
-        assert_eq!(config.server_url, Some("https://vault.example.com".to_string()));
+        assert_eq!(
+            config.server_url,
+            Some("https://vault.example.com".to_string())
+        );
         assert_eq!(config.client_id, Some("client-123".to_string()));
         assert_eq!(config.client_secret, Some("secret-456".to_string()));
         assert!(!config.use_cli);
@@ -680,7 +683,7 @@ mod tests {
             vault: Some("My Vault".to_string()),
             account: Some("my@email.com".to_string()),
         };
-        
+
         assert_eq!(config.cli_path, PathBuf::from("/custom/op"));
         assert_eq!(config.vault, Some("My Vault".to_string()));
         assert_eq!(config.account, Some("my@email.com".to_string()));

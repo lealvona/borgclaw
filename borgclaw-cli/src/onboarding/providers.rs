@@ -187,7 +187,7 @@ impl ProviderRegistry {
                 id: "minimax".to_string(),
                 display: "MiniMax".to_string(),
                 api_base: "https://api.minimax.io/v1".to_string(),
-                models_endpoint: "".to_string(),  // Model listing not supported - see https://github.com/MiniMax-AI/MiniMax-M2/issues/60
+                models_endpoint: "".to_string(), // Model listing not supported - see https://github.com/MiniMax-AI/MiniMax-M2/issues/60
                 api_key_env: Some("MINIMAX_API_KEY".to_string()),
                 default_model: "MiniMax-M2.7".to_string(),
                 // Updated model list from https://platform.minimax.io/docs/guides/models-intro (Mar 2026)
@@ -207,7 +207,7 @@ impl ProviderRegistry {
                 id: "z".to_string(),
                 display: "Z.ai".to_string(),
                 api_base: "https://api.z.ai/api/paas/v4".to_string(),
-                models_endpoint: "".to_string(),  // Model listing not supported
+                models_endpoint: "".to_string(), // Model listing not supported
                 api_key_env: Some("Z_API_KEY".to_string()),
                 default_model: "glm-4.7".to_string(),
                 // Updated model list from https://docs.z.ai/ (Mar 2026)
@@ -265,7 +265,9 @@ impl ProviderRegistry {
                     provider.id = id.clone();
                 }
                 // Normalize deprecated model names in static_models
-                provider.static_models = provider.static_models.iter()
+                provider.static_models = provider
+                    .static_models
+                    .iter()
                     .map(|m| Self::normalize_model_name(m))
                     .collect();
                 // Normalize default_model too
@@ -356,7 +358,7 @@ fn default_models_endpoint(id: &str, api_base: &str) -> String {
         "anthropic" => format!("{api_base}/models"),
         "google" => "https://generativelanguage.googleapis.com/v1beta/models".to_string(),
         "kimi" => "https://api.moonshot.cn/v1/models".to_string(),
-        "minimax" => "https://api.minimax.io/v1/models".to_string(),  // Note: MiniMax doesn't actually support this endpoint
+        "minimax" => "https://api.minimax.io/v1/models".to_string(), // Note: MiniMax doesn't actually support this endpoint
         "z" => "https://api.z.ai/v1/models".to_string(),
         "ollama" => "http://localhost:11434/api/tags".to_string(),
         _ => format!("{}/models", api_base.trim_end_matches('/')),

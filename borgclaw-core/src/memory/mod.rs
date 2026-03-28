@@ -245,7 +245,7 @@ mod tests {
             min_score: 0.8,
             group_id: Some("custom-group".to_string()),
         };
-        
+
         assert_eq!(query.query, "custom");
         assert_eq!(query.limit, 10);
         assert_eq!(query.min_score, 0.8);
@@ -255,7 +255,7 @@ mod tests {
     #[test]
     fn new_entry_creates_valid_entry() {
         let entry = new_entry("test-key", "test content");
-        
+
         assert_eq!(entry.key, "test-key");
         assert_eq!(entry.content, "test content");
         assert!(entry.metadata.is_empty());
@@ -271,7 +271,7 @@ mod tests {
     #[test]
     fn new_entry_for_group_creates_entry_with_group() {
         let entry = new_entry_for_group("grouped-key", "grouped content", "my-group");
-        
+
         assert_eq!(entry.key, "grouped-key");
         assert_eq!(entry.content, "grouped content");
         assert_eq!(entry.group_id, Some("my-group".to_string()));
@@ -282,9 +282,13 @@ mod tests {
     #[test]
     fn memory_entry_with_metadata() {
         let mut entry = new_entry("meta-key", "meta content");
-        entry.metadata.insert("source".to_string(), "test".to_string());
-        entry.metadata.insert("priority".to_string(), "high".to_string());
-        
+        entry
+            .metadata
+            .insert("source".to_string(), "test".to_string());
+        entry
+            .metadata
+            .insert("priority".to_string(), "high".to_string());
+
         assert_eq!(entry.metadata.len(), 2);
         assert_eq!(entry.metadata.get("source"), Some(&"test".to_string()));
         assert_eq!(entry.metadata.get("priority"), Some(&"high".to_string()));
@@ -297,7 +301,7 @@ mod tests {
             entry: entry.clone(),
             score: 0.95,
         };
-        
+
         assert_eq!(result.entry.key, "result-key");
         assert_eq!(result.score, 0.95);
     }
@@ -336,7 +340,7 @@ mod tests {
     async fn noop_embedding_provider_returns_empty() {
         let provider = NoOpEmbeddingProvider;
         let result = provider.embed("any text").await;
-        
+
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
     }
@@ -344,14 +348,14 @@ mod tests {
     #[test]
     fn memory_entry_importance_range() {
         let mut entry = new_entry("importance-test", "content");
-        
+
         // Test different importance values
         entry.importance = 0.0;
         assert_eq!(entry.importance, 0.0);
-        
+
         entry.importance = 0.5;
         assert_eq!(entry.importance, 0.5);
-        
+
         entry.importance = 1.0;
         assert_eq!(entry.importance, 1.0);
     }
@@ -359,12 +363,12 @@ mod tests {
     #[test]
     fn memory_entry_access_tracking() {
         let mut entry = new_entry("access-test", "content");
-        
+
         assert_eq!(entry.access_count, 0);
-        
+
         entry.access_count += 1;
         assert_eq!(entry.access_count, 1);
-        
+
         entry.access_count = 100;
         assert_eq!(entry.access_count, 100);
     }
@@ -374,15 +378,13 @@ mod tests {
         let before = Utc::now();
         let entry = new_entry("timestamp-test", "content");
         let after = Utc::now();
-        
+
         // Timestamps should be within the test execution window
         assert!(entry.created_at >= before);
         assert!(entry.created_at <= after);
         assert!(entry.accessed_at >= before);
         assert!(entry.accessed_at <= after);
     }
-
-
 
     #[test]
     fn memory_result_serialization_roundtrip() {
@@ -391,10 +393,10 @@ mod tests {
             entry: entry.clone(),
             score: 0.85,
         };
-        
+
         let json = serde_json::to_string(&result).unwrap();
         let deserialized: MemoryResult = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(deserialized.entry.key, result.entry.key);
         assert_eq!(deserialized.score, result.score);
     }
