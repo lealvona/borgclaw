@@ -1225,4 +1225,52 @@ mod tests {
 
         assert!(!config.security.ssrf_protection);
     }
+
+    #[test]
+    fn agent_config_minimax_roundtrips_correctly() {
+        // Create config with MiniMax settings
+        let config = AppConfig {
+            agent: AgentConfig {
+                provider: "minimax".to_string(),
+                model: "MiniMax-M2.7".to_string(),
+                max_tokens: 4096,
+                temperature: 0.7,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        // Serialize to TOML
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        
+        // Verify the model is in the TOML
+        assert!(toml_str.contains("model = \"MiniMax-M2.7\""));
+        assert!(toml_str.contains("provider = \"minimax\""));
+
+        // Deserialize back
+        let loaded: AppConfig = toml::from_str(&toml_str).unwrap();
+        
+        // Verify the model is preserved
+        assert_eq!(loaded.agent.provider, "minimax");
+        assert_eq!(loaded.agent.model, "MiniMax-M2.7");
+    }
+
+    #[test]
+    fn agent_config_parses_minimax_from_toml() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [agent]
+            provider = "minimax"
+            model = "MiniMax-M2.7"
+            max_tokens = 4096
+            temperature = 0.7
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.agent.provider, "minimax");
+        assert_eq!(config.agent.model, "MiniMax-M2.7");
+        assert_eq!(config.agent.max_tokens, 4096);
+        assert_eq!(config.agent.temperature, 0.7);
+    }
 }

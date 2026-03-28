@@ -113,6 +113,12 @@ impl ProviderFactory {
         config: &crate::config::AgentConfig,
         security_config: &SecurityConfig,
     ) -> Result<Box<dyn ChatProvider>, ProviderError> {
+        tracing::info!(
+            "Creating provider: {} with model: {}",
+            config.provider,
+            config.model
+        );
+        
         let provider: Box<dyn ChatProvider> = match config.provider.as_str() {
             "openai" => Box::new(OpenAiProvider::from_security(security_config).await?),
             "anthropic" => Box::new(AnthropicProvider::from_security(security_config).await?),
@@ -649,6 +655,12 @@ macro_rules! openai_compatible_provider {
         #[async_trait]
         impl ChatProvider for $name {
             async fn complete(&self, request: &ProviderRequest) -> Result<String, ProviderError> {
+                tracing::debug!(
+                    "{} sending request with model: {}",
+                    stringify!($name),
+                    request.model
+                );
+                
                 #[derive(Serialize)]
                 struct Body<'a> {
                     model: &'a str,

@@ -275,17 +275,34 @@ async fn main() {
     } else {
         AppConfig::default()
     };
+    
+    // Debug: Log loaded config
+    info!(
+        "Loaded config from {}: provider={}, model={}",
+        config_path.display(),
+        config.agent.provider,
+        config.agent.model
+    );
 
     match cli.command {
         Commands::Repl => repl(config, config_path).await,
         Commands::Send { message } => send_message(config, message).await,
         Commands::Init(args) => match run_init(&config_path, config, &args).await {
             Ok(outcome) => {
+                // Debug: Log config being saved
+                info!(
+                    "Saving config to {}: provider={}, model={}",
+                    config_path.display(),
+                    outcome.config.agent.provider,
+                    outcome.config.agent.model
+                );
                 if let Err(e) = save_config(&outcome.config, &config_path) {
                     error!("Failed to save config: {}", e);
                     return;
                 }
                 println!("Saved config to {:?}", config_path);
+                println!("  Provider: {}", outcome.config.agent.provider);
+                println!("  Model: {}", outcome.config.agent.model);
                 if outcome.start == StartTarget::Repl {
                     repl(outcome.config, config_path).await;
                 }
