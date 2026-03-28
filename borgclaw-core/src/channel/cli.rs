@@ -98,3 +98,115 @@ pub fn create_cli_message(content: String, sender_id: &str) -> InboundMessage {
         raw: serde_json::json!({ "source": "cli" }),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_channel_new() {
+        let channel = CliChannel::new();
+        assert_eq!(channel.channel_type, ChannelType::cli());
+        // Channel starts with 0 messages
+        assert_eq!(channel.msg_count.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn cli_channel_default() {
+        let channel: CliChannel = Default::default();
+        assert_eq!(channel.channel_type, ChannelType::cli());
+    }
+
+    #[tokio::test]
+    async fn cli_channel_init_sets_connected() {
+        let mut channel = CliChannel::new();
+        let config = ChannelConfig::default();
+        
+        let result = channel.init(&config).await;
+        assert!(result.is_ok());
+        
+        let status = channel.status().await;
+        assert!(status.connected);
+    }
+
+    #[tokio::test]
+    async fn cli_channel_start_receiving_returns_ok() {
+        let channel = CliChannel::new();
+        let (tx, _rx) = mpsc::channel(10);
+        
+        let result = channel.start_receiving(tx).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn cli_channel_status_tracks_messages() {
+        let channel = CliChannel::new();
+        
+        // Initially 0 messages
+        let status = channel.status().await;
+        assert_eq!(status.messages_sent, 0);
+        assert_eq!(status.messages_received, 0);
+        
+        // Simulate sending a message by incrementing counter
+        channel.msg_count.fetch_add(1, Ordering::Relaxed);
+        
+        let status = channel.status().await;
+        assert_eq!(status.messages_sent, 1);
+        assert_eq!(status.messages_received, 1);
+    }
+
+    #[tokio::test]
+    async fn cli_channel_shutdown_sets_disconnected() {
+        let channel = CliChannel::new();
+        
+        // Start connected
+        let status = channel.status().await;
+        assert!(status.connected);
+        
+        // Shutdown
+        let result = channel.shutdown().await;
+        assert!(result.is_ok());
+        
+        let status = channel.status().await;
+        assert!(!status.connected);
+    }
+
+    #[test]
+    fn create_cli_message_creates_inbound_message() {
+        let msg = create_cli_message("Hello, world!".to_string(), "user-123");
+        
+        assert_eq!(msg.channel, ChannelType::cli());
+        assert_eq!(msg.sender.id, "user-123");
+        assert!(msg.group_id.is_none());
+        
+        match msg.content {
+            MessagePayload::Text(text) => assert_eq!(text, "Hello, world!"),
+            _ => panic!("Expected Text payload"),
+        }
+        
+        // Raw should contain source info
+        assert!(msg.raw.get("source").is_some());
+        assert_eq!(msg.raw["source"], "cli");
+    }
+
+    #[test]
+    fn create_cli_message_with_empty_content() {
+        let msg = create_cli_message("".to_string(), "anonymous");
+        
+        match msg.content {
+            MessagePayload::Text(text) => assert!(text.is_empty()),
+            _ => panic!("Expected Text payload"),
+        }
+        assert_eq!(msg.sender.id, "anonymous");
+    }
+
+    #[test]
+    fn create_cli_message_timestamp_is_recent() {
+        let before = Utc::now();
+        let msg = create_cli_message("test".to_string(), "test-user");
+        let after = Utc::now();
+        
+        assert!(msg.timestamp >= before);
+        assert!(msg.timestamp <= after);
+    }
+}

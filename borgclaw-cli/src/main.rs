@@ -21,6 +21,30 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::{error, info};
 
+/// Load .env file if it exists
+fn load_env_file() {
+    let env_path = PathBuf::from(".env");
+    if env_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&env_path) {
+            for line in content.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                if let Some((key, value)) = line.split_once('=') {
+                    let key = key.trim();
+                    let value = value.trim();
+                    // Only set if not already set in environment
+                    if std::env::var(key).is_err() {
+                        std::env::set_var(key, value);
+                        info!("Loaded env var from .env: {}", key);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// BorgClaw CLI
 #[derive(Parser)]
 #[command(name = "borgclaw")]
@@ -254,6 +278,9 @@ async fn main() {
         )
         .init();
 
+    // Load .env file early so env vars can affect config
+    load_env_file();
+
     let cli = Cli::parse();
 
     let config_path = cli.config.unwrap_or_else(|| {
@@ -267,25 +294,62 @@ async fn main() {
         let _ = std::fs::create_dir_all(parent);
     }
 
-    let config = if config_path.exists() {
-        load_config(&config_path).unwrap_or_else(|e| {
-            error!("Failed to load config: {}", e);
-            AppConfig::default()
-        })
+    let mut config = if config_path.exists() {
+        match load_config(&config_path) {
+            Ok(cfg) => {
+                info!("Loaded config from {}", config_path.display());
+                cfg
+            }
+            Err(e) => {
+                eprintln!("ERROR: Failed to load config from {}: {}", config_path.display(), e);
+                eprintln!("Using default config. Run 'borgclaw init' to reconfigure.");
+                AppConfig::default()
+            }
+        }
     } else {
+        info!("No config found at {}, using defaults", config_path.display());
         AppConfig::default()
     };
+    
+    // Override config with environment variables (BORGCLAW_* > config file)
+    if let Ok(provider) = std::env::var("BORGCLAW_PROVIDER") {
+        if !provider.is_empty() {
+            info!("Overriding provider from env: {} -> {}", config.agent.provider, provider);
+            config.agent.provider = provider;
+        }
+    }
+    if let Ok(model) = std::env::var("BORGCLAW_MODEL") {
+        if !model.is_empty() {
+            info!("Overriding model from env: {} -> {}", config.agent.model, model);
+            config.agent.model = model;
+        }
+    }
+    
+    info!(
+        "Using config: provider={}, model={}",
+        config.agent.provider,
+        config.agent.model
+    );
 
     match cli.command {
         Commands::Repl => repl(config, config_path).await,
         Commands::Send { message } => send_message(config, message).await,
         Commands::Init(args) => match run_init(&config_path, config, &args).await {
             Ok(outcome) => {
+                // Debug: Log config being saved
+                info!(
+                    "Saving config to {}: provider={}, model={}",
+                    config_path.display(),
+                    outcome.config.agent.provider,
+                    outcome.config.agent.model
+                );
                 if let Err(e) = save_config(&outcome.config, &config_path) {
                     error!("Failed to save config: {}", e);
                     return;
                 }
                 println!("Saved config to {:?}", config_path);
+                println!("  Provider: {}", outcome.config.agent.provider);
+                println!("  Model: {}", outcome.config.agent.model);
                 if outcome.start == StartTarget::Repl {
                     repl(outcome.config, config_path).await;
                 }

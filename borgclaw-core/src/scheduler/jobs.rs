@@ -147,3 +147,235 @@ impl std::fmt::Display for JobStatus {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catch_up_policy_default_is_skip() {
+        assert_eq!(CatchUpPolicy::default(), CatchUpPolicy::Skip);
+    }
+
+    #[test]
+    fn catch_up_policy_variants() {
+        assert_eq!(CatchUpPolicy::Skip, CatchUpPolicy::Skip);
+        assert_eq!(CatchUpPolicy::RunOnce, CatchUpPolicy::RunOnce);
+        assert_ne!(CatchUpPolicy::Skip, CatchUpPolicy::RunOnce);
+    }
+
+    #[test]
+    fn catch_up_policy_serialization_roundtrip() {
+        let skip = CatchUpPolicy::Skip;
+        let json = serde_json::to_string(&skip).unwrap();
+        assert_eq!(json, "\"skip\"");
+        let deserialized: CatchUpPolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, CatchUpPolicy::Skip);
+
+        let run_once = CatchUpPolicy::RunOnce;
+        let json = serde_json::to_string(&run_once).unwrap();
+        assert_eq!(json, "\"run_once\"");
+        let deserialized: CatchUpPolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, CatchUpPolicy::RunOnce);
+    }
+
+    #[test]
+    fn job_status_default_is_pending() {
+        assert_eq!(JobStatus::default(), JobStatus::Pending);
+    }
+
+    #[test]
+    fn job_status_display_format() {
+        assert_eq!(JobStatus::Pending.to_string(), "pending");
+        assert_eq!(JobStatus::Running.to_string(), "running");
+        assert_eq!(JobStatus::Completed.to_string(), "completed");
+        assert_eq!(JobStatus::Failed.to_string(), "failed");
+        assert_eq!(JobStatus::Cancelled.to_string(), "cancelled");
+        assert_eq!(JobStatus::Disabled.to_string(), "disabled");
+    }
+
+    #[test]
+    fn job_status_serialization_roundtrip() {
+        for status in [
+            JobStatus::Pending,
+            JobStatus::Running,
+            JobStatus::Completed,
+            JobStatus::Failed,
+            JobStatus::Cancelled,
+            JobStatus::Disabled,
+        ] {
+            let json = serde_json::to_string(&status).unwrap();
+            let deserialized: JobStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(deserialized, status);
+        }
+    }
+
+    #[test]
+    fn job_trigger_cron_next_run() {
+        // Valid cron expression: every minute
+        let trigger = JobTrigger::Cron("0 * * * * *".to_string());
+        let next = trigger.next_run();
+        assert!(next.is_some());
+        // Should be in the future
+        assert!(next.unwrap() > Utc::now() - Duration::minutes(1));
+    }
+
+    #[test]
+    fn job_trigger_cron_invalid_returns_none() {
+        let trigger = JobTrigger::Cron("invalid cron".to_string());
+        let next = trigger.next_run();
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn job_trigger_interval_next_run() {
+        let trigger = JobTrigger::Interval(3600); // 1 hour
+        let next = trigger.next_run();
+        assert!(next.is_some());
+        
+        let expected = Utc::now() + Duration::seconds(3600);
+        let actual = next.unwrap();
+        // Allow 1 second tolerance for test execution time
+        assert!((actual - expected).num_seconds().abs() <= 1);
+    }
+
+    #[test]
+    fn job_trigger_oneshot_future_returns_datetime() {
+        let future = Utc::now() + Duration::hours(1);
+        let trigger = JobTrigger::OneShot(future);
+        let next = trigger.next_run();
+        assert_eq!(next, Some(future));
+    }
+
+    #[test]
+    fn job_trigger_oneshot_past_returns_none() {
+        let past = Utc::now() - Duration::hours(1);
+        let trigger = JobTrigger::OneShot(past);
+        let next = trigger.next_run();
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn job_creation_and_defaults() {
+        let job = Job {
+            id: "job-123".to_string(),
+            name: "Test Job".to_string(),
+            description: Some("A test job".to_string()),
+            trigger: JobTrigger::Interval(60),
+            action: "echo hello".to_string(),
+            status: JobStatus::Pending,
+            created_at: Utc::now(),
+            last_run: None,
+            next_run: None,
+            run_count: 0,
+            max_retries: 3,
+            retry_count: 0,
+            retry_delay_seconds: 60,
+            dead_lettered_at: None,
+            run_history: Vec::new(),
+            metadata: HashMap::new(),
+            catch_up_policy: CatchUpPolicy::default(),
+            missed_runs: 0,
+        };
+
+        assert_eq!(job.id, "job-123");
+        assert_eq!(job.name, "Test Job");
+        assert_eq!(job.action, "echo hello");
+        assert_eq!(job.max_retries, 3);
+        assert_eq!(job.retry_delay_seconds, 60);
+        assert!(job.run_history.is_empty());
+        assert!(job.metadata.is_empty());
+    }
+
+    #[test]
+    fn job_run_creation() {
+        let now = Utc::now();
+        let run = JobRun {
+            started_at: now,
+            finished_at: now + Duration::seconds(5),
+            status: JobStatus::Completed,
+            error: None,
+            retry_scheduled: None,
+        };
+
+        assert_eq!(run.status, JobStatus::Completed);
+        assert!(run.error.is_none());
+        assert!(run.retry_scheduled.is_none());
+    }
+
+    #[test]
+    fn job_run_with_error() {
+        let now = Utc::now();
+        let run = JobRun {
+            started_at: now,
+            finished_at: now + Duration::seconds(5),
+            status: JobStatus::Failed,
+            error: Some("Connection timeout".to_string()),
+            retry_scheduled: Some(1),
+        };
+
+        assert_eq!(run.status, JobStatus::Failed);
+        assert_eq!(run.error, Some("Connection timeout".to_string()));
+        assert_eq!(run.retry_scheduled, Some(1));
+    }
+
+    #[test]
+    fn job_serialization_roundtrip() {
+        let job = Job {
+            id: "job-456".to_string(),
+            name: "Serialized Job".to_string(),
+            description: None,
+            trigger: JobTrigger::Cron("0 0 * * * *".to_string()),
+            action: "backup".to_string(),
+            status: JobStatus::Running,
+            created_at: Utc::now(),
+            last_run: Some(Utc::now()),
+            next_run: Some(Utc::now() + Duration::hours(1)),
+            run_count: 5,
+            max_retries: 3,
+            retry_count: 1,
+            retry_delay_seconds: 300,
+            dead_lettered_at: None,
+            run_history: vec![],
+            metadata: {
+                let mut map = HashMap::new();
+                map.insert("owner".to_string(), "admin".to_string());
+                map
+            },
+            catch_up_policy: CatchUpPolicy::RunOnce,
+            missed_runs: 2,
+        };
+
+        let json = serde_json::to_string(&job).unwrap();
+        let deserialized: Job = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.id, job.id);
+        assert_eq!(deserialized.name, job.name);
+        assert_eq!(deserialized.status, job.status);
+        assert_eq!(deserialized.run_count, job.run_count);
+        assert_eq!(deserialized.catch_up_policy, CatchUpPolicy::RunOnce);
+        assert_eq!(deserialized.missed_runs, 2);
+    }
+
+    #[test]
+    fn job_trigger_variants() {
+        let cron = JobTrigger::Cron("0 0 * * *".to_string());
+        match cron {
+            JobTrigger::Cron(expr) => assert_eq!(expr, "0 0 * * *"),
+            _ => panic!("Expected Cron variant"),
+        }
+
+        let interval = JobTrigger::Interval(300);
+        match interval {
+            JobTrigger::Interval(secs) => assert_eq!(secs, 300),
+            _ => panic!("Expected Interval variant"),
+        }
+
+        let now = Utc::now();
+        let oneshot = JobTrigger::OneShot(now);
+        match oneshot {
+            JobTrigger::OneShot(dt) => assert_eq!(dt, now),
+            _ => panic!("Expected OneShot variant"),
+        }
+    }
+}

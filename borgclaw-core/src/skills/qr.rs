@@ -79,3 +79,98 @@ pub enum QrError {
     #[error("Image error: {0}")]
     ImageError(String),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qr_format_default_is_png() {
+        let format = QrFormat::default();
+        match format {
+            QrFormat::Png { width, height } => {
+                assert_eq!(width, 300);
+                assert_eq!(height, 300);
+            }
+            _ => panic!("Expected default to be Png format"),
+        }
+    }
+
+    #[test]
+    fn qr_encode_terminal_returns_bytes() {
+        let data = "https://example.com";
+        let result = QrSkill::encode(data, QrFormat::Terminal);
+        assert!(result.is_ok());
+        let bytes = result.unwrap();
+        assert!(!bytes.is_empty());
+        // Terminal output should be text (UTF-8)
+        let text = String::from_utf8(bytes);
+        assert!(text.is_ok());
+    }
+
+    #[test]
+    fn qr_encode_svg_returns_bytes() {
+        let data = "https://example.com";
+        let result = QrSkill::encode(data, QrFormat::Svg);
+        assert!(result.is_ok());
+        let bytes = result.unwrap();
+        assert!(!bytes.is_empty());
+        // SVG output should be valid UTF-8 XML
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("<svg"));
+        assert!(text.contains("</svg>"));
+    }
+
+    #[test]
+    fn qr_encode_png_returns_bytes() {
+        let data = "https://example.com";
+        let format = QrFormat::Png {
+            width: 200,
+            height: 200,
+        };
+        let result = QrSkill::encode(data, format);
+        assert!(result.is_ok());
+        let bytes = result.unwrap();
+        assert!(!bytes.is_empty());
+        // PNG magic bytes
+        assert_eq!(&bytes[0..4], &[0x89, 0x50, 0x4E, 0x47]);
+    }
+
+    #[test]
+    fn qr_encode_url_delegates_to_encode() {
+        let url = "https://example.com";
+        let result = QrSkill::encode_url(url, QrFormat::Terminal);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn qr_encode_empty_string_succeeds() {
+        // Empty string can be encoded (produces minimal QR)
+        let result = QrSkill::encode("", QrFormat::Terminal);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn qr_decode_always_returns_error() {
+        let dummy_bytes = b"dummy";
+        let result = QrSkill::decode(dummy_bytes);
+        assert!(result.is_err());
+        match result {
+            Err(QrError::DecodeFailed(_)) => (), // Expected
+            _ => panic!("Expected DecodeFailed error"),
+        }
+    }
+
+    #[test]
+    fn qr_error_display_messages() {
+        let encode_err = QrError::EncodeFailed("test error".to_string());
+        assert!(encode_err.to_string().contains("Encode failed"));
+        assert!(encode_err.to_string().contains("test error"));
+
+        let decode_err = QrError::DecodeFailed("test error".to_string());
+        assert!(decode_err.to_string().contains("Decode failed"));
+
+        let image_err = QrError::ImageError("test error".to_string());
+        assert!(image_err.to_string().contains("Image error"));
+    }
+}
