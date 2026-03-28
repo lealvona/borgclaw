@@ -242,13 +242,17 @@ You are autonomous, helpful, and capable of complex multi-step tasks.",
         if self.tools.is_empty() {
             tools_desc.push_str("You have no special tools configured.\n");
         } else {
-            tools_desc.push_str("You can use the following tools by invoking them with the format: @tool_name(param1=value1, param2=value2)\n\n");
+            tools_desc.push_str("When you need to use a tool, invoke it with the format: /tool_name {\"param\": \"value\"}\n\n");
             
             for tool in &self.tools {
                 tools_desc.push_str(&format!("- **{}**: {}\n", tool.name, tool.description));
             }
             
-            tools_desc.push_str("\nTo use a tool, include it in your response like: @memory_store(key=\"user_name\", value=\"Alice\")\n");
+            tools_desc.push_str("\nExamples:\n");
+            tools_desc.push_str("- /memory_store {\"key\": \"user_name\", \"value\": \"Alice\"}\n");
+            tools_desc.push_str("- /memory_recall {\"key\": \"user_name\"}\n");
+            tools_desc.push_str("- /github_list_repos {\"owner\": \"lealvona\"}\n\n");
+            tools_desc.push_str("IMPORTANT: Only use tools when necessary. For normal conversation, respond directly without tool commands.\n");
         }
         
         tools_desc
@@ -388,6 +392,80 @@ You are autonomous, helpful, and capable of complex multi-step tasks.",
             .await
             .map_err(|e| AgentError::ProviderError(e.to_string()))
     }
+
+    /// Run the agent loop: interact with LLM, handle tool calls, get final response
+    async fn run_agent_loop(
+        &mut self,
+        ctx: &AgentContext,
+        model: String,
+        temperature: f32,
+        max_tokens: u32,
+    ) -> Result<AgentResponse, AgentError> {
+        const MAX_TOOL_ITERATIONS: usize = 5;
+        
+        for _ in 0..MAX_TOOL_ITERATIONS {
+            // Build request messages from session
+            let request_messages: Vec<ChatMessage> = self
+                .ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned())
+                .messages()
+                .iter()
+                .map(ChatMessage::from)
+                .collect();
+            
+            let request = ProviderRequest {
+                model: model.clone(),
+                temperature,
+                max_tokens,
+                messages: request_messages,
+            };
+            
+            // Get response from provider
+            let provider = self.ensure_provider().await?;
+            let response_text = provider.complete(&request).await
+                .map_err(|e| AgentError::ProviderError(e.to_string()))?;
+            
+            // Check if response contains tool commands
+            if let Some(tool_call) = parse_tool_command(&response_text, &self.tools) {
+                // Execute the tool
+                let runtime = self.ensure_tool_runtime().await?;
+                let runtime = runtime.with_context(ctx);
+                let tool_result = execute_tool(&tool_call, &runtime).await;
+                
+                // Add assistant message with tool call
+                let session = self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
+                session.add_message(
+                    Message::assistant(response_text.clone())
+                        .with_tool_call(tool_call.clone().with_result(tool_result.clone())),
+                );
+                
+                // Add tool result as system message
+                let result_message = format!(
+                    "Tool '{}' executed. Result: {}",
+                    tool_call.name,
+                    tool_result.output
+                );
+                let session = self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
+                session.add_message(Message::system(result_message));
+                
+                // Continue the loop to get the LLM's response to the tool result
+                continue;
+            } else {
+                // No tool call, this is the final response
+                let session = self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
+                session.add_message(Message::assistant(response_text.clone()));
+                
+                return Ok(AgentResponse {
+                    text: response_text,
+                    tool_calls: Vec::new(),
+                    session_updates: HashMap::new(),
+                    metadata: HashMap::new(),
+                });
+            }
+        }
+        
+        // Max iterations reached
+        Err(AgentError::ToolFailed("Maximum tool iterations reached".to_string()))
+    }
 }
 
 #[async_trait]
@@ -426,7 +504,6 @@ impl Agent for SimpleAgent {
             ));
         }
 
-        let parsed_tool_call = parse_tool_command(&message, &self.tools);
         let system_prompt = self.system_prompt();
         let model = self.config.model.clone();
         let temperature = self.config.temperature;
@@ -440,32 +517,6 @@ impl Agent for SimpleAgent {
             session.add_message(Message::system(system_prompt));
         }
         session.add_message(Message::user(message.clone()));
-
-        if let Some(call) = parsed_tool_call {
-            let runtime = match self.ensure_tool_runtime().await {
-                Ok(runtime) => runtime,
-                Err(err) => {
-                    self.state = AgentState::Error(err.to_string());
-                    return AgentResponse::text(format!("Tool runtime error: {}", err));
-                }
-            };
-            let runtime = runtime.with_context(ctx);
-            let result = execute_tool(&call, &runtime).await;
-            let response_text = result.output.clone();
-            let session =
-                self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
-            session.add_message(
-                Message::assistant(response_text.clone())
-                    .with_tool_call(call.clone().with_result(result.clone())),
-            );
-            self.state = AgentState::Idle;
-            return AgentResponse {
-                text: response_text,
-                tool_calls: vec![call.with_result(result)],
-                session_updates: HashMap::new(),
-                metadata: HashMap::new(),
-            };
-        }
 
         {
             let memory_config = self.memory_config.clone();
@@ -527,42 +578,19 @@ impl Agent for SimpleAgent {
                 session.apply_compaction(summary, keep_recent, keep_important);
             }
         }
-        let request_messages = self
-            .ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned())
-            .messages()
-            .iter()
-            .map(ChatMessage::from)
-            .collect();
-        let request = ProviderRequest {
-            model,
-            temperature,
-            max_tokens,
-            messages: request_messages,
-        };
-        let response = match self.ensure_provider().await {
-            Ok(provider) => match provider.complete(&request).await {
-                Ok(text) => {
-                    let session =
-                        self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
-                    session.add_message(Message::assistant(text.clone()));
-                    self.state = AgentState::Idle;
-                    AgentResponse::text(text)
-                }
-                Err(err) => {
-                    self.state = AgentState::Error(err.to_string());
-                    AgentResponse::text(format!("Provider error: {}", err))
-                }
-            },
+        // Run the agent loop: get LLM response, execute tools if needed, get final response
+        let final_response = match self.run_agent_loop(&ctx, model, temperature, max_tokens).await {
+            Ok(response) => response,
             Err(err) => {
                 self.state = AgentState::Error(err.to_string());
-                AgentResponse::text(format!("Provider error: {}", err))
+                AgentResponse::text(format!("Agent error: {}", err))
             }
         };
 
         if matches!(self.state, AgentState::Processing) {
             self.state = AgentState::Idle;
         }
-        response
+        final_response
     }
 
     fn tools(&self) -> &[Tool] {
