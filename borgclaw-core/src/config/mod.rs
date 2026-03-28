@@ -783,7 +783,35 @@ pub struct McpServerConfig {
 /// Load configuration from file
 pub fn load_config(path: &PathBuf) -> Result<AppConfig, config::ConfigError> {
     let content = std::fs::read_to_string(path)?;
-    toml::from_str(&content).map_err(config::ConfigError::Parse)
+    let mut config: AppConfig = toml::from_str(&content).map_err(config::ConfigError::Parse)?;
+    
+    // Normalize deprecated model names
+    config.agent.model = normalize_model_name(&config.agent.model);
+    
+    Ok(config)
+}
+
+/// Normalize deprecated model names to current versions
+fn normalize_model_name(model: &str) -> String {
+    match model {
+        "m2.77" => {
+            tracing::info!("Normalized deprecated model name: m2.77 -> MiniMax-M2.7");
+            "MiniMax-M2.7".to_string()
+        }
+        "m2.5" => {
+            tracing::info!("Normalized deprecated model name: m2.5 -> MiniMax-M2.5");
+            "MiniMax-M2.5".to_string()
+        }
+        "m2.7" => {
+            tracing::info!("Normalized deprecated model name: m2.7 -> MiniMax-M2.7");
+            "MiniMax-M2.7".to_string()
+        }
+        "k2.5" => {
+            tracing::info!("Normalized deprecated model name: k2.5 -> kimi-k2.5");
+            "kimi-k2.5".to_string()
+        }
+        other => other.to_string(),
+    }
 }
 
 /// Save configuration to file
@@ -1272,5 +1300,32 @@ mod tests {
         assert_eq!(config.agent.model, "MiniMax-M2.7");
         assert_eq!(config.agent.max_tokens, 4096);
         assert_eq!(config.agent.temperature, 0.7);
+    }
+
+    #[test]
+    fn normalize_model_name_m277() {
+        assert_eq!(normalize_model_name("m2.77"), "MiniMax-M2.7");
+    }
+
+    #[test]
+    fn normalize_model_name_m25() {
+        assert_eq!(normalize_model_name("m2.5"), "MiniMax-M2.5");
+    }
+
+    #[test]
+    fn normalize_model_name_m27() {
+        assert_eq!(normalize_model_name("m2.7"), "MiniMax-M2.7");
+    }
+
+    #[test]
+    fn normalize_model_name_k25() {
+        assert_eq!(normalize_model_name("k2.5"), "kimi-k2.5");
+    }
+
+    #[test]
+    fn normalize_model_name_unchanged() {
+        assert_eq!(normalize_model_name("MiniMax-M2.7"), "MiniMax-M2.7");
+        assert_eq!(normalize_model_name("gpt-4o"), "gpt-4o");
+        assert_eq!(normalize_model_name("claude-sonnet-4"), "claude-sonnet-4");
     }
 }
