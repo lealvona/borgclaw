@@ -108,6 +108,73 @@ else
     fi
 fi
 
+# Check for secrets/encryption setup
+echo ""
+echo "[borgclaw] Checking secret store configuration..."
+
+# Check if .env exists with secrets that should be migrated
+if [ -f ".env" ]; then
+    ENV_SECRETS=$(grep -E '(_API_KEY|_TOKEN|_SECRET|_PASSWORD|CLIENT_ID|CLIENT_SECRET)=' .env 2>/dev/null | wc -l)
+    if [ "$ENV_SECRETS" -gt 0 ]; then
+        echo ""
+        echo -e "\033[0;33m⚠ Found $ENV_SECRETS secret(s) in .env file\033[0m"
+        echo "[borgclaw] Secrets should be stored in the encrypted vault for security."
+        echo ""
+        read -p "Migrate .env secrets to encrypted store now? [y/N] " -n 1 -r
+        echo ""
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            ./scripts/migrate-env-to-secrets.sh
+        else
+            echo "  You can migrate later with: ./scripts/migrate-env-to-secrets.sh"
+        fi
+    fi
+fi
+
+# Check if encryption key exists
+BORGCLAW_WORKSPACE="${HOME}/.borgclaw"
+SECRETS_FILE="${BORGCLAW_WORKSPACE}/secrets.enc"
+KEY_FILE="${BORGCLAW_WORKSPACE}/secrets.enc.key"
+
+if [ -f "$SECRETS_FILE" ] && [ -f "$KEY_FILE" ]; then
+    echo -e "\033[0;32m✓\033[0m Encrypted secret store: Configured"
+    echo "  Location: $SECRETS_FILE"
+    echo "  Key file: $KEY_FILE"
+elif [ -f "$SECRETS_FILE" ] && [ ! -f "$KEY_FILE" ]; then
+    echo ""
+    echo -e "\033[0;31m✗\033[0m Warning: Secrets file exists but encryption key is missing!"
+    echo "  Secrets: $SECRETS_FILE"
+    echo "  Key: $KEY_FILE (NOT FOUND)"
+    echo ""
+    echo "[borgclaw] Run onboarding to regenerate the encryption key."
+else
+    echo ""
+    echo -e "\033[0;33m○\033[0m Encrypted secret store: Not initialized"
+    echo "[borgclaw] Secret store will be created during onboarding."
+fi
+
+# Check for provider API key
+if command -v ./target/release/borgclaw &> /dev/null || command -v ./target/debug/borgclaw &> /dev/null; then
+    BORGCLAW_BIN="./target/release/borgclaw"
+    [ ! -f "$BORGCLAW_BIN" ] && BORGCLAW_BIN="./target/debug/borgclaw"
+    
+    # Check if any provider key is configured
+    if ! $BORGCLAW_BIN secrets list 2>/dev/null | grep -q "_API_KEY"; then
+        echo ""
+        echo -e "\033[0;33m○\033[0m No API keys configured"
+        echo "[borgclaw] You'll need an API key to use LLM features."
+        echo ""
+        read -p "Set up provider API key now? [y/N] " -n 1 -r
+        echo ""
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            ./scripts/setup-provider-key.sh
+        else
+            echo "  You can set up later with: ./scripts/setup-provider-key.sh"
+        fi
+    else
+        echo -e "\033[0;32m✓\033[0m API key(s) configured"
+    fi
+fi
+
 echo ""
 echo "[borgclaw] ✅ Bootstrap complete!"
 echo ""

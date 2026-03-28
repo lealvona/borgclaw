@@ -3643,6 +3643,7 @@ mod tests {
         AgentConfig, ApprovalMode, HeartbeatConfig, McpConfig, McpServerConfig, MemoryConfig,
         SchedulerConfig, SecurityConfig,
     };
+    use crate::constants::DEFAULT_TOOL_VERSION;
     use crate::scheduler::JobStatus;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 

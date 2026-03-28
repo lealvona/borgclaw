@@ -407,6 +407,7 @@ fn resolve_policy_path(workspace_root: &Path, path: &Path) -> Result<PathBuf, St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::DEFAULT_PLUGIN_VERSION;
 
     #[test]
     fn plugin_manifest_parses_documented_permissions_table() {

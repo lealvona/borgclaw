@@ -1784,15 +1784,16 @@ mod tests {
     #[test]
     fn existing_config_choices_include_documented_status_flow() {
         let choices = existing_config_choices();
-        assert_eq!(choices[0], "Reconfigure");
-        assert_eq!(choices[1], "Status");
-        assert_eq!(choices[2], "Quit");
+        assert_eq!(choices[0], "Reconfigure all (full wizard)");
+        assert_eq!(choices[1], "Reconfigure specific section...");
+        assert_eq!(choices[2], "Status");
+        assert_eq!(choices[3], "Quit");
         assert!(matches!(
-            existing_config_action(1),
+            existing_config_action(2),
             ExistingConfigAction::Status
         ));
         assert!(matches!(
-            existing_config_action(2),
+            existing_config_action(3),
             ExistingConfigAction::Quit
         ));
     }
@@ -1822,7 +1823,7 @@ mod tests {
     }
 
     #[test]
-    fn generate_env_includes_provider_secret_from_secure_store() {
+    fn generate_env_excludes_provider_secret_for_security() {
         let root = std::env::temp_dir().join(format!(
             "borgclaw_onboarding_env_test_{}",
             uuid::Uuid::new_v4()
@@ -1847,8 +1848,10 @@ mod tests {
             .unwrap();
 
         let env = std::fs::read_to_string(&env_path).unwrap();
+        // Non-secret config IS exported
         assert!(env.contains("BORGCLAW_PROVIDER=anthropic"));
-        assert!(env.contains("ANTHROPIC_API_KEY=secret-value"));
+        // Secrets are NOT exported to .env (they stay in encrypted secure store)
+        assert!(!env.contains("ANTHROPIC_API_KEY=secret-value"));
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -2059,7 +2062,7 @@ mod tests {
     }
 
     #[test]
-    fn generate_env_includes_webhook_secret_from_secure_store() {
+    fn generate_env_excludes_webhook_secret_for_security() {
         let root = std::env::temp_dir().join(format!(
             "borgclaw_onboarding_webhook_env_test_{}",
             uuid::Uuid::new_v4()
@@ -2089,13 +2092,14 @@ mod tests {
             .unwrap();
 
         let env = std::fs::read_to_string(&env_path).unwrap();
-        assert!(env.contains("WEBHOOK_SECRET=hook-secret"));
+        // Webhook secret is NOT exported to .env (stays in encrypted secure store)
+        assert!(!env.contains("WEBHOOK_SECRET=hook-secret"));
 
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn generate_env_includes_telegram_token_from_secure_store() {
+    fn generate_env_excludes_telegram_token_for_security() {
         let root = std::env::temp_dir().join(format!(
             "borgclaw_onboarding_telegram_env_test_{}",
             uuid::Uuid::new_v4()
@@ -2122,7 +2126,8 @@ mod tests {
             .unwrap();
 
         let env = std::fs::read_to_string(&env_path).unwrap();
-        assert!(env.contains("TELEGRAM_BOT_TOKEN=tg-secret"));
+        // Telegram token is NOT exported to .env (stays in encrypted secure store)
+        assert!(!env.contains("TELEGRAM_BOT_TOKEN=tg-secret"));
 
         std::fs::remove_dir_all(root).unwrap();
     }
