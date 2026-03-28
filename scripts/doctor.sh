@@ -121,6 +121,12 @@ echo "  borgclaw secrets list    - List stored secrets"
 echo "  borgclaw backup export   - Export runtime state"
 
 echo ""
+echo "=== Gateway Web Interface ==="
+echo "  Start:    ./scripts/gateway.sh"
+echo "  URL:      http://localhost:3000"
+echo "  Config:   Press Ctrl+, in browser for visual editor"
+
+echo ""
 echo "========================"
 if [ $ERRORS -eq 0 ]; then
     echo -e "\033[0;32m✅ All checks passed!\033[0m"

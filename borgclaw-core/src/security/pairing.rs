@@ -165,9 +165,9 @@ mod tests {
     #[test]
     fn pairing_manager_generate_code_creates_valid_code() {
         let mut manager = PairingManager::new(6, 300);
-        
+
         let code = manager.generate_code("sender-123").unwrap();
-        
+
         assert_eq!(code.len(), 6);
         // Should be all digits
         assert!(code.chars().all(|c| c.is_ascii_digit()));
@@ -176,17 +176,17 @@ mod tests {
     #[test]
     fn pairing_manager_generate_code_different_codes() {
         let mut manager = PairingManager::new(6, 300);
-        
+
         let code1 = manager.generate_code("sender-1").unwrap();
         let code2 = manager.generate_code("sender-2").unwrap();
-        
+
         assert_ne!(code1, code2);
     }
 
     #[test]
     fn pairing_manager_check_sender_unknown() {
         let manager = PairingManager::new(6, 300);
-        
+
         let status = manager.check_sender("unknown-sender");
         assert!(matches!(status, super::super::PairingStatus::Unknown));
     }
@@ -194,9 +194,9 @@ mod tests {
     #[test]
     fn pairing_manager_check_sender_pending() {
         let mut manager = PairingManager::new(6, 300);
-        
+
         manager.generate_code("sender-pending").unwrap();
-        
+
         let status = manager.check_sender("sender-pending");
         assert!(matches!(status, super::super::PairingStatus::Pending));
     }
@@ -204,10 +204,10 @@ mod tests {
     #[test]
     fn pairing_manager_check_sender_approved() {
         let mut manager = PairingManager::new(6, 300);
-        
+
         let code = manager.generate_code("sender-approve").unwrap();
         manager.approve_code(&code).unwrap();
-        
+
         let status = manager.check_sender("sender-approve");
         assert!(matches!(status, super::super::PairingStatus::Approved));
     }
@@ -215,10 +215,10 @@ mod tests {
     #[test]
     fn pairing_manager_approve_code_success() {
         let mut manager = PairingManager::new(6, 300);
-        
+
         let code = manager.generate_code("sender-to-approve").unwrap();
         let result = manager.approve_code(&code);
-        
+
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "sender-to-approve");
     }
@@ -226,9 +226,9 @@ mod tests {
     #[test]
     fn pairing_manager_approve_invalid_code_fails() {
         let mut manager = PairingManager::new(6, 300);
-        
+
         let result = manager.approve_code("000000");
-        
+
         assert!(result.is_err());
         match result {
             Err(super::super::SecurityError::PairingError(msg)) => {
@@ -241,17 +241,23 @@ mod tests {
     #[test]
     fn pairing_manager_approve_moves_to_approved() {
         let mut manager = PairingManager::new(6, 300);
-        
+
         let code = manager.generate_code("sender-move").unwrap();
-        
+
         // Before approval - pending
-        assert!(matches!(manager.check_sender("sender-move"), super::super::PairingStatus::Pending));
-        
+        assert!(matches!(
+            manager.check_sender("sender-move"),
+            super::super::PairingStatus::Pending
+        ));
+
         manager.approve_code(&code).unwrap();
-        
+
         // After approval - approved
-        assert!(matches!(manager.check_sender("sender-move"), super::super::PairingStatus::Approved));
-        
+        assert!(matches!(
+            manager.check_sender("sender-move"),
+            super::super::PairingStatus::Approved
+        ));
+
         // Code should be removed from pending
         assert!(manager.approve_code(&code).is_err());
     }
@@ -259,24 +265,30 @@ mod tests {
     #[test]
     fn pairing_manager_unpair_removes_approval() {
         let mut manager = PairingManager::new(6, 300);
-        
+
         let code = manager.generate_code("sender-unpair").unwrap();
         manager.approve_code(&code).unwrap();
-        
-        assert!(matches!(manager.check_sender("sender-unpair"), super::super::PairingStatus::Approved));
-        
+
+        assert!(matches!(
+            manager.check_sender("sender-unpair"),
+            super::super::PairingStatus::Approved
+        ));
+
         manager.unpair("sender-unpair");
-        
-        assert!(matches!(manager.check_sender("sender-unpair"), super::super::PairingStatus::Unknown));
+
+        assert!(matches!(
+            manager.check_sender("sender-unpair"),
+            super::super::PairingStatus::Unknown
+        ));
     }
 
     #[test]
     fn pairing_manager_list_pending() {
         let mut manager = PairingManager::new(6, 300);
-        
+
         manager.generate_code("sender-a").unwrap();
         manager.generate_code("sender-b").unwrap();
-        
+
         let pending = manager.list_pending();
         assert_eq!(pending.len(), 2);
     }
@@ -284,16 +296,16 @@ mod tests {
     #[test]
     fn pairing_manager_list_approved() {
         let mut manager = PairingManager::new(6, 300);
-        
+
         let code1 = manager.generate_code("sender-1").unwrap();
         let code2 = manager.generate_code("sender-2").unwrap();
-        
+
         manager.approve_code(&code1).unwrap();
         manager.approve_code(&code2).unwrap();
-        
+
         let approved = manager.list_approved();
         assert_eq!(approved.len(), 2);
-        
+
         let sender_ids: Vec<_> = approved.iter().map(|(id, _)| id.clone()).collect();
         assert!(sender_ids.contains(&"sender-1".to_string()));
         assert!(sender_ids.contains(&"sender-2".to_string()));
@@ -302,12 +314,12 @@ mod tests {
     #[test]
     fn pairing_manager_approve_expired_code_fails() {
         let mut manager = PairingManager::new(6, 0); // 0 second expiry
-        
+
         let code = manager.generate_code("sender-expired").unwrap();
-        
+
         // Wait a bit to ensure expiry
         std::thread::sleep(std::time::Duration::from_millis(10));
-        
+
         let result = manager.approve_code(&code);
         assert!(result.is_err());
         match result {
@@ -321,17 +333,20 @@ mod tests {
     #[test]
     fn pairing_manager_generate_code_cleans_expired() {
         let mut manager = PairingManager::new(6, 0); // 0 second expiry
-        
+
         manager.generate_code("sender-old").unwrap();
-        
+
         // Wait for expiry
         std::thread::sleep(std::time::Duration::from_millis(10));
-        
+
         // Generate new code - should clean expired
         manager.generate_code("sender-new").unwrap();
-        
+
         // Old sender should be unknown now
-        assert!(matches!(manager.check_sender("sender-old"), super::super::PairingStatus::Unknown));
+        assert!(matches!(
+            manager.check_sender("sender-old"),
+            super::super::PairingStatus::Unknown
+        ));
     }
 
     #[test]
@@ -347,7 +362,7 @@ mod tests {
     fn pairing_manager_different_lengths() {
         let manager_short = PairingManager::new(4, 300);
         let manager_long = PairingManager::new(10, 300);
-        
+
         assert_eq!(manager_short.code_length, 4);
         assert_eq!(manager_long.code_length, 10);
     }
@@ -355,16 +370,19 @@ mod tests {
     #[test]
     fn pairing_manager_multiple_codes_same_sender() {
         let mut manager = PairingManager::new(6, 300);
-        
+
         // Generate multiple codes for same sender
         let code1 = manager.generate_code("same-sender").unwrap();
         let code2 = manager.generate_code("same-sender").unwrap();
-        
+
         // Both codes should work
         assert!(manager.approve_code(&code1).is_ok());
-        
+
         // Second code might or might not work depending on implementation
         // After approval, sender is approved anyway
-        assert!(matches!(manager.check_sender("same-sender"), super::super::PairingStatus::Approved));
+        assert!(matches!(
+            manager.check_sender("same-sender"),
+            super::super::PairingStatus::Approved
+        ));
     }
 }

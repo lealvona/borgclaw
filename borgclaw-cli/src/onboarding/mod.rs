@@ -69,43 +69,97 @@ fn print_provider_info(provider_id: &str) {
     println!();
     match provider_id {
         "openai" => {
-            println!("{} OpenAI provides GPT models including GPT-4 and GPT-3.5.", paint(INFO, "ℹ"));
-            println!("{} Get your API key at: https://platform.openai.com/api-keys", paint(INFO, "→"));
+            println!(
+                "{} OpenAI provides GPT models including GPT-4 and GPT-3.5.",
+                paint(INFO, "ℹ")
+            );
+            println!(
+                "{} Get your API key at: https://platform.openai.com/api-keys",
+                paint(INFO, "→")
+            );
             println!("{} Pricing: https://openai.com/pricing", paint(INFO, "→"));
         }
         "anthropic" => {
-            println!("{} Anthropic provides Claude models with strong reasoning capabilities.", paint(INFO, "ℹ"));
-            println!("{} Get your API key at: https://console.anthropic.com/settings/keys", paint(INFO, "→"));
-            println!("{} Pricing: https://www.anthropic.com/pricing", paint(INFO, "→"));
+            println!(
+                "{} Anthropic provides Claude models with strong reasoning capabilities.",
+                paint(INFO, "ℹ")
+            );
+            println!(
+                "{} Get your API key at: https://console.anthropic.com/settings/keys",
+                paint(INFO, "→")
+            );
+            println!(
+                "{} Pricing: https://www.anthropic.com/pricing",
+                paint(INFO, "→")
+            );
         }
         "google" => {
-            println!("{} Google provides Gemini models with multimodal capabilities.", paint(INFO, "ℹ"));
-            println!("{} Get your API key at: https://makersuite.google.com/app/apikey", paint(INFO, "→"));
-            println!("{} Pricing: https://ai.google.dev/pricing", paint(INFO, "→"));
+            println!(
+                "{} Google provides Gemini models with multimodal capabilities.",
+                paint(INFO, "ℹ")
+            );
+            println!(
+                "{} Get your API key at: https://makersuite.google.com/app/apikey",
+                paint(INFO, "→")
+            );
+            println!(
+                "{} Pricing: https://ai.google.dev/pricing",
+                paint(INFO, "→")
+            );
         }
         "kimi" => {
             println!("{} Kimi (Moonshot) provides kimi-k2.5 with 256K context and agent swarm capabilities.", paint(INFO, "ℹ"));
-            println!("{} Get your API key at: https://platform.moonshot.ai/", paint(INFO, "→"));
-            println!("{} Docs: https://platform.moonshot.ai/docs", paint(INFO, "→"));
+            println!(
+                "{} Get your API key at: https://platform.moonshot.ai/",
+                paint(INFO, "→")
+            );
+            println!(
+                "{} Docs: https://platform.moonshot.ai/docs",
+                paint(INFO, "→")
+            );
         }
         "minimax" => {
-            println!("{} MiniMax provides M2.7 series models optimized for agentic workflows.", paint(INFO, "ℹ"));
-            println!("{} Get your API key at: https://platform.minimax.io/", paint(INFO, "→"));
-            println!("{} Docs: https://platform.minimax.io/docs", paint(INFO, "→"));
+            println!(
+                "{} MiniMax provides M2.7 series models optimized for agentic workflows.",
+                paint(INFO, "ℹ")
+            );
+            println!(
+                "{} Get your API key at: https://platform.minimax.io/",
+                paint(INFO, "→")
+            );
+            println!(
+                "{} Docs: https://platform.minimax.io/docs",
+                paint(INFO, "→")
+            );
         }
         "z" => {
-            println!("{} Z.ai provides GLM-4.7 series models with strong coding capabilities.", paint(INFO, "ℹ"));
-            println!("{} Get your API key at: https://z.ai/model-api", paint(INFO, "→"));
+            println!(
+                "{} Z.ai provides GLM-4.7 series models with strong coding capabilities.",
+                paint(INFO, "ℹ")
+            );
+            println!(
+                "{} Get your API key at: https://z.ai/model-api",
+                paint(INFO, "→")
+            );
             println!("{} Docs: https://docs.z.ai/", paint(INFO, "→"));
         }
         "ollama" => {
-            println!("{} Ollama runs models locally - no API key needed!", paint(INFO, "ℹ"));
-            println!("{} Install from: https://ollama.com/download", paint(INFO, "→"));
+            println!(
+                "{} Ollama runs models locally - no API key needed!",
+                paint(INFO, "ℹ")
+            );
+            println!(
+                "{} Install from: https://ollama.com/download",
+                paint(INFO, "→")
+            );
             println!("{} Pull models: ollama pull llama3", paint(INFO, "→"));
         }
         _ => {
             println!("{} Custom OpenAI-compatible provider.", paint(INFO, "ℹ"));
-            println!("{} Ensure your provider supports the OpenAI API format.", paint(INFO, "→"));
+            println!(
+                "{} Ensure your provider supports the OpenAI API format.",
+                paint(INFO, "→")
+            );
         }
     }
     println!();
@@ -306,20 +360,8 @@ pub async fn run_init(
 
     generate_env_file(&config, &env_updates, &PathBuf::from(".env")).await?;
     println!();
-    println!(
-        "{}",
-        paint(
-            SUCCESS,
-            "✅ Configuration saved!"
-        )
-    );
-    println!(
-        "{}",
-        paint(
-            INFO,
-            "📝 Non-sensitive config: .env"
-        )
-    );
+    println!("{}", paint(SUCCESS, "✅ Configuration saved!"));
+    println!("{}", paint(INFO, "📝 Non-sensitive config: .env"));
     println!(
         "{}",
         paint(
@@ -327,13 +369,7 @@ pub async fn run_init(
             "🔐 Secrets stored in: encrypted vault (~/.config/borgclaw/)"
         )
     );
-    println!(
-        "{}",
-        paint(
-            INFO,
-            "   View secrets: borgclaw secrets list"
-        )
-    );
+    println!("{}", paint(INFO, "   View secrets: borgclaw secrets list"));
     println!();
 
     Ok(InitOutcome {
@@ -402,7 +438,7 @@ async fn configure_provider_and_model(
         "{}",
         paint(MANDATORY, "[MANDATORY] Provider and model selection")
     );
-    
+
     // Quick mode: use existing or defaults without prompting
     if quick {
         if config.agent.provider.is_empty() {
@@ -410,12 +446,14 @@ async fn configure_provider_and_model(
             config.agent.model = "gpt-4o".to_string();
         }
         // Rate limit and env updates happen silently in quick mode
-        let provider = registry.providers.get(&config.agent.provider)
+        let provider = registry
+            .providers
+            .get(&config.agent.provider)
             .ok_or("Selected provider not found")?;
         config.agent.rate_limit_rpm = Some(provider.rate_limit_rpm_with_default());
         return Ok(());
     }
-    
+
     println!(
         "{} This chooses the AI brain for BorgClaw. Select from commercial APIs (OpenAI, Anthropic, etc.) or local models.",
         paint(INFO, "ℹ")
@@ -475,10 +513,10 @@ async fn configure_provider_and_model(
             .api_key_env
             .clone()
             .unwrap_or_else(|| "BORGCLAW_API_KEY".to_string());
-        
+
         // Show provider-specific info with links
         print_provider_info(&provider.id);
-        
+
         let update_key = if quick {
             true
         } else {
@@ -1472,16 +1510,34 @@ async fn reconfigure_section(
 ) -> Result<(), String> {
     println!();
     println!("{}", paint(HEADER, "Reconfigure Specific Section"));
-    println!("{} Select which group of settings to update:", paint(INFO, "ℹ"));
+    println!(
+        "{} Select which group of settings to update:",
+        paint(INFO, "ℹ")
+    );
     println!();
 
     let sections = vec![
-        ("Provider & Model", "AI brain configuration (OpenAI, Anthropic, local models)"),
-        ("Channels", "Communication interfaces (Telegram, Signal, WebSocket, Webhook)"),
+        (
+            "Provider & Model",
+            "AI brain configuration (OpenAI, Anthropic, local models)",
+        ),
+        (
+            "Channels",
+            "Communication interfaces (Telegram, Signal, WebSocket, Webhook)",
+        ),
         ("Security", "WASM sandbox, secrets, encryption settings"),
-        ("Memory", "SQLite settings, session management, context windows"),
-        ("Skills Registry", "GitHub, Google Workspace, browser automation"),
-        ("Skill Integrations", "STT/TTS, image generation, URL shortener"),
+        (
+            "Memory",
+            "SQLite settings, session management, context windows",
+        ),
+        (
+            "Skills Registry",
+            "GitHub, Google Workspace, browser automation",
+        ),
+        (
+            "Skill Integrations",
+            "STT/TTS, image generation, URL shortener",
+        ),
     ];
 
     let labels: Vec<String> = sections
@@ -1568,7 +1624,7 @@ async fn generate_env_file(
     // Filter out sensitive values - only keep non-secret config
     let sensitive_keys = [
         "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY", 
+        "ANTHROPIC_API_KEY",
         "GOOGLE_API_KEY",
         "KIMI_API_KEY",
         "MINIMAX_API_KEY",
@@ -1582,40 +1638,52 @@ async fn generate_env_file(
         "GOOGLE_CLIENT_SECRET",
         "YOURLS_PASSWORD",
     ];
-    
+
     let mut env: HashMap<String, String> = read_env_file(out_path)
         .into_iter()
         .filter(|(k, _)| !sensitive_keys.contains(&k.as_str()))
         .collect();
-    
+
     // Only add non-sensitive updates
     for (k, v) in env_updates {
         if !sensitive_keys.contains(&k.as_str()) {
             env.insert(k.clone(), v.clone());
         }
     }
-    
+
     // Normalize known bad model names (migration from old buggy values)
     let model = match config.agent.model.as_str() {
         "m2.77" => {
-            println!("{} Fixed deprecated model name: m2.77 -> MiniMax-M2.7", paint(WARN, "⚠"));
+            println!(
+                "{} Fixed deprecated model name: m2.77 -> MiniMax-M2.7",
+                paint(WARN, "⚠")
+            );
             "MiniMax-M2.7"
         }
         "m2.5" => {
-            println!("{} Fixed deprecated model name: m2.5 -> MiniMax-M2.5", paint(WARN, "⚠"));
+            println!(
+                "{} Fixed deprecated model name: m2.5 -> MiniMax-M2.5",
+                paint(WARN, "⚠")
+            );
             "MiniMax-M2.5"
         }
         "m2.7" => {
-            println!("{} Fixed deprecated model name: m2.7 -> MiniMax-M2.7", paint(WARN, "⚠"));
+            println!(
+                "{} Fixed deprecated model name: m2.7 -> MiniMax-M2.7",
+                paint(WARN, "⚠")
+            );
             "MiniMax-M2.7"
         }
         "k2.5" => {
-            println!("{} Fixed deprecated model name: k2.5 -> kimi-k2.5", paint(WARN, "⚠"));
+            println!(
+                "{} Fixed deprecated model name: k2.5 -> kimi-k2.5",
+                paint(WARN, "⚠")
+            );
             "kimi-k2.5"
         }
         other => other,
     };
-    
+
     env.insert(
         "BORGCLAW_PROVIDER".to_string(),
         config.agent.provider.clone(),
@@ -1628,14 +1696,16 @@ async fn generate_env_file(
             env.insert(env_key, env_value);
         }
     }
-    
+
     let mut lines = Vec::new();
     lines.push("# BorgClaw Environment (generated)".to_string());
-    lines.push("# Non-sensitive configuration only - secrets are stored in encrypted store".to_string());
+    lines.push(
+        "# Non-sensitive configuration only - secrets are stored in encrypted store".to_string(),
+    );
     lines.push("# Run: borgclaw secrets list  # to see stored secrets".to_string());
     lines.push("".to_string());
     lines.push("# Provider Configuration".to_string());
-    
+
     for (k, v) in &env {
         lines.push(format!("{}={}", k, v));
     }
@@ -1883,11 +1953,26 @@ mod tests {
 
         // Verify secrets are NOT in .env (they stay in encrypted store)
         let env = std::fs::read_to_string(&env_path).unwrap();
-        assert!(!env.contains("ghp-secret"), "GITHUB_TOKEN should not be in .env");
-        assert!(!env.contains("google-client-id"), "GOOGLE_CLIENT_ID should not be in .env");
-        assert!(!env.contains("google-client-secret"), "GOOGLE_CLIENT_SECRET should not be in .env");
-        assert!(!env.contains("eleven-secret"), "ELEVENLABS_API_KEY should not be in .env");
-        assert!(!env.contains("yourls-secret"), "YOURLS_PASSWORD should not be in .env");
+        assert!(
+            !env.contains("ghp-secret"),
+            "GITHUB_TOKEN should not be in .env"
+        );
+        assert!(
+            !env.contains("google-client-id"),
+            "GOOGLE_CLIENT_ID should not be in .env"
+        );
+        assert!(
+            !env.contains("google-client-secret"),
+            "GOOGLE_CLIENT_SECRET should not be in .env"
+        );
+        assert!(
+            !env.contains("eleven-secret"),
+            "ELEVENLABS_API_KEY should not be in .env"
+        );
+        assert!(
+            !env.contains("yourls-secret"),
+            "YOURLS_PASSWORD should not be in .env"
+        );
 
         // Verify secrets are still retrievable from encrypted store
         let security = SecurityLayer::with_config(config.security.clone());

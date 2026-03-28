@@ -109,10 +109,10 @@ mod tests {
                 }
             }),
         };
-        
+
         let json = serde_json::to_string(&tool).unwrap();
         let deserialized: McpTool = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(deserialized.name, "test_tool");
         assert_eq!(deserialized.description, Some("A test tool".to_string()));
     }
@@ -125,10 +125,10 @@ mod tests {
             description: Some("A test file".to_string()),
             mime_type: Some("text/plain".to_string()),
         };
-        
+
         let json = serde_json::to_string(&resource).unwrap();
         let deserialized: McpResource = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(deserialized.uri, "file:///test.txt");
         assert_eq!(deserialized.name, Some("test.txt".to_string()));
         assert_eq!(deserialized.mime_type, Some("text/plain".to_string()));
@@ -136,12 +136,14 @@ mod tests {
 
     #[test]
     fn mcp_content_text_variant() {
-        let content = McpContent::Text { text: "Hello".to_string() };
+        let content = McpContent::Text {
+            text: "Hello".to_string(),
+        };
         let json = serde_json::to_string(&content).unwrap();
-        
+
         assert!(json.contains("\"type\":\"Text\""));
         assert!(json.contains("\"text\":\"Hello\""));
-        
+
         let deserialized: McpContent = serde_json::from_str(&json).unwrap();
         match deserialized {
             McpContent::Text { text } => assert_eq!(text, "Hello"),
@@ -156,9 +158,9 @@ mod tests {
             mime_type: "image/png".to_string(),
         };
         let json = serde_json::to_string(&content).unwrap();
-        
+
         assert!(json.contains("\"type\":\"Image\""));
-        
+
         let deserialized: McpContent = serde_json::from_str(&json).unwrap();
         match deserialized {
             McpContent::Image { data, mime_type } => {
@@ -175,9 +177,9 @@ mod tests {
             resource: "resource-data".to_string(),
         };
         let json = serde_json::to_string(&content).unwrap();
-        
+
         assert!(json.contains("\"type\":\"Resource\""));
-        
+
         let deserialized: McpContent = serde_json::from_str(&json).unwrap();
         match deserialized {
             McpContent::Resource { resource } => assert_eq!(resource, "resource-data"),
@@ -189,15 +191,19 @@ mod tests {
     fn mcp_tool_result_serialization() {
         let result = McpToolResult {
             content: vec![
-                McpContent::Text { text: "Result 1".to_string() },
-                McpContent::Text { text: "Result 2".to_string() },
+                McpContent::Text {
+                    text: "Result 1".to_string(),
+                },
+                McpContent::Text {
+                    text: "Result 2".to_string(),
+                },
             ],
             is_error: Some(false),
         };
-        
+
         let json = serde_json::to_string(&result).unwrap();
         let deserialized: McpToolResult = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(deserialized.content.len(), 2);
         assert_eq!(deserialized.is_error, Some(false));
     }
@@ -215,10 +221,10 @@ mod tests {
                 version: "1.0.0".to_string(),
             },
         };
-        
+
         let json = serde_json::to_string(&request).unwrap();
         let deserialized: McpInitializeRequest = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(deserialized.protocol_version, "1.0");
         assert_eq!(deserialized.client_info.name, "TestClient");
         assert_eq!(deserialized.client_info.version, "1.0.0");
@@ -237,10 +243,10 @@ mod tests {
                 version: "2.0.0".to_string(),
             },
         };
-        
+
         let json = serde_json::to_string(&result).unwrap();
         let deserialized: McpInitializeResult = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(deserialized.protocol_version, "1.0");
         assert_eq!(deserialized.server_info.name, "TestServer");
         assert_eq!(deserialized.server_info.version, "2.0.0");
@@ -254,10 +260,10 @@ mod tests {
             method: "tools/list".to_string(),
             params: Some(serde_json::json!({"limit": 10})),
         };
-        
+
         let json = serde_json::to_string(&request).unwrap();
         let deserialized: McpJsonRpcRequest = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(deserialized.jsonrpc, "2.0");
         assert_eq!(deserialized.id, serde_json::json!(123));
         assert_eq!(deserialized.method, "tools/list");
@@ -272,10 +278,10 @@ mod tests {
             result: Some(serde_json::json!({"tools": []})),
             error: None,
         };
-        
+
         let json = serde_json::to_string(&response).unwrap();
         let deserialized: McpJsonRpcResponse = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(deserialized.jsonrpc, "2.0");
         assert_eq!(deserialized.id, serde_json::json!("req-1"));
         assert!(deserialized.result.is_some());
@@ -294,13 +300,13 @@ mod tests {
                 data: Some(serde_json::json!("additional info")),
             }),
         };
-        
+
         let json = serde_json::to_string(&response).unwrap();
         let deserialized: McpJsonRpcResponse = serde_json::from_str(&json).unwrap();
-        
+
         assert!(deserialized.result.is_none());
         assert!(deserialized.error.is_some());
-        
+
         let error = deserialized.error.unwrap();
         assert_eq!(error.code, -32600);
         assert_eq!(error.message, "Invalid request");
@@ -313,7 +319,7 @@ mod tests {
             tools: None,
             resources: None,
         };
-        
+
         assert!(caps.tools.is_none());
         assert!(caps.resources.is_none());
     }
@@ -323,12 +329,14 @@ mod tests {
         let content = McpResourceContent {
             uri: "file:///doc.txt".to_string(),
             mime_type: "text/plain".to_string(),
-            content: McpContent::Text { text: "Document content".to_string() },
+            content: McpContent::Text {
+                text: "Document content".to_string(),
+            },
         };
-        
+
         let json = serde_json::to_string(&content).unwrap();
         let deserialized: McpResourceContent = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(deserialized.uri, "file:///doc.txt");
         assert_eq!(deserialized.mime_type, "text/plain");
     }

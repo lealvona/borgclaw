@@ -301,34 +301,46 @@ async fn main() {
                 cfg
             }
             Err(e) => {
-                eprintln!("ERROR: Failed to load config from {}: {}", config_path.display(), e);
+                eprintln!(
+                    "ERROR: Failed to load config from {}: {}",
+                    config_path.display(),
+                    e
+                );
                 eprintln!("Using default config. Run 'borgclaw init' to reconfigure.");
                 AppConfig::default()
             }
         }
     } else {
-        info!("No config found at {}, using defaults", config_path.display());
+        info!(
+            "No config found at {}, using defaults",
+            config_path.display()
+        );
         AppConfig::default()
     };
-    
+
     // Override config with environment variables (BORGCLAW_* > config file)
     if let Ok(provider) = std::env::var("BORGCLAW_PROVIDER") {
         if !provider.is_empty() {
-            info!("Overriding provider from env: {} -> {}", config.agent.provider, provider);
+            info!(
+                "Overriding provider from env: {} -> {}",
+                config.agent.provider, provider
+            );
             config.agent.provider = provider;
         }
     }
     if let Ok(model) = std::env::var("BORGCLAW_MODEL") {
         if !model.is_empty() {
-            info!("Overriding model from env: {} -> {}", config.agent.model, model);
+            info!(
+                "Overriding model from env: {} -> {}",
+                config.agent.model, model
+            );
             config.agent.model = model;
         }
     }
-    
+
     info!(
         "Using config: provider={}, model={}",
-        config.agent.provider,
-        config.agent.model
+        config.agent.provider, config.agent.model
     );
 
     match cli.command {
