@@ -188,6 +188,8 @@ async fn main() {
         .route("/api/connections", get(api_connections))
         .route("/api/schedules", get(api_schedules))
         .route("/api/heartbeat/tasks", get(api_heartbeat_tasks))
+        .route("/api/subagents", get(api_subagents))
+        .route("/api/mcp/servers", get(api_mcp_servers))
         .route("/api/doctor", get(api_doctor))
         .layer(cors.clone())
         .with_state(state.clone());
@@ -244,35 +246,52 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         :root {
-            --bg-primary: #0d1117;
-            --bg-secondary: #161b22;
-            --bg-tertiary: #21262d;
+            --bg-primary: #0a0e14;
+            --bg-secondary: #0d1117;
+            --bg-tertiary: #161b22;
+            --bg-glass: rgba(13, 17, 23, 0.85);
             --border-color: #30363d;
+            --border-glow: rgba(0, 212, 170, 0.3);
             --text-primary: #e6edf3;
             --text-secondary: #8b949e;
-            --accent-cyan: #00d4ff;
-            --accent-purple: #7b2cbf;
+            --text-muted: #484f58;
+            --accent-cyan: #00d4aa;
+            --accent-cyan-glow: rgba(0, 212, 170, 0.4);
+            --accent-purple: #a371f7;
             --accent-green: #3fb950;
             --accent-blue: #58a6ff;
             --accent-orange: #f0883e;
+            --accent-red: #f85149;
             --danger: #f85149;
+            --font-mono: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
+            --shadow-glow: 0 0 20px var(--accent-cyan-glow);
+            --radius-sm: 6px;
+            --radius-md: 8px;
+            --radius-lg: 12px;
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
-            background: var(--bg-primary);
+            background: 
+                radial-gradient(ellipse at top, rgba(0, 212, 170, 0.03) 0%, transparent 50%),
+                radial-gradient(ellipse at bottom right, rgba(123, 44, 191, 0.03) 0%, transparent 50%),
+                var(--bg-primary);
             min-height: 100vh;
             color: var(--text-primary);
             line-height: 1.5;
         }
         
-        /* Navigation */
+        /* Navigation - Compact Elite Style */
         nav {
-            background: var(--bg-secondary);
-            border-bottom: 1px solid var(--border-color);
-            padding: 0 24px;
+            background: var(--bg-glass);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border-glow);
+            padding: 0 20px;
             position: sticky;
             top: 0;
             z-index: 100;
+            box-shadow: var(--shadow-sm);
         }
         .nav-content {
             max-width: 1400px;
@@ -280,62 +299,107 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
             display: flex;
             align-items: center;
             justify-content: space-between;
-            height: 64px;
+            height: 52px;
         }
         .logo {
             display: flex;
             align-items: center;
-            gap: 12px;
-            font-size: 1.25rem;
-            font-weight: 600;
+            gap: 10px;
+            font-size: 1.1rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            text-transform: uppercase;
         }
         .logo-icon {
-            font-size: 1.5rem;
+            font-size: 1.3rem;
+            filter: drop-shadow(0 0 8px var(--accent-cyan-glow));
+            animation: pulse-glow 3s ease-in-out infinite;
+        }
+        @keyframes pulse-glow {
+            0%, 100% { filter: drop-shadow(0 0 5px var(--accent-cyan-glow)); }
+            50% { filter: drop-shadow(0 0 15px var(--accent-cyan-glow)); }
         }
         .nav-links {
             display: flex;
-            gap: 24px;
+            gap: 20px;
+            align-items: center;
         }
         .nav-links a {
             color: var(--text-secondary);
             text-decoration: none;
-            font-size: 0.875rem;
+            font-size: 0.8rem;
             font-weight: 500;
-            transition: color 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding: 6px 12px;
+            border-radius: var(--radius-sm);
+            transition: all 0.2s ease;
+            position: relative;
         }
         .nav-links a:hover {
-            color: var(--text-primary);
+            color: var(--accent-cyan);
+            background: rgba(0, 212, 170, 0.1);
+        }
+        .nav-links a::after {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 50%;
+            width: 0;
+            height: 2px;
+            background: var(--accent-cyan);
+            transition: all 0.2s ease;
+            transform: translateX(-50%);
+        }
+        .nav-links a:hover::after {
+            width: 60%;
         }
         
-        /* Main Layout */
+        /* Main Layout - Compact Grid */
         main {
-            max-width: 1400px;
+            max-width: 1600px;
             margin: 0 auto;
-            padding: 24px;
+            padding: 16px 20px;
             display: grid;
-            grid-template-columns: 280px 1fr;
-            gap: 24px;
+            grid-template-columns: 260px 1fr;
+            gap: 16px;
         }
         
-        /* Sidebar */
+        /* Sidebar - Glass Panels */
         aside {
             display: flex;
             flex-direction: column;
-            gap: 16px;
+            gap: 12px;
         }
         .panel {
-            background: var(--bg-secondary);
+            background: var(--bg-glass);
+            backdrop-filter: blur(10px);
             border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 16px;
+            border-radius: var(--radius-md);
+            padding: 12px;
+            transition: all 0.2s ease;
+            box-shadow: var(--shadow-sm);
+        }
+        .panel:hover {
+            border-color: var(--border-glow);
+            box-shadow: 0 0 15px rgba(0, 212, 170, 0.1);
         }
         .panel h3 {
-            font-size: 0.75rem;
-            font-weight: 600;
+            font-size: 0.65rem;
+            font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.08em;
             color: var(--text-secondary);
-            margin-bottom: 12px;
+            margin-bottom: 10px;
+            font-family: var(--font-mono);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .panel h3::before {
+            content: '›';
+            color: var(--accent-cyan);
+            font-size: 0.9rem;
         }
         
         /* Status Indicator */
@@ -627,6 +691,207 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 height: 500px;
             }
         }
+        
+        /* ============================================
+           RESPONSIVE DESIGN - MOBILE OPTIMIZED
+           ============================================ */
+        
+        /* Tablet (768px - 1024px) */
+        @media (max-width: 1024px) {
+            main {
+                grid-template-columns: 220px 1fr;
+                gap: 14px;
+                padding: 14px 16px;
+            }
+            .nav-content {
+                height: 48px;
+            }
+            .logo {
+                font-size: 1rem;
+            }
+        }
+        
+        /* Mobile (up to 767px) */
+        @media (max-width: 767px) {
+            :root {
+                --radius-md: 6px;
+                --radius-lg: 8px;
+            }
+            
+            /* Nav becomes compact with hamburger */
+            nav {
+                padding: 0 12px;
+            }
+            .nav-content {
+                height: 44px;
+            }
+            .logo {
+                font-size: 0.95rem;
+                gap: 8px;
+            }
+            .logo-icon {
+                font-size: 1.1rem;
+            }
+            .nav-links {
+                gap: 8px;
+            }
+            .nav-links a {
+                font-size: 0.7rem;
+                padding: 4px 8px;
+                letter-spacing: 0.03em;
+            }
+            
+            /* Main becomes single column */
+            main {
+                grid-template-columns: 1fr;
+                gap: 12px;
+                padding: 12px;
+            }
+            
+            /* Sidebar becomes horizontal scrollable cards */
+            aside {
+                flex-direction: row;
+                gap: 10px;
+                overflow-x: auto;
+                padding-bottom: 4px;
+                scrollbar-width: none;
+                -ms-overflow-style: none;
+            }
+            aside::-webkit-scrollbar {
+                display: none;
+            }
+            .panel {
+                min-width: 160px;
+                flex-shrink: 0;
+                padding: 10px;
+            }
+            .panel h3 {
+                font-size: 0.6rem;
+                margin-bottom: 8px;
+            }
+            
+            /* Status compact */
+            .status-container {
+                padding: 8px;
+                gap: 8px;
+            }
+            .status-text {
+                font-size: 0.75rem;
+            }
+            
+            /* Metrics smaller */
+            .metrics-grid {
+                gap: 6px;
+            }
+            .metric {
+                padding: 8px;
+            }
+            .metric-value {
+                font-size: 1.1rem;
+            }
+            .metric-label {
+                font-size: 0.6rem;
+            }
+            
+            /* Menu items compact */
+            .menu-item {
+                padding: 6px 10px;
+                font-size: 0.8rem;
+            }
+            
+            /* Chat full height */
+            .chat-container {
+                height: calc(100vh - 200px);
+                min-height: 400px;
+            }
+            .chat-header {
+                padding: 12px 14px;
+            }
+            .chat-header h2 {
+                font-size: 0.9rem;
+            }
+            .chat-messages {
+                padding: 12px;
+            }
+            .message {
+                max-width: 90%;
+                padding: 10px 12px;
+                font-size: 0.9rem;
+            }
+            .chat-input-container {
+                padding: 10px 12px;
+            }
+            .chat-input {
+                padding: 10px 12px;
+                font-size: 16px; /* Prevents zoom on iOS */
+            }
+            
+            /* Footer compact */
+            footer {
+                padding: 12px;
+                font-size: 0.75rem;
+            }
+        }
+        
+        /* Small Mobile (up to 480px) */
+        @media (max-width: 480px) {
+            .nav-links a span {
+                display: none;
+            }
+            .nav-links a {
+                padding: 4px 6px;
+            }
+            .panel {
+                min-width: 140px;
+            }
+            .metric-value {
+                font-size: 1rem;
+            }
+        }
+        
+        /* Touch optimizations */
+        @media (hover: none) and (pointer: coarse) {
+            .btn, .menu-item, .nav-links a {
+                min-height: 44px;
+                min-width: 44px;
+            }
+            .chat-input {
+                font-size: 16px; /* Prevent zoom on focus */
+            }
+        }
+        
+        /* Dark mode optimization */
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-primary: #0a0e14;
+                --bg-secondary: #0d1117;
+            }
+        }
+        
+        /* Reduced motion preference */
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+            .logo-icon {
+                animation: none;
+            }
+            .status-dot {
+                animation: none;
+            }
+        }
+        
+        /* Landscape mobile optimization */
+        @media (max-height: 500px) and (orientation: landscape) {
+            .chat-container {
+                height: calc(100vh - 120px);
+            }
+            nav {
+                position: relative;
+            }
+        }
     </style>
 </head>
 <body>
@@ -839,6 +1104,10 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                     <button class="tab-btn" onclick="showConfigTab('security')">Security</button>
                     <button class="tab-btn" onclick="showConfigTab('memory')">Memory</button>
                     <button class="tab-btn" onclick="showConfigTab('skills')">Skills</button>
+                    <button class="tab-btn" onclick="showConfigTab('scheduler')">Scheduler</button>
+                    <button class="tab-btn" onclick="showConfigTab('heartbeat')">Heartbeat</button>
+                    <button class="tab-btn" onclick="showConfigTab('subagents')">Sub-agents</button>
+                    <button class="tab-btn" onclick="showConfigTab('mcp')">MCP</button>
                 </div>
                 
                 <!-- Agent Tab -->
@@ -1195,6 +1464,90 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
         .status-dot.ok { background: var(--neon-green); }
         .status-dot.warn { background: #ffaa00; }
         .status-dot.off { background: #666; }
+        
+        /* ============================================
+           MODAL RESPONSIVE STYLES
+           ============================================ */
+        
+        @media (max-width: 767px) {
+            .modal-content {
+                width: 95%;
+                max-width: none;
+                max-height: 90vh;
+                margin: 10px;
+            }
+            .modal-header {
+                padding: 14px 16px;
+            }
+            .modal-header h2 {
+                font-size: 1rem;
+            }
+            .modal-body {
+                padding: 16px;
+            }
+            .modal-footer {
+                padding: 14px 16px;
+                flex-direction: column;
+                gap: 8px;
+            }
+            .modal-footer .btn {
+                width: 100%;
+            }
+            
+            /* Tabs become scrollable */
+            .config-tabs {
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                gap: 6px;
+                padding-bottom: 8px;
+                scrollbar-width: none;
+                -ms-overflow-style: none;
+            }
+            .config-tabs::-webkit-scrollbar {
+                display: none;
+            }
+            .tab-btn {
+                flex-shrink: 0;
+                padding: 6px 12px;
+                font-size: 0.8rem;
+                white-space: nowrap;
+            }
+            
+            /* Form elements larger for touch */
+            .form-control {
+                padding: 12px 14px;
+                font-size: 16px; /* Prevents zoom on iOS */
+            }
+            .form-group label {
+                font-size: 0.85rem;
+            }
+            .btn {
+                padding: 12px 20px;
+                min-height: 44px;
+            }
+            
+            /* Status box compact */
+            .status-box {
+                padding: 12px;
+            }
+            .status-box h4 {
+                font-size: 0.85rem;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .modal-content {
+                width: 100%;
+                height: 100%;
+                max-height: 100vh;
+                border-radius: 0;
+                margin: 0;
+            }
+            .tab-btn {
+                padding: 5px 10px;
+                font-size: 0.75rem;
+            }
+        }
     </style>
 
     <script>
@@ -1821,7 +2174,7 @@ fn websocket_port(config: &AppConfig) -> u16 {
         .and_then(|channel| channel.extra.get("port"))
         .and_then(|value| value.as_integer())
         .and_then(|value| u16::try_from(value).ok())
-        .unwrap_or(18789)
+        .unwrap_or(3000)
 }
 
 fn webhook_port(config: &AppConfig) -> Option<u16> {
@@ -2614,6 +2967,63 @@ async fn api_heartbeat_tasks(State(state): State<GatewayState>) -> impl IntoResp
             "error": e.to_string()
         })),
     }
+}
+
+async fn api_subagents(State(state): State<GatewayState>) -> impl IntoResponse {
+    let path = state.config.agent.workspace.join("subagents.json");
+    if !path.exists() {
+        return axum::Json(serde_json::json!({
+            "tasks": [],
+            "count": 0,
+            "message": "No subagent state found"
+        }));
+    }
+
+    match std::fs::read_to_string(&path) {
+        Ok(content) => {
+            if let Ok(state) = serde_json::from_str::<serde_json::Value>(&content) {
+                let tasks = state.get("tasks").cloned().unwrap_or(serde_json::json!([]));
+                let count = tasks.as_array().map(|a| a.len()).unwrap_or(0);
+                axum::Json(serde_json::json!({
+                    "tasks": tasks,
+                    "count": count,
+                }))
+            } else {
+                axum::Json(serde_json::json!({
+                    "tasks": [],
+                    "count": 0,
+                    "error": "Failed to parse subagent state"
+                }))
+            }
+        }
+        Err(e) => axum::Json(serde_json::json!({
+            "tasks": [],
+            "count": 0,
+            "error": e.to_string()
+        })),
+    }
+}
+
+async fn api_mcp_servers(State(state): State<GatewayState>) -> impl IntoResponse {
+    let servers: Vec<serde_json::Value> = state
+        .config
+        .mcp
+        .servers
+        .iter()
+        .map(|(name, server)| {
+            serde_json::json!({
+                "name": name,
+                "url": server.url,
+                "transport": server.transport,
+                "enabled": !server.url.as_ref().map(|u| u.is_empty()).unwrap_or(true),
+            })
+        })
+        .collect();
+
+    axum::Json(serde_json::json!({
+        "servers": servers,
+        "count": servers.len(),
+    }))
 }
 
 async fn api_doctor(State(state): State<GatewayState>) -> impl IntoResponse {

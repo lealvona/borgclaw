@@ -219,18 +219,15 @@ impl ChatProvider for OpenAiProvider {
             .map_err(|e| ProviderError::Request(e.to_string()))?;
 
         if !response.status().is_success() {
-            if response.status().as_u16() == 429 {
-                let retry_after = response
-                    .headers()
-                    .get("retry-after")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(60);
+            let status = response.status();
+            let error_body = response.text().await.unwrap_or_default();
+            if status.as_u16() == 429 {
+                let retry_after = error_body.parse().ok().unwrap_or(60);
                 return Err(ProviderError::RateLimited(retry_after));
             }
             return Err(ProviderError::Request(format!(
-                "http {}",
-                response.status()
+                "http {}: {}",
+                status, error_body
             )));
         }
 
@@ -304,6 +301,13 @@ impl ChatProvider for AnthropicProvider {
             }
         }
 
+        // Anthropic requires at least one non-system message
+        if messages.is_empty() {
+            return Err(ProviderError::Request(
+                "Anthropic requires at least one user or assistant message".to_string()
+            ));
+        }
+
         let response = self
             .http
             .post("https://api.anthropic.com/v1/messages")
@@ -321,18 +325,15 @@ impl ChatProvider for AnthropicProvider {
             .map_err(|e| ProviderError::Request(e.to_string()))?;
 
         if !response.status().is_success() {
-            if response.status().as_u16() == 429 {
-                let retry_after = response
-                    .headers()
-                    .get("retry-after")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(60);
+            let status = response.status();
+            let error_body = response.text().await.unwrap_or_default();
+            if status.as_u16() == 429 {
+                let retry_after = error_body.parse().ok().unwrap_or(60);
                 return Err(ProviderError::RateLimited(retry_after));
             }
             return Err(ProviderError::Request(format!(
-                "http {}",
-                response.status()
+                "http {}: {}",
+                status, error_body
             )));
         }
 
@@ -489,18 +490,15 @@ impl ChatProvider for GoogleProvider {
             .map_err(|e| ProviderError::Request(e.to_string()))?;
 
         if !response.status().is_success() {
-            if response.status().as_u16() == 429 {
-                let retry_after = response
-                    .headers()
-                    .get("retry-after")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(60);
+            let status = response.status();
+            let error_body = response.text().await.unwrap_or_default();
+            if status.as_u16() == 429 {
+                let retry_after = error_body.parse().ok().unwrap_or(60);
                 return Err(ProviderError::RateLimited(retry_after));
             }
             return Err(ProviderError::Request(format!(
-                "http {}",
-                response.status()
+                "http {}: {}",
+                status, error_body
             )));
         }
 
