@@ -264,6 +264,12 @@ impl ProviderRegistry {
                 if provider.id.is_empty() {
                     provider.id = id.clone();
                 }
+                // Normalize deprecated model names in static_models
+                provider.static_models = provider.static_models.iter()
+                    .map(|m| Self::normalize_model_name(m))
+                    .collect();
+                // Normalize default_model too
+                provider.default_model = Self::normalize_model_name(&provider.default_model);
                 provider.finalize_defaults();
             }
             Ok(registry)
@@ -281,6 +287,29 @@ impl ProviderRegistry {
     pub fn save(&self, path: &Path) -> Result<(), String> {
         let content = toml::to_string_pretty(self).map_err(|e| e.to_string())?;
         std::fs::write(path, content).map_err(|e| e.to_string())
+    }
+
+    /// Normalize deprecated model names to current versions
+    fn normalize_model_name(model: &str) -> String {
+        match model {
+            "m2.77" => {
+                eprintln!("⚠ Fixed deprecated model name: m2.77 -> MiniMax-M2.7");
+                "MiniMax-M2.7".to_string()
+            }
+            "m2.5" => {
+                eprintln!("⚠ Fixed deprecated model name: m2.5 -> MiniMax-M2.5");
+                "MiniMax-M2.5".to_string()
+            }
+            "m2.7" => {
+                eprintln!("⚠ Fixed deprecated model name: m2.7 -> MiniMax-M2.7");
+                "MiniMax-M2.7".to_string()
+            }
+            "k2.5" => {
+                eprintln!("⚠ Fixed deprecated model name: k2.5 -> kimi-k2.5");
+                "kimi-k2.5".to_string()
+            }
+            other => other.to_string(),
+        }
     }
 }
 
