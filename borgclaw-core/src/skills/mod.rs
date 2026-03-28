@@ -142,10 +142,10 @@ mod tests {
     async fn skills_registry_new_creates_empty() {
         let temp_path = temp_dir();
         let registry = SkillsRegistry::new(temp_path.clone());
-        
+
         let list = registry.list().await;
         assert!(list.is_empty());
-        
+
         // Cleanup
         let _ = std::fs::remove_dir_all(&temp_path);
     }
@@ -154,15 +154,15 @@ mod tests {
     async fn skills_registry_load_all_empty_dir() {
         let temp_path = temp_dir();
         std::fs::create_dir_all(&temp_path).unwrap();
-        
+
         let registry = SkillsRegistry::new(temp_path.clone());
-        
+
         let result = registry.load_all().await;
         assert!(result.is_ok());
-        
+
         let list = registry.list().await;
         assert!(list.is_empty());
-        
+
         // Cleanup
         let _ = std::fs::remove_dir_all(&temp_path);
     }
@@ -171,7 +171,7 @@ mod tests {
     async fn skills_registry_load_all_nonexistent_dir() {
         let temp_path = temp_dir();
         let registry = SkillsRegistry::new(temp_path);
-        
+
         let result = registry.load_all().await;
         assert!(result.is_ok());
     }
@@ -180,10 +180,10 @@ mod tests {
     async fn skills_registry_get_returns_none_for_empty() {
         let temp_path = temp_dir();
         let registry = SkillsRegistry::new(temp_path.clone());
-        
+
         let skill = registry.get("nonexistent").await;
         assert!(skill.is_none());
-        
+
         // Cleanup
         let _ = std::fs::remove_dir_all(&temp_path);
     }
@@ -192,10 +192,10 @@ mod tests {
     async fn skills_registry_get_by_command_returns_none_for_empty() {
         let temp_path = temp_dir();
         let registry = SkillsRegistry::new(temp_path.clone());
-        
+
         let skill = registry.get_by_command("unknown").await;
         assert!(skill.is_none());
-        
+
         // Cleanup
         let _ = std::fs::remove_dir_all(&temp_path);
     }

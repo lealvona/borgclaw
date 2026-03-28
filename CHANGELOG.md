@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.14.0 - 2026-03-26
+
+### Features
+
+**Gateway Configuration UI (PR #233)**
+- **Visual Configuration Editor** — Full web-based configuration management
+  - Tabbed interface: Agent, Channels, Security, Memory, Skills
+  - Real-time configuration updates with save/restore
+  - Keyboard shortcuts: `Ctrl+,` to open, `Esc` to close
+  - Edit configuration without touching config.toml directly
+
+- **Enhanced API Endpoints**
+  - `GET /api/config` — Returns full configuration with channels, security, memory, skills
+  - `POST /api/config` — Update configuration programmatically
+  - Configuration changes saved to disk automatically
+  - Returns list of changes made and restart requirements
+
+- **Dashboard Improvements**
+  - Configuration menu in sidebar with "Edit Config" and "View Config (JSON)" options
+  - Real-time skill status indicators (GitHub, Google, Browser)
+  - Modal-based configuration editor with responsive design
+  - Status feedback for save operations
+
+- **Configuration Management via Web UI**
+  - **Agent**: Provider selection (OpenAI, Anthropic, MiniMax, Kimi, etc.), model name, system prompt
+  - **Channels**: WebSocket/Webhook toggle, port configuration, pairing settings
+  - **Security**: Approval mode (ReadOnly/Supervised/Autonomous), defense toggles, command blocklist
+  - **Memory**: Hybrid search toggle, session max entries
+  - **Skills**: Auto-load toggle, skill configuration status
+
 ## 1.13.0 - 2026-03-26
 
 ### Polish

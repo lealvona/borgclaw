@@ -170,6 +170,40 @@ Shared consciousness across all interactions:
 
 ## 🎮 Operating the Collective
 
+### Gateway Web Interface
+
+The BorgClaw Gateway provides a **real-time web dashboard** for monitoring and configuration:
+
+```bash
+# Start the gateway
+cargo run --bin borgclaw-gateway
+
+# Access the dashboard at:
+open http://localhost:3000  # macOS
+xdg-open http://localhost:3000  # Linux
+start http://localhost:3000  # Windows
+```
+
+**Dashboard Features:**
+| Feature | Description |
+|---------|-------------|
+| 💬 **Live Chat** | Send messages to your agent directly from the browser |
+| 📊 **Real-time Metrics** | Active connections, message counts, uptime |
+| ⚙️ **Config Editor** | Visual configuration management (Ctrl+, to open) |
+| 🔌 **Connection Status** | View authenticated WebSocket clients |
+| 🛠️ **API Explorer** | Browse all available HTTP endpoints |
+| 🏷️ **Health Checks** | Run diagnostics on all subsystems |
+
+**API Endpoints:**
+- `GET /api/status` — System status and version
+- `GET /api/metrics` — Real-time connection metrics
+- `GET /api/config` — Current configuration (JSON)
+- `POST /api/config` — Update configuration
+- `GET /api/connections` — Active WebSocket clients
+- `GET /api/tools` — Available agent tools
+- `GET /api/doctor` — Health check results
+- `GET /ws` — WebSocket endpoint for real-time communication
+
 ### Collective Diagnostics
 ```bash
 ./scripts/doctor.sh                        # Verify all faces
@@ -212,7 +246,37 @@ cargo run --bin borgclaw -- backup verify ./backup.json
 
 ## ⚙️ Configuration
 
-Create `~/.config/borgclaw/config.toml`:
+BorgClaw can be configured through **multiple interfaces**:
+
+1. **📜 Configuration File** — Direct TOML editing
+2. **🌐 Web Interface** — Visual editor via Gateway (recommended)
+3. **📡 API** — Programmatic configuration updates
+
+### Quick Configuration via Web Interface
+
+When the gateway is running, open `http://localhost:3000` in your browser to access the **Configuration Editor**:
+
+```bash
+# Start the gateway
+cargo run --bin borgclaw-gateway
+
+# Open http://localhost:3000 in your browser
+```
+
+The visual editor allows you to modify:
+- **Agent** — LLM provider, model, system prompts
+- **Channels** — WebSocket/Webhook enable, ports, pairing settings
+- **Security** — Approval mode, prompt injection, secret leak detection
+- **Memory** — Hybrid search, session limits
+- **Skills** — Auto-load settings and configuration status
+
+**Keyboard Shortcuts:**
+- `Ctrl + ,` — Open configuration editor
+- `Esc` — Close configuration editor
+
+### Configuration File
+
+For manual configuration, create `~/.config/borgclaw/config.toml`:
 
 ```toml
 [agent]
@@ -301,6 +365,7 @@ borgclaw/
 - [Changelog](CHANGELOG.md) — Evolution history
 - [Quick Start](docs/quickstart.md) — First assimilation
 - [Onboarding](docs/onboarding.md) — Configuration protocols
+- [Gateway](docs/gateway.md) — Web dashboard and API
 - [Channels](docs/channels.md) — Interface documentation
 - [Memory](docs/memory.md) — Storage and retrieval
 - [Skills](docs/skills.md) — Capability integration

@@ -315,10 +315,10 @@ mod tests {
     fn session_id_new_generates_uuid() {
         let id1 = SessionId::new();
         let id2 = SessionId::new();
-        
+
         // Should be different UUIDs
         assert_ne!(id1.0, id2.0);
-        
+
         // Should be valid UUID format (36 chars with dashes)
         assert_eq!(id1.0.len(), 36);
         assert!(id1.0.contains('-'));
@@ -334,7 +334,7 @@ mod tests {
     fn session_id_default_generates_new() {
         let id1: SessionId = Default::default();
         let id2: SessionId = Default::default();
-        
+
         assert_ne!(id1.0, id2.0);
         assert_eq!(id1.0.len(), 36);
     }
@@ -351,7 +351,7 @@ mod tests {
         let id1 = SessionId::from_string("same");
         let id2 = SessionId::from_string("same");
         let id3 = SessionId::from_string("different");
-        
+
         assert_eq!(id1, id2);
         assert_ne!(id1, id3);
     }
@@ -359,7 +359,7 @@ mod tests {
     #[test]
     fn message_user_creation() {
         let msg = Message::user("Hello, world!");
-        
+
         assert_eq!(msg.role, MessageRole::User);
         assert_eq!(msg.content, "Hello, world!");
         assert!(msg.tool_calls.is_empty());
@@ -371,7 +371,7 @@ mod tests {
     #[test]
     fn message_assistant_creation() {
         let msg = Message::assistant("I'm here to help.");
-        
+
         assert_eq!(msg.role, MessageRole::Assistant);
         assert_eq!(msg.content, "I'm here to help.");
         assert!(msg.tool_calls.is_empty());
@@ -380,7 +380,7 @@ mod tests {
     #[test]
     fn message_system_creation() {
         let msg = Message::system("You are a helpful assistant.");
-        
+
         assert_eq!(msg.role, MessageRole::System);
         assert_eq!(msg.content, "You are a helpful assistant.");
     }
@@ -389,12 +389,11 @@ mod tests {
     fn message_with_tool_call() {
         let mut args = std::collections::HashMap::new();
         args.insert("arg".to_string(), serde_json::json!("value"));
-        
+
         let tool_call = crate::agent::ToolCall::new("test_tool", args);
-        
-        let msg = Message::assistant("Using tool")
-            .with_tool_call(tool_call);
-        
+
+        let msg = Message::assistant("Using tool").with_tool_call(tool_call);
+
         assert_eq!(msg.tool_calls.len(), 1);
         assert_eq!(msg.tool_calls[0].name, "test_tool");
     }
@@ -402,11 +401,10 @@ mod tests {
     #[test]
     fn message_is_important_with_tool_calls() {
         let tool_call = crate::agent::ToolCall::new("test_tool", std::collections::HashMap::new());
-        
-        let msg_with_tool = Message::assistant("Using tool")
-            .with_tool_call(tool_call);
+
+        let msg_with_tool = Message::assistant("Using tool").with_tool_call(tool_call);
         assert!(msg_with_tool.is_important());
-        
+
         let msg_without_tool = Message::assistant("Just chatting");
         assert!(!msg_without_tool.is_important());
     }
@@ -421,7 +419,7 @@ mod tests {
     #[test]
     fn session_new_creation() {
         let session = Session::new(Some("group-123".to_string()), 100);
-        
+
         assert!(!session.id.0.is_empty());
         assert_eq!(session.group_id, Some("group-123".to_string()));
         assert!(session.is_empty());
@@ -441,12 +439,12 @@ mod tests {
     #[test]
     fn session_add_message_increments_count() {
         let mut session = Session::new(None, 10);
-        
+
         session.add_message(Message::user("Hello"));
         assert_eq!(session.len(), 1);
         assert_eq!(session.message_count, 1);
         assert!(!session.is_empty());
-        
+
         session.add_message(Message::assistant("Hi there"));
         assert_eq!(session.len(), 2);
         assert_eq!(session.message_count, 2);
@@ -455,16 +453,16 @@ mod tests {
     #[test]
     fn session_respects_max_messages() {
         let mut session = Session::new(None, 3);
-        
+
         session.add_message(Message::user("Message 1"));
         session.add_message(Message::user("Message 2"));
         session.add_message(Message::user("Message 3"));
         assert_eq!(session.len(), 3);
-        
+
         // Adding a 4th message should evict the oldest
         session.add_message(Message::user("Message 4"));
         assert_eq!(session.len(), 3);
-        
+
         // First message should be gone
         let messages: Vec<_> = session.messages().iter().collect();
         assert_eq!(messages[0].content, "Message 2");
@@ -474,11 +472,11 @@ mod tests {
     #[test]
     fn session_system_prompt_extraction() {
         let mut session = Session::new(None, 10);
-        
+
         session.add_message(Message::system("System prompt 1"));
         session.add_message(Message::user("Hello"));
         session.add_message(Message::system("System prompt 2"));
-        
+
         let prompt = session.system_prompt();
         assert!(prompt.contains("System prompt 1"));
         assert!(prompt.contains("System prompt 2"));
@@ -488,11 +486,11 @@ mod tests {
     #[test]
     fn session_conversation_history() {
         let mut session = Session::new(None, 10);
-        
+
         session.add_message(Message::system("System"));
         session.add_message(Message::user("Hello"));
         session.add_message(Message::assistant("Hi!"));
-        
+
         let history = session.conversation_history();
         assert!(!history.contains("System"));
         assert!(history.contains("User: Hello"));
@@ -502,16 +500,16 @@ mod tests {
     #[test]
     fn session_compact_clears_non_system() {
         let mut session = Session::new(None, 10);
-        
+
         session.add_message(Message::system("System prompt"));
         session.add_message(Message::user("Hello"));
         session.add_message(Message::assistant("Hi!"));
-        
+
         session.compact("Summary of conversation");
-        
+
         // Should have system prompt + summary
         assert_eq!(session.len(), 2);
-        
+
         let messages: Vec<_> = session.messages().iter().collect();
         assert_eq!(messages[0].content, "System prompt");
         assert!(messages[1].content.contains("Summary of conversation"));
@@ -520,14 +518,14 @@ mod tests {
     #[test]
     fn session_compact_with_recent_preserves_recent() {
         let mut session = Session::new(None, 10);
-        
+
         session.add_message(Message::user("Old 1"));
         session.add_message(Message::user("Old 2"));
         session.add_message(Message::user("Recent 1"));
         session.add_message(Message::user("Recent 2"));
-        
+
         session.compact_with_recent("Summary", 2);
-        
+
         let messages: Vec<_> = session.messages().iter().collect();
         // Summary + 2 recent messages
         assert_eq!(messages.len(), 3);
@@ -539,11 +537,11 @@ mod tests {
     #[test]
     fn session_count_tokens() {
         let session = Session::new(None, 10);
-        
+
         // Rough estimation: words * 4/3
         let tokens = session.count_tokens("Hello world");
         assert!(tokens > 0);
-        
+
         // Empty string should return at least 1
         let tokens = session.count_tokens("");
         assert_eq!(tokens, 1);
@@ -552,13 +550,13 @@ mod tests {
     #[test]
     fn session_total_tokens() {
         let mut session = Session::new(None, 10);
-        
+
         let initial_tokens = session.total_tokens();
-        
+
         session.add_message(Message::user("Hello world this is a test"));
         let tokens_with_one = session.total_tokens();
         assert!(tokens_with_one > initial_tokens);
-        
+
         session.add_message(Message::assistant("This is a response message"));
         let tokens_with_two = session.total_tokens();
         assert!(tokens_with_two > tokens_with_one);
@@ -567,12 +565,15 @@ mod tests {
     #[test]
     fn session_needs_compaction() {
         let mut session = Session::new(None, 100);
-        
+
         // Add many messages to exceed threshold
         for i in 0..50 {
-            session.add_message(Message::user(&format!("Message {} with lots of words to increase token count", i)));
+            session.add_message(Message::user(&format!(
+                "Message {} with lots of words to increase token count",
+                i
+            )));
         }
-        
+
         let tokens = session.total_tokens();
         assert!(session.needs_compaction(tokens - 1));
         assert!(!session.needs_compaction(tokens + 1000));
@@ -581,11 +582,11 @@ mod tests {
     #[test]
     fn session_get_history_for_summary() {
         let mut session = Session::new(None, 10);
-        
+
         session.add_message(Message::system("System"));
         session.add_message(Message::user("Question"));
         session.add_message(Message::assistant("Answer"));
-        
+
         let history = session.get_history_for_summary();
         assert!(!history.contains("System"));
         assert!(history.contains("User: Question"));
@@ -595,21 +596,21 @@ mod tests {
     #[test]
     fn session_get_context_for_llm() {
         let mut session = Session::new(None, 10);
-        
+
         session.running_summary = Some("Previous summary".to_string());
         session.compaction_pass = 1;
-        
+
         session.add_message(Message::system("System"));
         session.add_message(Message::user("Hello"));
         session.add_message(Message::assistant("Hi!"));
-        
+
         let context = session.get_context_for_llm();
-        
+
         // First item should be the summary
         assert_eq!(context[0].0, MessageRole::System);
         assert!(context[0].1.contains("Previous summary"));
         assert!(context[0].1.contains("pass 1"));
-        
+
         // Should include conversation messages (not system)
         assert_eq!(context.len(), 3); // Summary + user + assistant
     }
@@ -617,12 +618,12 @@ mod tests {
     #[test]
     fn session_apply_compaction() {
         let mut session = Session::new(None, 10);
-        
+
         session.add_message(Message::user("Old message"));
         session.compaction_pass = 0;
-        
+
         session.apply_compaction("New summary".to_string(), 0, false);
-        
+
         assert_eq!(session.compaction_pass, 1);
         assert_eq!(session.running_summary, Some("New summary".to_string()));
     }
@@ -632,10 +633,10 @@ mod tests {
         let mut session = Session::new(Some("group-abc".to_string()), 50);
         session.add_message(Message::system("System prompt"));
         session.add_message(Message::user("Hello"));
-        
+
         let json = serde_json::to_string(&session).unwrap();
         let deserialized: Session = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(deserialized.id.0, session.id.0);
         assert_eq!(deserialized.group_id, session.group_id);
         assert_eq!(deserialized.len(), session.len());
@@ -645,10 +646,10 @@ mod tests {
     #[test]
     fn message_serialization_roundtrip() {
         let msg = Message::user("Test message");
-        
+
         let json = serde_json::to_string(&msg).unwrap();
         let deserialized: Message = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(deserialized.role, msg.role);
         assert_eq!(deserialized.content, msg.content);
         assert_eq!(deserialized.id, msg.id);
@@ -656,7 +657,11 @@ mod tests {
 
     #[test]
     fn message_role_serialization_roundtrip() {
-        for role in [MessageRole::User, MessageRole::Assistant, MessageRole::System] {
+        for role in [
+            MessageRole::User,
+            MessageRole::Assistant,
+            MessageRole::System,
+        ] {
             let json = serde_json::to_string(&role).unwrap();
             let deserialized: MessageRole = serde_json::from_str(&json).unwrap();
             assert_eq!(deserialized, role);

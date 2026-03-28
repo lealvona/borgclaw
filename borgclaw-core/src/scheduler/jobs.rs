@@ -232,7 +232,7 @@ mod tests {
         let trigger = JobTrigger::Interval(3600); // 1 hour
         let next = trigger.next_run();
         assert!(next.is_some());
-        
+
         let expected = Utc::now() + Duration::seconds(3600);
         let actual = next.unwrap();
         // Allow 1 second tolerance for test execution time

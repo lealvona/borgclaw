@@ -118,7 +118,7 @@ impl ProviderFactory {
             config.provider,
             config.model
         );
-        
+
         let provider: Box<dyn ChatProvider> = match config.provider.as_str() {
             "openai" => Box::new(OpenAiProvider::from_security(security_config).await?),
             "anthropic" => Box::new(AnthropicProvider::from_security(security_config).await?),
@@ -609,7 +609,7 @@ impl ChatProvider for OllamaProvider {
 }
 
 /// Macro to generate OpenAI-compatible providers
-/// 
+///
 /// API base URL can be overridden via {PROVIDER}_API_BASE env var
 /// e.g., OPENAI_API_BASE, ANTHROPIC_API_BASE, KIMI_API_BASE, etc.
 macro_rules! openai_compatible_provider {
@@ -631,22 +631,26 @@ macro_rules! openai_compatible_provider {
                     base_url,
                 })
             }
-            
+
             fn resolve_base_url() -> String {
                 // Extract provider name from the struct name (e.g., "KimiProvider" -> "KIMI")
                 let provider_name = stringify!($name)
                     .trim_end_matches("Provider")
                     .to_uppercase();
                 let env_var_name = format!("{}_API_BASE", provider_name);
-                
+
                 // Check for env var override
                 if let Ok(custom_base) = std::env::var(&env_var_name) {
                     if !custom_base.is_empty() {
-                        tracing::info!("Using custom API base from {}: {}", env_var_name, custom_base);
+                        tracing::info!(
+                            "Using custom API base from {}: {}",
+                            env_var_name,
+                            custom_base
+                        );
                         return custom_base.trim_end_matches('/').to_string();
                     }
                 }
-                
+
                 // Fallback to default
                 $default_base_url.to_string()
             }
@@ -662,7 +666,7 @@ macro_rules! openai_compatible_provider {
                     request.temperature,
                     request.max_tokens
                 );
-                
+
                 #[derive(Serialize)]
                 struct Body<'a> {
                     model: &'a str,
@@ -734,7 +738,11 @@ macro_rules! openai_compatible_provider {
 
 // Generate OpenAI-compatible providers
 openai_compatible_provider!(KimiProvider, "KIMI_API_KEY", "https://api.moonshot.cn/v1");
-openai_compatible_provider!(MiniMaxProvider, "MINIMAX_API_KEY", "https://api.minimax.io/v1");
+openai_compatible_provider!(
+    MiniMaxProvider,
+    "MINIMAX_API_KEY",
+    "https://api.minimax.io/v1"
+);
 openai_compatible_provider!(ZProvider, "Z_API_KEY", "https://api.z.ai/api/paas/v4");
 
 #[cfg(test)]
