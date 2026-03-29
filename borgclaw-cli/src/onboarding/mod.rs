@@ -1760,7 +1760,6 @@ async fn store_provider_secret(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn test_theme() -> ColorfulTheme {
         ColorfulTheme::default()
@@ -2141,33 +2140,25 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let config_path = root.join("config.toml");
         let providers_path = root.join("providers.toml");
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut buf = [0_u8; 1024];
-            let _ = socket.read(&mut buf).await.unwrap();
-            let body = r#"{"data":[{"id":"model-a"},{"id":"model-b"}]}"#;
-            let response = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            socket.write_all(response.as_bytes()).await.unwrap();
-        });
+        let models_path = root.join("models.json");
+        std::fs::write(
+            &models_path,
+            r#"{"data":[{"id":"model-a"},{"id":"model-b"}]}"#,
+        )
+        .unwrap();
 
         std::fs::write(
             &providers_path,
             format!(
                 r#"[custom]
 name = "Custom"
-api_base = "http://{addr}"
-models_endpoint = "http://{addr}/models"
+api_base = "http://example.invalid"
+models_endpoint = "file://{}"
 env_key = ""
 default_model = "custom-model"
 static_models = ["stale-model"]
-"#
+"#,
+                models_path.display()
             ),
         )
         .unwrap();
@@ -2176,8 +2167,6 @@ static_models = ["stale-model"]
             .await
             .unwrap();
         let registry = ProviderRegistry::load_or_create(&providers_path).unwrap();
-
-        server.await.unwrap();
         std::fs::remove_dir_all(root).unwrap();
         assert!(matches!(outcome.start, StartTarget::None));
         assert_eq!(
@@ -2227,6 +2216,13 @@ async fn fetch_models(
     provider: &ProviderDef,
     api_key: Option<&str>,
 ) -> Result<Vec<String>, String> {
+    if let Some(path) = provider.models_endpoint.strip_prefix("file://") {
+        let body = std::fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read models file '{}': {}", path, e))?;
+        let resp: Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+        return parse_models_response(provider, resp);
+    }
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
         .build()
@@ -2245,18 +2241,7 @@ async fn fetch_models(
                 .json()
                 .await
                 .map_err(|e| e.to_string())?;
-            let mut out = Vec::new();
-            if let Some(arr) = resp.get("data").and_then(|v| v.as_array()) {
-                for item in arr {
-                    if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
-                        out.push(id.to_string());
-                    }
-                }
-            }
-            if out.is_empty() {
-                return Err("No models returned".to_string());
-            }
-            Ok(out)
+            parse_models_response(provider, resp)
         }
         "ollama" => {
             let resp: Value = client
@@ -2366,6 +2351,57 @@ async fn fetch_models(
         "minimax" | "z" => {
             // These providers don't support model listing - use static models
             Ok(provider.static_models.clone())
+        }
+        _ => Err(format!("Unknown provider: {}", provider.id)),
+    }
+}
+
+fn parse_models_response(provider: &ProviderDef, resp: Value) -> Result<Vec<String>, String> {
+    match provider.id.as_str() {
+        "openai" | "custom" | "anthropic" | "kimi" => {
+            let mut out = Vec::new();
+            if let Some(arr) = resp.get("data").and_then(|v| v.as_array()) {
+                for item in arr {
+                    if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+                        out.push(id.to_string());
+                    }
+                }
+            }
+            if out.is_empty() {
+                Err("No models returned".to_string())
+            } else {
+                Ok(out)
+            }
+        }
+        "ollama" => {
+            let mut out = Vec::new();
+            if let Some(arr) = resp.get("models").and_then(|v| v.as_array()) {
+                for item in arr {
+                    if let Some(name) = item.get("name").and_then(|v| v.as_str()) {
+                        out.push(name.to_string());
+                    }
+                }
+            }
+            if out.is_empty() {
+                Err("No local models returned by Ollama".to_string())
+            } else {
+                Ok(out)
+            }
+        }
+        "google" => {
+            let mut out = Vec::new();
+            if let Some(arr) = resp.get("models").and_then(|v| v.as_array()) {
+                for item in arr {
+                    if let Some(name) = item.get("name").and_then(|v| v.as_str()) {
+                        out.push(name.to_string());
+                    }
+                }
+            }
+            if out.is_empty() {
+                Err("Live fetch unavailable for Google in current environment".to_string())
+            } else {
+                Ok(out)
+            }
         }
         _ => Err(format!("Unknown provider: {}", provider.id)),
     }

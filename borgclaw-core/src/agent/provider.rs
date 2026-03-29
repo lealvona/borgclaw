@@ -304,7 +304,7 @@ impl ChatProvider for AnthropicProvider {
         // Anthropic requires at least one non-system message
         if messages.is_empty() {
             return Err(ProviderError::Request(
-                "Anthropic requires at least one user or assistant message".to_string()
+                "Anthropic requires at least one user or assistant message".to_string(),
             ));
         }
 

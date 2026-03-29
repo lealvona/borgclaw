@@ -11,8 +11,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use teloxide::prelude::*;
+use teloxide::types::UpdateKind;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::task::JoinHandle;
+use tokio::time::{sleep, Duration};
 
 /// Persistent state for restart recovery
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -29,7 +31,7 @@ pub struct TelegramChannel {
     bot: Arc<RwLock<Option<Bot>>>,
     channel_type: ChannelType,
     status: Arc<RwLock<ChannelStatus>>,
-    msg_count: AtomicU64,
+    msg_count: Arc<AtomicU64>,
     receiving: Arc<AtomicBool>,
     receive_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     allowed_users: Vec<String>,
@@ -43,7 +45,7 @@ impl TelegramChannel {
             bot: Arc::new(RwLock::new(None)),
             channel_type: ChannelType::telegram(),
             status: Arc::new(RwLock::new(ChannelStatus::disconnected())),
-            msg_count: AtomicU64::new(0),
+            msg_count: Arc::new(AtomicU64::new(0)),
             receiving: Arc::new(AtomicBool::new(false)),
             receive_handle: Arc::new(Mutex::new(None)),
             allowed_users: Vec::new(),
@@ -77,14 +79,14 @@ impl TelegramChannel {
     /// Persist state for restart recovery
     async fn persist_state(&self) {
         if let Some(ref path) = self.state_path {
-            let state = TelegramState {
-                last_update_id: *self.last_update_id.read().await,
-                total_messages: self.msg_count.load(Ordering::Relaxed),
-                last_activity: self.status.read().await.last_activity,
-            };
-            if let Ok(contents) = serde_json::to_string_pretty(&state) {
-                let _ = std::fs::write(path, contents);
-            }
+            persist_telegram_state_snapshot(
+                Some(path),
+                TelegramState {
+                    last_update_id: *self.last_update_id.read().await,
+                    total_messages: self.msg_count.load(Ordering::Relaxed),
+                    last_activity: self.status.read().await.last_activity,
+                },
+            );
         }
     }
 }
@@ -164,92 +166,116 @@ impl Channel for TelegramChannel {
         };
 
         let allowed_users = self.allowed_users.clone();
-        let msg_count = Arc::new(AtomicU64::new(0));
+        let msg_count = self.msg_count.clone();
         let status = self.status.clone();
         let channel_type = self.channel_type.clone();
         let receiving = self.receiving.clone();
-        let receive_handle = self.receive_handle.clone();
+        let last_update_id = self.last_update_id.clone();
+        let state_path = self.state_path.clone();
 
         let sender_clone = sender.clone();
 
-        // Spawn message handler
+        // Poll updates manually so restart offsets and persisted state are meaningful.
         let handle = tokio::spawn(async move {
-            teloxide::repl(bot.clone(), move |msg: Message| {
-                let sender = sender_clone.clone();
-                let allowed_users = allowed_users.clone();
-                let msg_count = msg_count.clone();
-                let status = status.clone();
-                let channel_type = channel_type.clone();
+            while receiving.load(Ordering::SeqCst) {
+                let offset = (*last_update_id.read().await).map(|value| value + 1);
+                let mut request = bot.get_updates().limit(100).timeout(30);
+                if let Some(offset) = offset {
+                    request = request.offset(offset);
+                }
 
-                async move {
-                    // Check if user is allowed
-                    if !allowed_users.is_empty() {
-                        let user_id = msg
-                            .from
-                            .as_ref()
-                            .map(|u| u.id.to_string())
-                            .unwrap_or_default();
-                        if !allowed_users.contains(&user_id) {
-                            log::warn!("Message from blocked user: {}", user_id);
-                            return Ok(());
+                match request.send().await {
+                    Ok(updates) => {
+                        for update in updates {
+                            let update_id = update.id.0 as i32;
+                            *last_update_id.write().await = Some(update_id);
+
+                            if let UpdateKind::Message(msg) = update.kind {
+                                if !allowed_users.is_empty() {
+                                    let user_id = msg
+                                        .from
+                                        .as_ref()
+                                        .map(|u| u.id.to_string())
+                                        .unwrap_or_default();
+                                    if !allowed_users.contains(&user_id) {
+                                        log::warn!("Message from blocked user: {}", user_id);
+                                        persist_telegram_state_snapshot(
+                                            state_path.as_deref(),
+                                            TelegramState {
+                                                last_update_id: Some(update_id),
+                                                total_messages: msg_count.load(Ordering::Relaxed),
+                                                last_activity: status.read().await.last_activity,
+                                            },
+                                        );
+                                        continue;
+                                    }
+                                }
+
+                                let content = if let Some(text) = msg.text() {
+                                    MessagePayload::text(text)
+                                } else {
+                                    MessagePayload::text("[Non-text message]")
+                                };
+
+                                let telegram_user = msg.from.as_ref();
+                                let sender_info = Sender::new(
+                                    telegram_user.map(|u| u.id.to_string()).unwrap_or_default(),
+                                )
+                                .with_name(
+                                    telegram_user
+                                        .map(|u| u.full_name().to_string())
+                                        .unwrap_or_default(),
+                                );
+
+                                let inbound = InboundMessage {
+                                    channel: channel_type.clone(),
+                                    sender: sender_info,
+                                    content,
+                                    group_id: Some(msg.chat.id.to_string()),
+                                    timestamp: msg.date,
+                                    raw: serde_json::json!({
+                                        "message_id": msg.id,
+                                        "chat_id": msg.chat.id,
+                                        "update_id": update_id,
+                                    }),
+                                };
+
+                                msg_count.fetch_add(1, Ordering::Relaxed);
+                                {
+                                    let mut channel_status = status.write().await;
+                                    channel_status.connected = true;
+                                    channel_status.error = None;
+                                    channel_status.last_activity = Some(Utc::now());
+                                }
+
+                                let _ = sender_clone.send(inbound).await;
+                            }
+
+                            persist_telegram_state_snapshot(
+                                state_path.as_deref(),
+                                TelegramState {
+                                    last_update_id: Some(update_id),
+                                    total_messages: msg_count.load(Ordering::Relaxed),
+                                    last_activity: status.read().await.last_activity,
+                                },
+                            );
                         }
                     }
-
-                    // Extract message content - handle text only for now
-                    let content = if let Some(text) = msg.text() {
-                        MessagePayload::text(text)
-                    } else {
-                        MessagePayload::text("[Non-text message]")
-                    };
-
-                    // Create sender info
-                    let telegram_user = msg.from.as_ref();
-                    let sender_info =
-                        Sender::new(telegram_user.map(|u| u.id.to_string()).unwrap_or_default())
-                            .with_name(
-                                telegram_user
-                                    .map(|u| u.full_name().to_string())
-                                    .unwrap_or_default(),
-                            );
-
-                    // Get chat ID (for group support)
-                    let chat_id = msg.chat.id.to_string();
-
-                    let inbound = InboundMessage {
-                        channel: channel_type,
-                        sender: sender_info,
-                        content,
-                        group_id: Some(chat_id),
-                        timestamp: msg.date,
-                        raw: serde_json::json!({
-                            "message_id": msg.id,
-                            "chat_id": msg.chat.id,
-                        }),
-                    };
-
-                    // Update counters
-                    msg_count.fetch_add(1, Ordering::Relaxed);
-                    {
-                        let mut s = status.write().await;
-                        s.last_activity = Some(Utc::now());
+                    Err(err) => {
+                        {
+                            let mut channel_status = status.write().await;
+                            channel_status.connected = false;
+                            channel_status.error = Some(format!("Receive failed: {}", err));
+                        }
+                        sleep(Duration::from_secs(2)).await;
                     }
-
-                    // Send to router
-                    let _ = sender.send(inbound).await;
-
-                    // Persist state for restart recovery
-                    // Note: Full offset-based recovery requires switching from repl() to manual get_updates()
-                    // This implementation tracks basic state for statistics and activity monitoring
-
-                    Ok(())
                 }
-            })
-            .await;
+            }
 
             receiving.store(false, Ordering::SeqCst);
         });
 
-        *receive_handle.lock().await = Some(handle);
+        *self.receive_handle.lock().await = Some(handle);
 
         Ok(())
     }
@@ -369,6 +395,20 @@ fn resolve_telegram_token(configured: &str) -> Option<String> {
     Some(configured.to_string())
 }
 
+fn persist_telegram_state_snapshot(path: Option<&std::path::Path>, state: TelegramState) {
+    let Some(path) = path else {
+        return;
+    };
+
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    if let Ok(contents) = serde_json::to_string_pretty(&state) {
+        let _ = std::fs::write(path, contents);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,5 +445,29 @@ mod tests {
         channel.shutdown().await.unwrap();
         assert!(!channel.receiving.load(Ordering::SeqCst));
         assert!(channel.receive_handle.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn telegram_persist_state_writes_restart_snapshot() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_telegram_state_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = root.join("telegram.json");
+        let channel = TelegramChannel::new().with_state_path(path.clone());
+
+        *channel.last_update_id.write().await = Some(42);
+        channel.msg_count.store(3, Ordering::Relaxed);
+        channel.status.write().await.last_activity = Some(Utc::now());
+
+        channel.persist_state().await;
+        let persisted: TelegramState =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+
+        assert_eq!(persisted.last_update_id, Some(42));
+        assert_eq!(persisted.total_messages, 3);
+        assert!(persisted.last_activity.is_some());
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

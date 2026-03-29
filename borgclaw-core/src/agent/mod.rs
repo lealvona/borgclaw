@@ -206,7 +206,7 @@ impl SimpleAgent {
 
         // Build tools section
         let tools_section = self.build_tools_section();
-        
+
         // Build capability context
         let capability_section = self.build_capability_section();
 
@@ -230,48 +230,50 @@ impl SimpleAgent {
 You are {} (via {} provider). \
 You have access to numerous tools and can communicate through multiple channels. \
 You are autonomous, helpful, and capable of complex multi-step tasks.",
-            self.config.model,
-            self.config.provider
+            self.config.model, self.config.provider
         )
     }
 
     /// Build the tools section of the system prompt
     fn build_tools_section(&self) -> String {
         let mut tools_desc = String::from("## AVAILABLE TOOLS\n\n");
-        
+
         if self.tools.is_empty() {
             tools_desc.push_str("You have no special tools configured.\n");
         } else {
             tools_desc.push_str("When you need to use a tool, invoke it with the format: /tool_name {\"param\": \"value\"}\n\n");
-            
+
             for tool in &self.tools {
                 tools_desc.push_str(&format!("- **{}**: {}\n", tool.name, tool.description));
             }
-            
+
             tools_desc.push_str("\nExamples:\n");
             tools_desc.push_str("- /memory_store {\"key\": \"user_name\", \"value\": \"Alice\"}\n");
             tools_desc.push_str("- /memory_recall {\"key\": \"user_name\"}\n");
             tools_desc.push_str("- /github_list_repos {\"owner\": \"lealvona\"}\n\n");
             tools_desc.push_str("IMPORTANT: Only use tools when necessary. For normal conversation, respond directly without tool commands.\n");
         }
-        
+
         tools_desc
     }
 
     /// Build the capability context section
     fn build_capability_section(&self) -> String {
         let mut capabilities = String::from("## YOUR CAPABILITIES\n\n");
-        
+
         // Memory capability (always available)
-        capabilities.push_str("✓ **Long-term Memory**: You can store and recall information across conversations.");
+        capabilities.push_str(
+            "✓ **Long-term Memory**: You can store and recall information across conversations.",
+        );
         if self.memory_config.hybrid_search {
             capabilities.push_str(" You have hybrid search (SQLite + FTS5) enabled.");
         }
         capabilities.push('\n');
-        
+
         // Skills capabilities
         if self.skills_config.auto_load {
-            capabilities.push_str("✓ **Skills**: You have access to various integrations including:\n");
+            capabilities
+                .push_str("✓ **Skills**: You have access to various integrations including:\n");
             capabilities.push_str("  - GitHub (repository management, issues, PRs)\n");
             capabilities.push_str("  - Google Workspace (Gmail, Calendar, Drive)\n");
             capabilities.push_str("  - Browser automation (web scraping, JavaScript execution)\n");
@@ -280,31 +282,36 @@ You are autonomous, helpful, and capable of complex multi-step tasks.",
             capabilities.push_str("  - QR code generation\n");
             capabilities.push_str("  - URL shortening\n");
         }
-        
+
         // Scheduler capability
         if self.scheduler_config.enabled {
             capabilities.push_str("✓ **Scheduling**: You can schedule tasks to run periodically using cron expressions.\n");
         }
-        
+
         // Heartbeat capability
         if self.heartbeat_config.enabled {
             capabilities.push_str("✓ **Heartbeat**: You can run background tasks continuously.\n");
         }
-        
+
         // MCP capability
         if !self.mcp_config.servers.is_empty() {
-            capabilities.push_str(&format!("✓ **MCP**: You can connect to {} external Model Context Protocol server(s).\n", self.mcp_config.servers.len()));
+            capabilities.push_str(&format!(
+                "✓ **MCP**: You can connect to {} external Model Context Protocol server(s).\n",
+                self.mcp_config.servers.len()
+            ));
         }
-        
+
         capabilities.push_str("\n## CHANNEL AWARENESS\n\n");
         capabilities.push_str("You can communicate through multiple channels:\n");
         capabilities.push_str("- **CLI/REPL**: Direct terminal interface\n");
-        capabilities.push_str("- **WebSocket Gateway**: Real-time web interface at http://localhost:3000\n");
+        capabilities.push_str(
+            "- **WebSocket Gateway**: Real-time web interface at http://localhost:3000\n",
+        );
         capabilities.push_str("- **Telegram**: Bot interface (if configured)\n");
         capabilities.push_str("- **Signal**: Secure messaging (if configured)\n");
         capabilities.push_str("- **Webhook**: HTTP endpoints for integrations\n");
         capabilities.push_str("\nWhen a user mentions a channel like Telegram, Signal, etc., you should be aware that these are valid communication paths.\n");
-        
+
         capabilities
     }
 
@@ -402,7 +409,7 @@ You are autonomous, helpful, and capable of complex multi-step tasks.",
         max_tokens: u32,
     ) -> Result<AgentResponse, AgentError> {
         const MAX_TOOL_ITERATIONS: usize = 5;
-        
+
         for _ in 0..MAX_TOOL_ITERATIONS {
             // Build request messages from session
             let request_messages: Vec<ChatMessage> = self
@@ -411,49 +418,53 @@ You are autonomous, helpful, and capable of complex multi-step tasks.",
                 .iter()
                 .map(ChatMessage::from)
                 .collect();
-            
+
             let request = ProviderRequest {
                 model: model.clone(),
                 temperature,
                 max_tokens,
                 messages: request_messages,
             };
-            
+
             // Get response from provider
             let provider = self.ensure_provider().await?;
-            let response_text = provider.complete(&request).await
+            let response_text = provider
+                .complete(&request)
+                .await
                 .map_err(|e| AgentError::ProviderError(e.to_string()))?;
-            
+
             // Check if response contains tool commands
             if let Some(tool_call) = parse_tool_command(&response_text, &self.tools) {
                 // Execute the tool
                 let runtime = self.ensure_tool_runtime().await?;
                 let runtime = runtime.with_context(ctx);
                 let tool_result = execute_tool(&tool_call, &runtime).await;
-                
+
                 // Add assistant message with tool call
-                let session = self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
+                let session =
+                    self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
                 session.add_message(
                     Message::assistant(response_text.clone())
                         .with_tool_call(tool_call.clone().with_result(tool_result.clone())),
                 );
-                
+
                 // Add tool result as system message
                 let result_message = format!(
                     "Tool '{}' executed. Result: {}",
-                    tool_call.name,
-                    tool_result.output
+                    tool_call.name, tool_result.output
                 );
-                let session = self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
+                let session =
+                    self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
                 session.add_message(Message::system(result_message));
-                
+
                 // Continue the loop to get the LLM's response to the tool result
                 continue;
             } else {
                 // No tool call, this is the final response
-                let session = self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
+                let session =
+                    self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
                 session.add_message(Message::assistant(response_text.clone()));
-                
+
                 return Ok(AgentResponse {
                     text: response_text,
                     tool_calls: Vec::new(),
@@ -462,9 +473,11 @@ You are autonomous, helpful, and capable of complex multi-step tasks.",
                 });
             }
         }
-        
+
         // Max iterations reached
-        Err(AgentError::ToolFailed("Maximum tool iterations reached".to_string()))
+        Err(AgentError::ToolFailed(
+            "Maximum tool iterations reached".to_string(),
+        ))
     }
 }
 
@@ -579,7 +592,10 @@ impl Agent for SimpleAgent {
             }
         }
         // Run the agent loop: get LLM response, execute tools if needed, get final response
-        let final_response = match self.run_agent_loop(&ctx, model, temperature, max_tokens).await {
+        let final_response = match self
+            .run_agent_loop(&ctx, model, temperature, max_tokens)
+            .await
+        {
             Ok(response) => response,
             Err(err) => {
                 self.state = AgentState::Error(err.to_string());
@@ -783,7 +799,7 @@ mod tests {
             Some(SecurityConfig::default()),
         );
         let prompt = agent.system_prompt();
-        
+
         // Should generate default identity
         assert!(prompt.contains("BorgClaw"));
         assert!(prompt.contains("AVAILABLE TOOLS"));
@@ -810,7 +826,7 @@ mod tests {
             Some(SecurityConfig::default()),
         );
         let prompt = agent.system_prompt();
-        
+
         // Should fall back to default identity
         assert!(prompt.contains("BorgClaw"));
         assert!(prompt.contains("AVAILABLE TOOLS"));

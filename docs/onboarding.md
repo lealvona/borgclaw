@@ -154,6 +154,10 @@ prompt_injection_defense = true
 hybrid_search = true
 session_max_entries = 100
 
+[heartbeat]
+enabled = true
+check_interval_seconds = 60
+
 [channels.telegram]
 enabled = true
 token = "${TELEGRAM_BOT_TOKEN}"

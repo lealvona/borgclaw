@@ -21,12 +21,12 @@ Audit note:
 | WebSocket gateway auth/events | `complete` | Auth, pairing, error, heartbeat, and control-plane events are implemented. |
 | SQLite memory + group isolation | `complete` | Metadata round-trip, isolation, recall, and compaction are implemented. |
 | Solution memory | `complete` | Documented public structs and search helpers are aligned. |
-| Heartbeat engine | `partial` | Core engine, persistence, retries, enable/disable flow, and operator visibility are landed. `heartbeat trigger` is still a CLI placeholder rather than a real dispatch path. |
+| Heartbeat engine | `complete` | Core engine, persistence, retries, enable/disable flow, operator visibility, and manual CLI trigger execution against persisted state are landed. |
 | Scheduler | `complete` | Execution loop, timeout/concurrency policy, retries/dead-letter behavior, persisted job state, bounded run history, restart-recovery coverage, catch-up/recovery semantics, and full operator CRUD (list, show, create, delete, pause, resume) are all landed. |
 | Sub-agent coordinator | `complete` | Spawn/status/result flow, concurrency limits, cancellation precedence, memory policy enforcement, parent-context inheritance, persisted task snapshots, retry/dead-letter behavior, workspace policy enforcement, and audit logging are all landed. |
 | Security config contract | `complete` | Documented TOML shape parses and core enforcement exists. |
 | Secret storage + vault | `complete` | Encrypted secrets, vault clients (Bitwarden, 1Password), CLI commands (list, set, delete, check), and onboarding/auth UX are complete. |
-| Skill registry lifecycle | `partial` | Local install, remote `SKILL.md`, GitHub-backed listing, packaging, publishing, inspection, and version compatibility are implemented. Remote archive install-by-URL and asset-complete remote installs are still missing. |
+| Skill registry lifecycle | `partial` | Local directory install, local `.tar.gz` install, GitHub-backed listing, archive-backed GitHub repo/registry installs, remote archive install-by-URL, packaging, publishing, inspection, and version compatibility are implemented. Arbitrary non-GitHub direct `SKILL.md` URLs remain manifest-only because there is no portable asset discovery contract. |
 | MCP client | `complete` | Documented transports (Stdio, SSE, WebSocket) and client API are aligned. |
 | GitHub skill client | `complete` | Core client surface, shared tool/runtime coverage, local shared-runtime happy-path coverage, and operational completeness are landed. |
 | Google skill client | `complete` | Gmail/Drive/Calendar facade, shared runtime coverage, local shared-runtime happy-path coverage, and operational completeness are landed. |
@@ -63,8 +63,7 @@ Audit note:
 - ✅ Self-test command with dead-letter state detection
 - ✅ Backup export/import/verify workflows
 - ✅ Full schedule management: `list`, `show`, `create`, `delete`, `pause`, `resume`
-- ✅ Heartbeat management: `list`, `show`, `enable`, `disable`
-- ⚠️ `heartbeat trigger` CLI surface exists but is still placeholder-only
+- ✅ Heartbeat management: `list`, `show`, `enable`, `disable`, `trigger`
 - ✅ Sub-agent management: `list`, `show`, `cancel`
 - ✅ Secret management: `list`, `set`, `delete`, `check`
 - ✅ Doctor with aggregate MCP failure summaries
@@ -82,7 +81,10 @@ Audit note:
 - ✅ Skill publishing (`borgclaw skills publish`)
 - ✅ Skill inspection (`borgclaw skills inspect`)
 - ✅ Version compatibility checking (semver)
-- ⚠️ Remote skill installs by URL still fetch only `SKILL.md`; archive-by-URL installs are not implemented
+- ✅ Local packaged skill install via `borgclaw skills install ./skill.tar.gz`
+- ✅ Remote archive install-by-URL
+- ✅ GitHub-backed remote installs now extract companion files instead of persisting only `SKILL.md`
+- ⚠️ Arbitrary non-GitHub direct `SKILL.md` URLs still install manifest-only
 - ✅ GitHub runtime happy-path coverage
 - ✅ Google runtime happy-path coverage (Gmail, Drive, Calendar)
 - ✅ Browser runtime happy-path coverage (Playwright/CDP)
@@ -100,8 +102,7 @@ Audit note:
 
 ## Temporary Limitations
 
-- `heartbeat trigger` does not yet execute or enqueue a real manual heartbeat run.
-- Remote skill installs are still manifest-only for GitHub/direct-URL sources.
+- Arbitrary non-GitHub direct `SKILL.md` URLs still install manifest-only.
 - Repo-wide `clippy -D warnings` cleanup remains separate follow-up work.
 
 ## Historical Note

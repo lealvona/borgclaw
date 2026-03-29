@@ -5,6 +5,14 @@
 > Historical releases 1.0.0 through 1.14.0 now correspond to 0.1.0 through 0.14.0.  
 > The codebase remains unchanged; only version numbers were updated.
 
+## Unreleased
+
+### Features
+
+- `borgclaw heartbeat trigger <id>` now executes persisted heartbeat tasks immediately through the heartbeat engine instead of acting as a placeholder-only CLI surface.
+- `borgclaw skills install` now supports local packaged `.tar.gz` skill archives, remote `.tar.gz` archive URLs, archive-backed GitHub repo installs, archive-backed GitHub registry installs, and direct GitHub raw `SKILL.md` URLs with companion file extraction.
+- Telegram polling now uses explicit update polling with persisted offsets, improving restart-state correctness beyond simple duplicate-start/shutdown handling.
+
 ## 0.14.0 - 2026-03-26 (was 1.14.0)
 
 ### Features

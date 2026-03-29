@@ -129,10 +129,10 @@ Shared consciousness across all interactions:
 
 Current skill lifecycle status:
 
-- local skill installs are implemented
-- GitHub `owner/repo` installs and direct `SKILL.md` URL installs are implemented
+- local skill installs and local packaged `.tar.gz` installs are implemented
+- GitHub `owner/repo` installs, GitHub-backed registry installs, direct GitHub `SKILL.md` URLs, and remote `.tar.gz` archive URLs are implemented
 - skill packaging, publishing, and package inspection are implemented
-- remote archive install-by-URL is still pending, and remote manifest installs currently fetch `SKILL.md` only
+- arbitrary non-GitHub direct `SKILL.md` URLs remain manifest-only because there is no portable companion-asset discovery contract
 
 ### ➡️ Right Face — Security
 
@@ -300,6 +300,10 @@ prompt_injection_defense = true
 hybrid_search = true
 session_max_entries = 100
 
+[heartbeat]
+enabled = true
+check_interval_seconds = 60
+
 [channels.telegram]
 enabled = true
 token = "${TELEGRAM_BOT_TOKEN}"
@@ -361,8 +365,8 @@ borgclaw/
 ├── borgclaw-gateway/      # WebSocket gateway
 ├── scripts/               # Utility protocols
 ├── docs/                  # Knowledge base
-├── .local/                # Local collective memory (gitignored)
-└── config.toml            # Example configuration
+├── .borgclaw/             # Local collective state (gitignored)
+└── ~/.config/borgclaw/    # User configuration location
 ```
 
 ---
