@@ -163,31 +163,55 @@ impl SkillManifest {
 
     /// Check whether this skill is compatible with the given borgclaw version.
     /// Returns true if no min_version is set or if `current >= min_version`.
+    /// 
+    /// Uses proper semantic versioning comparison via the semver crate.
     pub fn is_compatible(&self, current_version: &str) -> bool {
         match &self.min_version {
             None => true,
-            Some(min) => version_gte(current_version, min),
+            Some(min) => {
+                // Normalize versions to handle partial semver (e.g., "1.8" -> "1.8.0")
+                let current_norm = normalize_version(current_version);
+                let min_norm = normalize_version(min);
+                
+                // Parse both versions using semver
+                let current = match semver::Version::parse(&current_norm) {
+                    Ok(v) => v,
+                    Err(_) => return false, // Invalid current version is not compatible
+                };
+                let minimum = match semver::Version::parse(&min_norm) {
+                    Ok(v) => v,
+                    Err(_) => return false, // Invalid min version means not compatible
+                };
+                
+                // Compare: current >= minimum
+                current >= minimum
+            }
         }
     }
 }
 
-/// Simple semver comparison: returns true when `current >= minimum`.
-fn version_gte(current: &str, minimum: &str) -> bool {
-    let parse = |s: &str| -> Vec<u64> {
-        s.split('.')
-            .map(|part| part.parse::<u64>().unwrap_or(0))
-            .collect()
-    };
-    let cur = parse(current);
-    let min = parse(minimum);
-    for i in 0..cur.len().max(min.len()) {
-        let c = cur.get(i).copied().unwrap_or(0);
-        let m = min.get(i).copied().unwrap_or(0);
-        if c != m {
-            return c > m;
-        }
+/// Normalize a version string to valid semver (adds missing patch version).
+fn normalize_version(version: &str) -> String {
+    let parts: Vec<&str> = version.split('.').collect();
+    match parts.len() {
+        1 => format!("{}.0.0", parts[0]),
+        2 => format!("{}.{}.0", parts[0], parts[1]),
+        _ => version.to_string(),
     }
-    true // equal
+}
+
+/// Compare two versions using proper semantic versioning.
+/// Returns true if `current >= minimum`.
+/// 
+/// This function normalizes partial versions (e.g., "1.8" -> "1.8.0") before comparison.
+pub fn version_gte(current: &str, minimum: &str) -> bool {
+    let current_norm = normalize_version(current);
+    let minimum_norm = normalize_version(minimum);
+    
+    match (semver::Version::parse(&current_norm), semver::Version::parse(&minimum_norm)) {
+        (Ok(current), Ok(minimum)) => current >= minimum,
+        _ => false, // Invalid versions are not compatible
+    }
 }
 
 #[cfg(test)]
