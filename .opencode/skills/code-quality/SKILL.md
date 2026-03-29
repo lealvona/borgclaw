@@ -1,3 +1,8 @@
+---
+name: code-quality
+description: Run pre-commit quality checks and verify tests, formatting, linting, and documentation before PR creation.
+---
+
 # Skill: Code Quality
 
 > Directive for ensuring code quality, tests, and documentation before PR creation.
@@ -100,4 +105,4 @@ Code merged without tests or documentation:
 - Confuses other developers
 - Violates project standards
 
-Base directory for this skill: file:///home/lvona/src/borgclaw_deploy/.opencode/skills/code-quality
+Base directory for this skill: `.opencode/skills/code-quality`
