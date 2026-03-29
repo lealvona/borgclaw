@@ -1,7 +1,10 @@
 //! Tools module - defines tools agents can use
 
+mod file;
 mod memory;
+mod shell;
 mod types;
+mod web;
 
 pub use types::*;
 
@@ -17,7 +20,6 @@ use crate::skills::{
     BrowserSkill, CdpClient, GitHubClient, GoogleClient, ImageClient, ImageParams,
     PlaywrightClient, PluginRegistry, QrFormat, QrSkill, SttClient, TtsClient, UrlShortener,
 };
-use regex::Regex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -231,15 +233,15 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "memory_clear_group" => memory::memory_clear_group(&call.arguments, runtime).await,
         "solution_store" => memory::solution_store(&call.arguments, runtime).await,
         "solution_find" => memory::solution_find(&call.arguments, runtime).await,
-        "execute_command" => execute_command(&call.arguments, runtime).await,
-        "read_file" => read_file(&call.arguments, runtime).await,
-        "list_directory" => list_directory(&call.arguments, runtime).await,
-        "fetch_url" => fetch_url(&call.arguments, runtime).await,
+        "execute_command" => shell::execute_command(&call.arguments, runtime).await,
+        "read_file" => file::read_file(&call.arguments, runtime).await,
+        "list_directory" => file::list_directory(&call.arguments, runtime).await,
+        "fetch_url" => web::fetch_url(&call.arguments, runtime).await,
         "message" => message(&call.arguments),
         "schedule_task" => schedule_task(&call.arguments, runtime).await,
         "run_scheduled_tasks" => run_scheduled_tasks(runtime).await,
         "approve" => approve_tool(&call.arguments, runtime).await,
-        "web_search" => web_search(&call.arguments).await,
+        "web_search" => web::web_search(&call.arguments).await,
         "plugin_list" => plugin_list(runtime).await,
         "plugin_invoke" => plugin_invoke(&call.arguments, runtime).await,
         "github_list_repos" => github_list_repos(&call.arguments, runtime).await,
@@ -367,7 +369,7 @@ fn sanitize_tool_result(mut result: ToolResult, runtime: &ToolRuntime) -> ToolRe
     result
 }
 
-async fn require_tool_approval(
+pub(super) async fn require_tool_approval(
     tool_name: &str,
     arguments: &HashMap<String, serde_json::Value>,
     runtime: &ToolRuntime,
@@ -400,178 +402,6 @@ async fn require_tool_approval(
         .with_metadata("approval_tool", tool_name)
         .with_metadata("approval_token", token),
     )
-}
-
-async fn execute_command(
-    arguments: &HashMap<String, serde_json::Value>,
-    runtime: &ToolRuntime,
-) -> ToolResult {
-    let command = match get_required_string(arguments, "command") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-    let timeout_secs = get_u64(arguments, "timeout").unwrap_or(60);
-    if let Some(result) = require_tool_approval("execute_command", arguments, runtime).await {
-        return result;
-    }
-
-    match runtime.security.check_command(&command) {
-        CommandCheck::Blocked(pattern) => {
-            let actor = runtime
-                .invocation
-                .as_ref()
-                .map(|i| i.sender.id.clone())
-                .unwrap_or_else(|| "system".to_string());
-            runtime
-                .audit
-                .log_command(&actor, &command, true, false)
-                .await;
-            return ToolResult::err(format!("blocked command by policy: {}", pattern));
-        }
-        CommandCheck::Allowed => {}
-    }
-
-    let mut cmd = tokio::process::Command::new("sh");
-    let secret_env = runtime.security.secret_env().await;
-    cmd.arg("-lc")
-        .arg(&command)
-        .current_dir(&runtime.workspace_root)
-        .envs(secret_env)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
-    let output = match tokio::time::timeout(
-        std::time::Duration::from_secs(timeout_secs),
-        cmd.output(),
-    )
-    .await
-    {
-        Ok(Ok(output)) => output,
-        Ok(Err(err)) => return ToolResult::err(err.to_string()),
-        Err(_) => return ToolResult::err("command timed out"),
-    };
-
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let combined = if stderr.is_empty() {
-        stdout
-    } else if stdout.is_empty() {
-        stderr
-    } else {
-        format!("{}\n{}", stdout, stderr)
-    };
-
-    let actor = runtime
-        .invocation
-        .as_ref()
-        .map(|i| i.sender.id.clone())
-        .unwrap_or_else(|| "system".to_string());
-    let success = output.status.success();
-    runtime
-        .audit
-        .log_command(&actor, &command, false, success)
-        .await;
-
-    if success {
-        ToolResult::ok(truncate_output(&combined))
-    } else {
-        ToolResult::err(truncate_output(&combined))
-    }
-}
-
-async fn read_file(
-    arguments: &HashMap<String, serde_json::Value>,
-    runtime: &ToolRuntime,
-) -> ToolResult {
-    let path = match get_required_string(arguments, "path") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-    let offset = get_u64(arguments, "offset").unwrap_or(0) as usize;
-    let limit = get_u64(arguments, "limit").unwrap_or(100) as usize;
-
-    let resolved =
-        match resolve_workspace_path(&runtime.workspace_root, &runtime.workspace_policy, &path) {
-            Ok(path) => path,
-            Err(err) => return ToolResult::err(err),
-        };
-
-    let content = match std::fs::read_to_string(&resolved) {
-        Ok(content) => content,
-        Err(err) => return ToolResult::err(err.to_string()),
-    };
-
-    let lines = content
-        .lines()
-        .skip(offset)
-        .take(limit)
-        .enumerate()
-        .map(|(idx, line)| format!("{:>4}: {}", offset + idx + 1, line))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    ToolResult::ok(lines)
-}
-
-async fn list_directory(
-    arguments: &HashMap<String, serde_json::Value>,
-    runtime: &ToolRuntime,
-) -> ToolResult {
-    let path = arguments
-        .get("path")
-        .and_then(|value| value.as_str())
-        .unwrap_or(".");
-
-    let resolved =
-        match resolve_workspace_path(&runtime.workspace_root, &runtime.workspace_policy, path) {
-            Ok(path) => path,
-            Err(err) => return ToolResult::err(err),
-        };
-
-    let entries = match std::fs::read_dir(&resolved) {
-        Ok(entries) => entries,
-        Err(err) => return ToolResult::err(err.to_string()),
-    };
-
-    let mut names = entries
-        .filter_map(|entry| entry.ok())
-        .map(|entry| {
-            let file_type = entry.file_type().ok();
-            let suffix = if file_type.as_ref().is_some_and(|ft| ft.is_dir()) {
-                "/"
-            } else {
-                ""
-            };
-            format!("{}{}", entry.file_name().to_string_lossy(), suffix)
-        })
-        .collect::<Vec<_>>();
-    names.sort();
-
-    ToolResult::ok(names.join("\n"))
-}
-
-async fn fetch_url(
-    arguments: &HashMap<String, serde_json::Value>,
-    runtime: &ToolRuntime,
-) -> ToolResult {
-    let url = match get_required_string(arguments, "url") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-
-    // Validate URL against SSRF attacks
-    if let Err(e) = runtime.security.validate_url(&url) {
-        return ToolResult::err(format!("URL blocked by SSRF protection: {}", e));
-    }
-
-    match reqwest::get(&url).await {
-        Ok(response) if response.status().is_success() => match response.text().await {
-            Ok(body) => ToolResult::ok(truncate_output(&body)),
-            Err(err) => ToolResult::err(err.to_string()),
-        },
-        Ok(response) => ToolResult::err(format!("http {}", response.status())),
-        Err(err) => ToolResult::err(err.to_string()),
-    }
 }
 
 fn message(arguments: &HashMap<String, serde_json::Value>) -> ToolResult {
@@ -824,60 +654,6 @@ fn scheduled_metadata(job: &crate::scheduler::Job) -> HashMap<String, String> {
                 .map(|key| (key.to_string(), value.clone()))
         })
         .collect()
-}
-
-async fn web_search(arguments: &HashMap<String, serde_json::Value>) -> ToolResult {
-    let query = match get_required_string(arguments, "query") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-    let num_results = get_u64(arguments, "num_results").unwrap_or(5).clamp(1, 10) as usize;
-
-    let client = reqwest::Client::builder()
-        .user_agent("BorgClaw/0.1")
-        .build();
-    let client = match client {
-        Ok(client) => client,
-        Err(err) => return ToolResult::err(err.to_string()),
-    };
-
-    let response = client
-        .get("https://duckduckgo.com/html/")
-        .query(&[("q", query.as_str())])
-        .send()
-        .await;
-    let response = match response {
-        Ok(response) if response.status().is_success() => response,
-        Ok(response) => return ToolResult::err(format!("http {}", response.status())),
-        Err(err) => return ToolResult::err(err.to_string()),
-    };
-
-    let body = match response.text().await {
-        Ok(body) => body,
-        Err(err) => return ToolResult::err(err.to_string()),
-    };
-
-    let results = parse_duckduckgo_results(&body, num_results);
-    if results.is_empty() {
-        return ToolResult::ok("no results");
-    }
-
-    let output = results
-        .iter()
-        .enumerate()
-        .map(|(index, result)| {
-            let mut line = format!("{}. {} - {}", index + 1, result.title, result.url);
-            if let Some(snippet) = &result.snippet {
-                line.push_str(&format!("\n   {}", snippet));
-            }
-            line
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    ToolResult::ok(output)
-        .with_metadata("source", "duckduckgo")
-        .with_metadata("result_count", results.len().to_string())
 }
 
 async fn plugin_list(runtime: &ToolRuntime) -> ToolResult {
@@ -2927,7 +2703,7 @@ fn get_bool(arguments: &HashMap<String, serde_json::Value>, key: &str) -> Option
     arguments.get(key).and_then(|value| value.as_bool())
 }
 
-fn resolve_workspace_path(
+pub(super) fn resolve_workspace_path(
     workspace_root: &Path,
     policy: &crate::config::WorkspacePolicyConfig,
     requested: &str,
@@ -3003,62 +2779,13 @@ fn resolve_policy_path(workspace_root: &Path, path: &Path) -> Result<PathBuf, St
         .map_err(|e| e.to_string())
 }
 
-fn truncate_output(output: &str) -> String {
+pub(super) fn truncate_output(output: &str) -> String {
     const MAX_LEN: usize = 4000;
     if output.len() <= MAX_LEN {
         output.to_string()
     } else {
         format!("{}...", &output[..MAX_LEN])
     }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct SearchResult {
-    title: String,
-    url: String,
-    snippet: Option<String>,
-}
-
-fn parse_duckduckgo_results(body: &str, limit: usize) -> Vec<SearchResult> {
-    let result_re = Regex::new(
-        r#"(?s)<a[^>]*class="result__a"[^>]*href="(?P<url>[^"]+)"[^>]*>(?P<title>.*?)</a>.*?(?:<a[^>]*class="result__snippet"[^>]*>|<div[^>]*class="result__snippet"[^>]*>)(?P<snippet>.*?)(?:</a>|</div>)"#,
-    )
-    .unwrap();
-    let tag_re = Regex::new(r"<[^>]+>").unwrap();
-
-    result_re
-        .captures_iter(body)
-        .take(limit)
-        .filter_map(|capture| {
-            let title = decode_html_entities(tag_re.replace_all(&capture["title"], "").trim());
-            let url = decode_html_entities(capture["url"].trim());
-            let snippet = decode_html_entities(tag_re.replace_all(&capture["snippet"], "").trim());
-            if title.is_empty() || url.is_empty() {
-                return None;
-            }
-
-            Some(SearchResult {
-                title,
-                url,
-                snippet: if snippet.is_empty() {
-                    None
-                } else {
-                    Some(snippet)
-                },
-            })
-        })
-        .collect()
-}
-
-fn decode_html_entities(input: &str) -> String {
-    input
-        .replace("&amp;", "&")
-        .replace("&quot;", "\"")
-        .replace("&#x27;", "'")
-        .replace("&#39;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&nbsp;", " ")
 }
 
 fn string_property(description: &str) -> PropertySchema {
@@ -3319,26 +3046,6 @@ mod tests {
             result.output,
             "blocked command by policy: not allowed by command allowlist"
         );
-    }
-
-    #[test]
-    fn parses_duckduckgo_results() {
-        let html = r#"
-            <div class="result">
-              <a class="result__a" href="https://example.com/one">Example &amp; One</a>
-              <div class="result__snippet">First <b>snippet</b></div>
-            </div>
-            <div class="result">
-              <a class="result__a" href="https://example.com/two">Example Two</a>
-              <a class="result__snippet">Second snippet</a>
-            </div>
-        "#;
-
-        let results = parse_duckduckgo_results(html, 5);
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0].title, "Example & One");
-        assert_eq!(results[0].url, "https://example.com/one");
-        assert_eq!(results[0].snippet.as_deref(), Some("First snippet"));
     }
 
     #[tokio::test]
@@ -5920,120 +5627,11 @@ for line in sys.stdin:
 /// Built-in tools
 pub fn builtin_tools() -> Vec<Tool> {
     let mut tools = Vec::new();
+    file::register(&mut tools);
     memory::register(&mut tools);
+    shell::register(&mut tools);
+    web::register(&mut tools);
     tools.extend(vec![
-        Tool::new("execute_command", "Execute a shell command")
-            .with_schema(ToolSchema::object(
-                [
-                    (
-                        "command".to_string(),
-                        PropertySchema {
-                            prop_type: "string".to_string(),
-                            description: Some("Command to execute".to_string()),
-                            default: None,
-                            enum_values: None,
-                        },
-                    ),
-                    (
-                        "timeout".to_string(),
-                        PropertySchema {
-                            prop_type: "number".to_string(),
-                            description: Some("Timeout in seconds".to_string()),
-                            default: Some(serde_json::json!(60)),
-                            enum_values: None,
-                        },
-                    ),
-                    (
-                        "approval_token".to_string(),
-                        PropertySchema {
-                            prop_type: "string".to_string(),
-                            description: Some("Approval token for protected commands".to_string()),
-                            default: None,
-                            enum_values: None,
-                        },
-                    ),
-                ]
-                .into(),
-                vec!["command".to_string()],
-            ))
-            .with_approval(true)
-            .with_tags(vec!["system".to_string()]),
-        Tool::new("read_file", "Read a file from the filesystem")
-            .with_schema(ToolSchema::object(
-                [
-                    (
-                        "path".to_string(),
-                        PropertySchema {
-                            prop_type: "string".to_string(),
-                            description: Some("File path".to_string()),
-                            default: None,
-                            enum_values: None,
-                        },
-                    ),
-                    (
-                        "offset".to_string(),
-                        PropertySchema {
-                            prop_type: "number".to_string(),
-                            description: Some("Line offset".to_string()),
-                            default: Some(serde_json::json!(0)),
-                            enum_values: None,
-                        },
-                    ),
-                    (
-                        "limit".to_string(),
-                        PropertySchema {
-                            prop_type: "number".to_string(),
-                            description: Some("Number of lines".to_string()),
-                            default: Some(serde_json::json!(100)),
-                            enum_values: None,
-                        },
-                    ),
-                ]
-                .into(),
-                vec!["path".to_string()],
-            ))
-            .with_tags(vec!["filesystem".to_string()]),
-        Tool::new("list_directory", "List files in a directory")
-            .with_schema(ToolSchema::object(
-                [(
-                    "path".to_string(),
-                    PropertySchema {
-                        prop_type: "string".to_string(),
-                        description: Some("Directory path".to_string()),
-                        default: None,
-                        enum_values: None,
-                    },
-                )]
-                .into(),
-                vec!["path".to_string()],
-            ))
-            .with_tags(vec!["filesystem".to_string()]),
-        Tool::new("web_search", "Search the web")
-            .with_schema(ToolSchema::object(
-                [
-                    (
-                        "query".to_string(),
-                        PropertySchema {
-                            prop_type: "string".to_string(),
-                            description: Some("Search query".to_string()),
-                            default: None,
-                            enum_values: None,
-                        },
-                    ),
-                    (
-                        "num_results".to_string(),
-                        PropertySchema {
-                            prop_type: "number".to_string(),
-                            description: Some("Number of results".to_string()),
-                            default: Some(serde_json::json!(5)),
-                            enum_values: None,
-                        },
-                    ),
-                ]
-                .into(),
-                vec!["query".to_string()],
-            ))
-            .with_tags(vec!["web".to_string()]),
         Tool::new("plugin_list", "List loaded WASM plugins")
             .with_schema(ToolSchema::object(HashMap::new(), Vec::new()))
             .with_tags(vec!["plugin".to_string()]),
@@ -6941,21 +6539,6 @@ pub fn builtin_tools() -> Vec<Tool> {
         ))
         .with_approval(true)
         .with_tags(vec!["mcp".to_string(), "integration".to_string()]),
-        Tool::new("fetch_url", "Fetch content from a URL")
-            .with_schema(ToolSchema::object(
-                [(
-                    "url".to_string(),
-                    PropertySchema {
-                        prop_type: "string".to_string(),
-                        description: Some("URL to fetch".to_string()),
-                        default: None,
-                        enum_values: None,
-                    },
-                )]
-                .into(),
-                vec!["url".to_string()],
-            ))
-            .with_tags(vec!["web".to_string()]),
         Tool::new("message", "Send a message to the user")
             .with_schema(ToolSchema::object(
                 [(
