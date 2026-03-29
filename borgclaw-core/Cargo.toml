@@ -40,6 +40,7 @@ futures-util = "0.3"
 rand = "0.8"
 wasmtime = "20.0"
 tokio-tungstenite.workspace = true
+semver = "1.0"
 
 [features]
 default = []
