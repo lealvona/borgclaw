@@ -2,6 +2,11 @@
 
 This document records a code-and-doc audit performed after the TICKET-086 and TICKET-087 landing sequence.
 
+Superseded in part by later March 29, 2026 follow-up work:
+- manual heartbeat trigger has since been implemented
+- archive-backed skill install has since landed for local packages, remote archive URLs, and GitHub-backed sources
+- arbitrary non-GitHub direct `SKILL.md` URLs remain the main manifest-only limitation
+
 It has two goals:
 
 1. Identify functionality that is still incomplete, placeholder-only, or only partially implemented.

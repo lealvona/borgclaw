@@ -39,8 +39,7 @@ cd borgclaw
 This will:
 - Check prerequisites
 - Build the workspace
-- Create `.local/` directory structure
-- Add `.local/` to `.gitignore`
+- Prepare the local workspace and helper scripts
 
 ## Step 3: Configure
 
@@ -91,7 +90,7 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 # Or: cargo run --bin borgclaw-gateway
 ```
 
-Gateway endpoint: `ws://localhost:18789/ws`
+Gateway endpoint: `ws://localhost:3000/ws`
 
 ## Step 5: Verify
 
@@ -142,7 +141,7 @@ chmod +x scripts/*.sh
 ```
 
 ### Gateway port conflict
-Stop process on port 18789 or modify source to bind another port.
+Stop process on port 3000 or change the configured WebSocket port.
 
 ## Next Steps
 

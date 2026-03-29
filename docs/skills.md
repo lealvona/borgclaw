@@ -527,7 +527,7 @@ WASM plugins run in sandboxed wasmtime environment with:
 
 ## Skill Packaging and Publishing
 
-BorgClaw provides a complete skill lifecycle management system including packaging and publishing capabilities.
+BorgClaw supports packaging, publishing, inspection, local package install, archive-backed GitHub/registry installs, and remote archive URLs.
 
 ### Packaging Skills
 
@@ -614,7 +614,14 @@ borgclaw skills install https://example.com/skills/weather/SKILL.md
 
 # Install from local package
 borgclaw skills install ./my-skill-1.0.0.tar.gz
+
+# Install from remote package URL
+borgclaw skills install https://example.com/skills/weather-1.0.0.tar.gz
 ```
+
+Current install limitations:
+- local installs must point to a skill directory containing `SKILL.md`
+- arbitrary non-GitHub direct `SKILL.md` URLs remain manifest-only
 
 **Registry Format:**
 
@@ -680,7 +687,7 @@ cat > SKILL.md << 'EOF'
 name: my-skill
 version: 1.0.0
 description: A custom skill
-description: Developer Name
+author: Developer Name
 ---
 
 ## Commands

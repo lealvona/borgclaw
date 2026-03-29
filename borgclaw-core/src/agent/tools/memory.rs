@@ -1,6 +1,6 @@
 use super::{
-    get_required_string, get_u64, optional_group_id, PropertySchema, Tool, ToolResult,
-    ToolRuntime, ToolSchema,
+    get_required_string, get_u64, optional_group_id, PropertySchema, Tool, ToolResult, ToolRuntime,
+    ToolSchema,
 };
 use crate::memory::{new_entry, new_entry_for_group, Memory, MemoryQuery};
 use std::collections::HashMap;

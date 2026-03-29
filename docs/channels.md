@@ -166,7 +166,7 @@ cargo run --bin borgclaw-gateway
 ### Connect
 
 ```javascript
-const ws = new WebSocket('ws://localhost:18789/ws');
+const ws = new WebSocket('ws://localhost:3000/ws');
 
 ws.onopen = () => {
   ws.send(JSON.stringify({
@@ -220,7 +220,7 @@ rate_limit_per_minute = 60
 
 [channels.websocket]
 enabled = true
-port = 18789
+port = 3000
 require_pairing = true
 ```
 

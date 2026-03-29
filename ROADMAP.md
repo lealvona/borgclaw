@@ -7,8 +7,8 @@ Implement the remaining documented BorgClaw feature set in a security-first sequ
 Status note as of March 29, 2026:
 - Phase 1 is complete.
 - Phase 2 is complete.
-- Phase 3 is mostly complete. The main audited remaining gap is a real manual heartbeat trigger path.
-- Phase 4 is mostly complete. The main audited remaining gaps are remote archive skill installs and asset-complete remote skill installs.
+- Phase 3 is complete.
+- Phase 4 is mostly complete. The remaining gap is that arbitrary non-GitHub direct `SKILL.md` URLs are still manifest-only.
 - Phase 5 is mostly complete. The main audited remaining gap is repo-wide lint/doc hardening rather than missing core product-contract features.
 - See `docs/IMPLEMENTATION_AUDIT_2026-03-29.md` for the evidence-backed issue list and concrete fix steps.
 
@@ -52,9 +52,9 @@ Recent landed work in this phase:
 - Background scheduled and sub-agent tool selection now reject approval-gated tools when interactive approval is unavailable.
 - Tool execution now carries conversation context so memory tools respect `group_id`, and scheduled tool jobs inherit originating sender/session metadata.
 - CLI `status`/`doctor` now surface persisted scheduler, heartbeat, and sub-agent recovery state from the workspace, including task counts and dead-letter counts when state files exist.
-- The next remaining gap in this phase is implementing a real manual heartbeat trigger path instead of the current CLI placeholder.
+- CLI heartbeat manual trigger now executes persisted tasks immediately through the heartbeat engine instead of acting as a placeholder-only surface.
 - Signal polling now rejects duplicate receiver starts, performs a health check before entering the receive loop, and tracks/aborts the background poll task on shutdown.
-- Telegram polling now rejects duplicate receiver starts and tracks/aborts the background receive task on shutdown.
+- Telegram polling now rejects duplicate receiver starts, uses explicit update polling with persisted offsets, and tracks/aborts the background receive task on shutdown.
 
 ## Phase 4: Skills and Integrations
 
@@ -69,7 +69,8 @@ Recent landed work in this phase:
 - Shared runtime Google happy-path coverage now exercises configured Gmail, Drive, and Calendar endpoints against a local stub, instead of relying only on client-level tests.
 - Shared runtime browser happy-path coverage now exercises a configured local bridge for `browser_get_url` and `browser_eval_js`, instead of relying only on browser-client unit tests.
 - Shared runtime coverage now includes local happy-path tests for QR URL encoding and URL shortening via a configured YOURLS-compatible provider.
-- The next remaining gaps in this phase are remote archive installs by URL and support for asset-complete remote skill installs instead of manifest-only fetches.
+- Archive-backed install now works for local `.tar.gz` packages, remote archive URLs, GitHub repo installs, GitHub-backed registry installs, and direct GitHub raw `SKILL.md` URLs.
+- The remaining gap in this phase is that arbitrary non-GitHub direct `SKILL.md` URLs still lack a portable asset-discovery contract, so those installs remain manifest-only.
 
 ## Phase 5: Hardening and UX
 

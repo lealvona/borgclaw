@@ -90,54 +90,50 @@ ClawHub is the official skill registry at `https://github.com/openclaw/clawhub`
 
 ### Skill Manifest
 
-```yaml
+```markdown
+---
 name: example-skill
 version: 1.0.0
 description: Example skill for BorgClaw
 author: developer
-tags: [utility, example]
+---
 
-entry_points:
-  - name: process
-    description: Process input data
-    input_schema:
-      type: object
-      properties:
-        input:
-          type: string
-          description: Input to process
-      required: [input]
+## Instructions
 
-permissions:
-  file_read: []
-  network: ["api.example.com"]
+Process input data.
 ```
 
 ### Installing Skills
 
 Current runtime support:
 - Local skill directory installs with `SKILL.md`
-- GitHub `owner/repo` installs that fetch the repository-root `SKILL.md` from `main`
+- Local packaged `.tar.gz` installs
+- GitHub `owner/repo` installs via archive-backed extraction from `main`
+- Direct GitHub raw `SKILL.md` URL installs with archive-backed companion file extraction
+- Direct remote `.tar.gz` archive URL installs
 - Direct remote `SKILL.md` URL installs
 - Registry-backed skill listing for GitHub-hosted registries such as ClawHub
 
 Current limitations within that support:
-- Remote installs currently persist the downloaded `SKILL.md` manifest only; companion assets and packaged archives are not fetched yet
 - Registry listing currently supports GitHub-hosted registries only
 - Remote URL installs must point directly to `SKILL.md`
-
-Planned but not yet implemented:
-- Remote archive installs by URL
+- Arbitrary non-GitHub direct `SKILL.md` URLs remain manifest-only because the URL alone does not define a portable asset-discovery contract
 
 ```bash
 # From local path
 borgclaw skills install ./my-skill
+
+# From local package
+borgclaw skills install ./my-skill-1.0.0.tar.gz
 
 # From ClawHub-style GitHub repo path
 borgclaw skills install openclaw/weather
 
 # From direct SKILL.md URL
 borgclaw skills install https://example.com/skills/weather/SKILL.md
+
+# From remote package URL
+borgclaw skills install https://example.com/skills/weather-1.0.0.tar.gz
 ```
 
 ### Publishing Skills
@@ -146,7 +142,7 @@ Packaging and publishing are implemented in the current CLI.
 
 Current limitation:
 
-- Remote archive installs by URL are still pending; remote installs currently use local directories, GitHub `owner/repo`, or direct `SKILL.md` URLs.
+- Arbitrary non-GitHub direct `SKILL.md` URLs remain manifest-only; archive-backed installs are available for GitHub-backed sources and `.tar.gz` URLs.
 
 ```bash
 # Package
@@ -160,54 +156,28 @@ borgclaw skills publish ./my-skill.tar.gz
 
 ### Creating a Skill
 
-1. Create skill directory:
-```
+Skill installs and packaging use `SKILL.md` as the manifest source of truth. A minimal local skill directory looks like:
+
+```text
 my-skill/
-├── skill.yaml      # Manifest
-├── main.wasm       # Compiled WASM
-└── README.md       # Documentation
+├── SKILL.md
+├── README.md
+└── assets/        # Optional companion files
 ```
 
-2. Write manifest:
-```yaml
+Example manifest:
+
+```markdown
+---
 name: my-skill
 version: 1.0.0
 description: My custom skill
 author: me
+---
 
-entry_points:
-  - name: execute
-    description: Execute the skill
-    input_schema:
-      type: object
-      properties:
-        query:
-          type: string
+## Instructions
 
-permissions:
-  network: ["api.myservice.com"]
-```
-
-3. Implement in Rust:
-```rust
-use borgclaw_core::skills::*;
-
-#[derive(Deserialize)]
-struct Input {
-    query: String,
-}
-
-#[skill_entrypoint]
-fn execute(input: Input) -> Result<String, SkillError> {
-    // Implementation
-    Ok(format!("Processed: {}", input.query))
-}
-```
-
-4. Compile to WASM:
-```bash
-cargo build --target wasm32-unknown-unknown --release
-cp target/wasm32-unknown-unknown/release/my_skill.wasm main.wasm
+Execute the skill against the user's request.
 ```
 
 ### Creating a Channel
@@ -370,7 +340,7 @@ connection_string = "postgres://user:pass@localhost/borgclaw"
 curl http://localhost:8080/webhook/health
 
 # Gateway health
-curl http://localhost:18789/health
+curl http://localhost:3000/api/health
 ```
 
 ### Metrics
@@ -397,7 +367,7 @@ file = ".local/logs/borgclaw.log"
 BorgClaw provides a skill packaging and publishing system that allows you to:
 - Package skills into distributable archives
 - Publish skills to public or private registries
-- Install skills from local directories, GitHub `owner/repo`, direct `SKILL.md` URLs, and packaged archives already present on disk
+- Install skills from local directories, local `.tar.gz` archives, GitHub `owner/repo`, direct GitHub raw `SKILL.md` URLs, remote `.tar.gz` URLs, and direct `SKILL.md` URLs
 
 ### Packaging
 
@@ -504,12 +474,12 @@ borgclaw skills install openclaw/weather
 # From direct URL
 borgclaw skills install https://example.com/skills/weather/SKILL.md
 
-# From local package
-borgclaw skills install ./my-skill-1.0.0.tar.gz
-
 # From local directory (development)
 borgclaw skills install ./my-skill
 ```
+
+Current installation limitation:
+- arbitrary non-GitHub direct `SKILL.md` URLs remain manifest-only
 
 ### Registry Implementation Example
 

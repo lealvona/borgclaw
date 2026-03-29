@@ -380,7 +380,7 @@ async fn main() {
         }
         Commands::Schedules { action } => schedules(config, action),
         Commands::Backup { action } => backup(config, action),
-        Commands::Heartbeat { action } => heartbeat(config, action),
+        Commands::Heartbeat { action } => heartbeat(config, action).await,
         Commands::Subagent { action } => subagent(config, action),
         Commands::Secrets { action } => secrets(config, action).await,
         Commands::Runtime => runtime(config).await,
@@ -471,17 +471,58 @@ async fn repl(config: AppConfig, _config_path: PathBuf) {
 
 /// Print the REPL welcome banner
 fn print_repl_banner(config: &AppConfig) {
-    println!("{}", "╭──────────────────────────────────────────────╮".cyan());
-    println!("{}", "│                                              │".cyan());
-    println!("{}", format!("│  🧊🦾  BorgClaw Neural Link v{:<17}│", env!("CARGO_PKG_VERSION")).cyan());
-    println!("{}", "│     The Hypercube Agent Collective           │".cyan());
-    println!("{}", "│                                              │".cyan());
-    println!("{}", format!("│  Provider: {:<34}│", config.agent.provider).cyan().to_string());
-    println!("{}", format!("│  Model:    {:<34}│", config.agent.model).cyan().to_string());
-    println!("{}", "│                                              │".cyan());
-    println!("{}", "│  Commands: help, status, clear, history    │".dimmed());
-    println!("{}", "│           exit/quit                         │".dimmed());
-    println!("{}", "╰──────────────────────────────────────────────╯".cyan());
+    println!(
+        "{}",
+        "╭──────────────────────────────────────────────╮".cyan()
+    );
+    println!(
+        "{}",
+        "│                                              │".cyan()
+    );
+    println!(
+        "{}",
+        format!(
+            "│  🧊🦾  BorgClaw Neural Link v{:<17}│",
+            env!("CARGO_PKG_VERSION")
+        )
+        .cyan()
+    );
+    println!(
+        "{}",
+        "│     The Hypercube Agent Collective           │".cyan()
+    );
+    println!(
+        "{}",
+        "│                                              │".cyan()
+    );
+    println!(
+        "{}",
+        format!("│  Provider: {:<34}│", config.agent.provider)
+            .cyan()
+            .to_string()
+    );
+    println!(
+        "{}",
+        format!("│  Model:    {:<34}│", config.agent.model)
+            .cyan()
+            .to_string()
+    );
+    println!(
+        "{}",
+        "│                                              │".cyan()
+    );
+    println!(
+        "{}",
+        "│  Commands: help, status, clear, history    │".dimmed()
+    );
+    println!(
+        "{}",
+        "│           exit/quit                         │".dimmed()
+    );
+    println!(
+        "{}",
+        "╰──────────────────────────────────────────────╯".cyan()
+    );
     println!();
 }
 
@@ -489,10 +530,10 @@ fn print_repl_banner(config: &AppConfig) {
 fn process_response_text(text: &str) -> String {
     // Strip <think> blocks (model reasoning)
     let text = strip_think_blocks(text);
-    
+
     // Trim whitespace
     let text = text.trim();
-    
+
     text.to_string()
 }
 
@@ -501,7 +542,7 @@ fn strip_think_blocks(text: &str) -> String {
     let mut result = String::new();
     let mut in_think_block = false;
     let mut chars = text.chars().peekable();
-    
+
     while let Some(ch) = chars.next() {
         if ch == '<' {
             if in_think_block {
@@ -534,7 +575,7 @@ fn strip_think_blocks(text: &str) -> String {
         }
         // If in_think_block, don't add anything
     }
-    
+
     result
 }
 
@@ -569,7 +610,7 @@ fn print_history(history: &[String]) {
         println!("{} No history yet", "ℹ".blue());
         return;
     }
-    
+
     println!("{}", "Command History:".cyan().bold());
     for (i, cmd) in history.iter().enumerate().rev().take(20) {
         println!("  {:>3}. {}", i + 1, cmd);
@@ -1133,7 +1174,7 @@ fn backup(config: AppConfig, action: BackupAction) {
     }
 }
 
-fn heartbeat(config: AppConfig, action: HeartbeatAction) {
+async fn heartbeat(config: AppConfig, action: HeartbeatAction) {
     let path = config.agent.workspace.join("heartbeat.json");
     match action {
         HeartbeatAction::List => {
@@ -1222,13 +1263,52 @@ fn heartbeat(config: AppConfig, action: HeartbeatAction) {
         HeartbeatAction::Trigger { id } => {
             println!("Triggering heartbeat task");
             println!("=========================");
-            println!("Manual trigger requires a running agent with heartbeat engine active.");
-            println!(
-                "Task '{}' trigger request logged for next scheduled run.",
-                id
-            );
+            match trigger_heartbeat_task(&path, &id).await {
+                Ok(HeartbeatTriggerOutcome::Triggered(result)) => {
+                    println!(
+                        "Triggered heartbeat task '{}' [{}] {}",
+                        id,
+                        if result.success { "ok" } else { "failed" },
+                        result.message
+                    );
+                }
+                Ok(HeartbeatTriggerOutcome::Disabled) => {
+                    println!("Heartbeat task '{}' is disabled", id);
+                }
+                Ok(HeartbeatTriggerOutcome::Missing) => {
+                    println!("No heartbeat task '{}' found", id);
+                }
+                Err(err) => println!("Failed to trigger heartbeat task: {}", err),
+            }
         }
     }
+}
+
+enum HeartbeatTriggerOutcome {
+    Triggered(borgclaw_core::memory::HeartbeatResult),
+    Disabled,
+    Missing,
+}
+
+async fn trigger_heartbeat_task(
+    path: &std::path::Path,
+    id: &str,
+) -> Result<HeartbeatTriggerOutcome, String> {
+    let engine = borgclaw_core::memory::HeartbeatEngine::new().with_state_path(path.to_path_buf());
+
+    let Some(task) = engine.get(id).await else {
+        return Ok(HeartbeatTriggerOutcome::Missing);
+    };
+
+    if !task.enabled {
+        return Ok(HeartbeatTriggerOutcome::Disabled);
+    }
+
+    let result = engine
+        .run_task_now(id)
+        .await
+        .ok_or_else(|| format!("heartbeat task '{}' could not be triggered", id))?;
+    Ok(HeartbeatTriggerOutcome::Triggered(result))
 }
 
 fn subagent(config: AppConfig, action: SubagentAction) {
@@ -3099,18 +3179,85 @@ async fn install_skill(
 ) -> Result<std::path::PathBuf, String> {
     let source_path = std::path::PathBuf::from(source);
     if source_path.exists() {
-        return install_local_skill(skills_path, &source_path);
+        if source_path.is_dir() {
+            return install_local_skill(skills_path, &source_path);
+        }
+        if is_tar_gz_path(&source_path) {
+            return install_skill_archive(skills_path, &source_path, None);
+        }
+        return Err(format!(
+            "Unsupported local skill source '{}'. Use a skill directory containing SKILL.md or a .tar.gz package.",
+            source
+        ));
     }
 
-    if let Some(url) = skill_source_url(source, registry_url) {
-        let content = fetch_skill_manifest(&url).await?;
-        return install_skill_manifest(skills_path, source, &content);
+    if let Some(spec) = resolve_skill_source(source, registry_url) {
+        return match spec {
+            SkillSource::RemoteManifest { url } => {
+                let content = fetch_skill_manifest(&url).await?;
+                install_skill_manifest(skills_path, source, &content)
+            }
+            SkillSource::RemoteArchive {
+                url,
+                install_id,
+                archive_layout,
+            } => {
+                let bytes = fetch_skill_archive(&url).await?;
+                install_skill_archive_bytes(
+                    skills_path,
+                    install_id.as_deref(),
+                    &bytes,
+                    &archive_layout,
+                )
+            }
+        };
     }
 
     Err(format!(
-        "Unsupported skill source '{}'. Use a local directory, owner/repo, or direct SKILL.md URL.",
+        "Unsupported skill source '{}'. Use a local skill directory, local .tar.gz archive, owner/repo, direct GitHub SKILL.md URL, or remote .tar.gz archive URL.",
         source
     ))
+}
+
+#[derive(Debug, Clone)]
+enum SkillSource {
+    RemoteManifest {
+        url: String,
+    },
+    RemoteArchive {
+        url: String,
+        install_id: Option<String>,
+        archive_layout: ArchiveLayout,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct ArchiveLayout {
+    strip_first_component: bool,
+    subdir: Option<std::path::PathBuf>,
+}
+
+impl ArchiveLayout {
+    fn packaged_skill() -> Self {
+        Self {
+            strip_first_component: false,
+            subdir: None,
+        }
+    }
+
+    fn github_repo_root() -> Self {
+        Self {
+            strip_first_component: true,
+            subdir: None,
+        }
+    }
+
+    fn github_subdir(subdir: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            strip_first_component: true,
+            subdir: Some(subdir.into()),
+        }
+    }
 }
 
 fn install_local_skill(
@@ -3135,6 +3282,21 @@ fn install_local_skill(
     Ok(destination)
 }
 
+fn install_skill_archive(
+    skills_path: &std::path::Path,
+    archive_path: &std::path::Path,
+    install_id: Option<&str>,
+) -> Result<std::path::PathBuf, String> {
+    let bytes = std::fs::read(archive_path)
+        .map_err(|e| format!("Failed to read archive {}: {}", archive_path.display(), e))?;
+    install_skill_archive_bytes(
+        skills_path,
+        install_id,
+        &bytes,
+        &ArchiveLayout::packaged_skill(),
+    )
+}
+
 fn install_skill_manifest(
     skills_path: &std::path::Path,
     source: &str,
@@ -3154,6 +3316,42 @@ fn install_skill_manifest(
     Ok(destination)
 }
 
+fn install_skill_archive_bytes(
+    skills_path: &std::path::Path,
+    install_id: Option<&str>,
+    bytes: &[u8],
+    archive_layout: &ArchiveLayout,
+) -> Result<std::path::PathBuf, String> {
+    std::fs::create_dir_all(skills_path).map_err(|e| e.to_string())?;
+
+    let temp_root =
+        std::env::temp_dir().join(format!("borgclaw_skill_extract_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&temp_root).map_err(|e| e.to_string())?;
+
+    let result = (|| {
+        extract_skill_archive(bytes, &temp_root, archive_layout)?;
+        let manifest = read_skill_manifest(&temp_root)?;
+        let skill_id = install_id
+            .map(ToString::to_string)
+            .unwrap_or_else(|| manifest.name.clone());
+        let destination = skills_path.join(&skill_id);
+        if destination.exists() {
+            return Err(format!("Skill '{}' is already installed", skill_id));
+        }
+
+        std::fs::rename(&temp_root, &destination)
+            .or_else(|_| copy_dir_recursive(&temp_root, &destination).map(|_| ()))
+            .map_err(|e| e.to_string())?;
+        Ok(destination)
+    })();
+
+    if temp_root.exists() {
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    result
+}
+
 async fn fetch_skill_manifest(url: &str) -> Result<String, String> {
     let response = reqwest::get(url).await.map_err(|e| e.to_string())?;
     if !response.status().is_success() {
@@ -3171,9 +3369,37 @@ async fn fetch_skill_manifest(url: &str) -> Result<String, String> {
     Ok(content)
 }
 
-fn skill_source_url(source: &str, registry_url: Option<&str>) -> Option<String> {
+async fn fetch_skill_archive(url: &str) -> Result<Vec<u8>, String> {
+    let response = reqwest::get(url).await.map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "failed to download skill archive: http {}",
+            response.status()
+        ));
+    }
+
+    response
+        .bytes()
+        .await
+        .map(|bytes| bytes.to_vec())
+        .map_err(|e| e.to_string())
+}
+
+fn resolve_skill_source(source: &str, registry_url: Option<&str>) -> Option<SkillSource> {
     if source.starts_with("http://") || source.starts_with("https://") {
-        return Some(source.to_string());
+        if is_tar_gz_str(source) {
+            return Some(SkillSource::RemoteArchive {
+                url: source.to_string(),
+                install_id: None,
+                archive_layout: ArchiveLayout::packaged_skill(),
+            });
+        }
+        if let Some(spec) = github_archive_source_from_url(source) {
+            return Some(spec);
+        }
+        return Some(SkillSource::RemoteManifest {
+            url: source.to_string(),
+        });
     }
 
     let normalized = source.trim_matches('/');
@@ -3182,26 +3408,169 @@ fn skill_source_url(source: &str, registry_url: Option<&str>) -> Option<String> 
         return None;
     }
 
-    if let Some(base) = registry_url.and_then(github_registry_base) {
-        return Some(format!("{}/{}/SKILL.md", base, normalized));
+    if let Some((owner, repo)) = registry_url.and_then(github_registry_repo) {
+        return Some(SkillSource::RemoteArchive {
+            url: github_archive_url(&owner, &repo, "main"),
+            install_id: Some(registry_skill_install_id(source)),
+            archive_layout: ArchiveLayout::github_subdir(normalized),
+        });
     }
 
-    Some(format!(
-        "https://raw.githubusercontent.com/{}/{}/main/SKILL.md",
-        parts[0], parts[1]
-    ))
+    Some(SkillSource::RemoteArchive {
+        url: github_archive_url(parts[0], parts[1], "main"),
+        install_id: Some(registry_skill_install_id(source)),
+        archive_layout: ArchiveLayout::github_repo_root(),
+    })
 }
 
-fn github_registry_base(registry_url: &str) -> Option<String> {
-    let trimmed = registry_url.strip_suffix('/').unwrap_or(registry_url);
-    let repo = trimmed.strip_prefix("https://github.com/")?;
-    let mut parts = repo.split('/');
-    let owner = parts.next()?;
-    let name = parts.next()?;
-    Some(format!(
-        "https://raw.githubusercontent.com/{}/{}/main",
-        owner, name
-    ))
+fn github_archive_url(owner: &str, repo: &str, reference: &str) -> String {
+    format!("https://codeload.github.com/{owner}/{repo}/tar.gz/refs/heads/{reference}")
+}
+
+fn github_archive_source_from_url(source: &str) -> Option<SkillSource> {
+    let path = source
+        .trim_end_matches('/')
+        .strip_prefix("https://raw.githubusercontent.com/")?
+        .split('/')
+        .collect::<Vec<_>>();
+    if path.len() < 4 {
+        return None;
+    }
+
+    let owner = path[0];
+    let repo = path[1];
+    let reference = path[2];
+    let tail = &path[3..];
+
+    if tail.last()?.eq_ignore_ascii_case("SKILL.md") {
+        let install_id = if tail.len() >= 2 {
+            Some(tail[tail.len() - 2].to_string())
+        } else {
+            Some(repo.to_string())
+        };
+        let subdir = if tail.len() > 1 {
+            Some(std::path::PathBuf::from(tail[..tail.len() - 1].join("/")))
+        } else {
+            None
+        };
+        return Some(SkillSource::RemoteArchive {
+            url: github_archive_url(owner, repo, reference),
+            install_id,
+            archive_layout: ArchiveLayout {
+                strip_first_component: true,
+                subdir,
+            },
+        });
+    }
+
+    None
+}
+
+fn is_tar_gz_path(path: &std::path::Path) -> bool {
+    is_tar_gz_str(&path.to_string_lossy())
+}
+
+fn is_tar_gz_str(value: &str) -> bool {
+    value.ends_with(".tar.gz")
+}
+
+fn read_skill_manifest(
+    path: &std::path::Path,
+) -> Result<borgclaw_core::skills::SkillManifest, String> {
+    let content = std::fs::read_to_string(path.join("SKILL.md"))
+        .map_err(|e| format!("Failed to read extracted SKILL.md: {}", e))?;
+    borgclaw_core::skills::SkillManifest::parse(&content)
+        .map_err(|e| format!("Failed to parse extracted SKILL.md: {}", e))
+}
+
+fn extract_skill_archive(
+    bytes: &[u8],
+    destination: &std::path::Path,
+    archive_layout: &ArchiveLayout,
+) -> Result<(), String> {
+    let cursor = std::io::Cursor::new(bytes);
+    let decoder = flate2::read::GzDecoder::new(cursor);
+    let mut archive = tar::Archive::new(decoder);
+    let mut extracted_any = false;
+    let mut skill_md_found = false;
+
+    for entry in archive
+        .entries()
+        .map_err(|e| format!("Failed to read archive: {}", e))?
+    {
+        let mut entry = entry.map_err(|e| format!("Failed to read archive entry: {}", e))?;
+        let original_path = entry.path().map_err(|e| e.to_string())?.into_owned();
+        let Some(relative_path) = archive_relative_path(&original_path, archive_layout) else {
+            continue;
+        };
+        if relative_path.as_os_str().is_empty() {
+            continue;
+        }
+
+        ensure_safe_archive_path(&relative_path)?;
+        let output_path = destination.join(&relative_path);
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        entry.unpack(&output_path).map_err(|e| e.to_string())?;
+        if relative_path == std::path::Path::new("SKILL.md") {
+            skill_md_found = true;
+        }
+        extracted_any = true;
+    }
+
+    if !extracted_any {
+        return Err("Archive did not contain any installable skill files".to_string());
+    }
+    if !skill_md_found {
+        return Err("Archive did not contain SKILL.md in the selected skill root".to_string());
+    }
+
+    Ok(())
+}
+
+fn archive_relative_path(
+    original_path: &std::path::Path,
+    archive_layout: &ArchiveLayout,
+) -> Option<std::path::PathBuf> {
+    let mut path = original_path;
+    if archive_layout.strip_first_component {
+        path = strip_first_component(path)?;
+    }
+    if let Some(subdir) = &archive_layout.subdir {
+        if !path.starts_with(subdir) {
+            return None;
+        }
+        path = path.strip_prefix(subdir).ok()?;
+    }
+    Some(path.to_path_buf())
+}
+
+fn strip_first_component(path: &std::path::Path) -> Option<&std::path::Path> {
+    let mut components = path.components();
+    components.next()?;
+    Some(std::path::Path::new(components.as_path()))
+}
+
+fn ensure_safe_archive_path(path: &std::path::Path) -> Result<(), String> {
+    use std::path::Component;
+
+    if path.is_absolute() {
+        return Err(format!(
+            "Archive contains absolute path '{}'",
+            path.display()
+        ));
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(format!(
+            "Archive contains unsafe parent-relative path '{}'",
+            path.display()
+        ));
+    }
+    Ok(())
 }
 
 /// Package a skill directory into a distributable .tar.gz archive
@@ -3707,25 +4076,52 @@ mod tests {
     }
 
     #[test]
-    fn builds_github_repo_skill_url() {
-        let url = skill_source_url("openclaw/weather", None).unwrap();
-        assert_eq!(
-            url,
-            "https://raw.githubusercontent.com/openclaw/weather/main/SKILL.md"
-        );
+    fn resolves_github_repo_to_archive_install_source() {
+        let spec = resolve_skill_source("openclaw/weather", None).unwrap();
+        match spec {
+            SkillSource::RemoteArchive {
+                url,
+                install_id,
+                archive_layout,
+            } => {
+                assert_eq!(
+                    url,
+                    "https://codeload.github.com/openclaw/weather/tar.gz/refs/heads/main"
+                );
+                assert_eq!(install_id.as_deref(), Some("weather"));
+                assert!(archive_layout.strip_first_component);
+                assert!(archive_layout.subdir.is_none());
+            }
+            _ => panic!("expected remote archive source"),
+        }
     }
 
     #[test]
-    fn builds_registry_backed_skill_url() {
-        let url = skill_source_url(
+    fn resolves_registry_backed_skill_to_archive_install_source() {
+        let spec = resolve_skill_source(
             "openclaw/weather",
             Some("https://github.com/openclaw/clawhub"),
         )
         .unwrap();
-        assert_eq!(
-            url,
-            "https://raw.githubusercontent.com/openclaw/clawhub/main/openclaw/weather/SKILL.md"
-        );
+        match spec {
+            SkillSource::RemoteArchive {
+                url,
+                install_id,
+                archive_layout,
+            } => {
+                assert_eq!(
+                    url,
+                    "https://codeload.github.com/openclaw/clawhub/tar.gz/refs/heads/main"
+                );
+                assert_eq!(install_id.as_deref(), Some("weather"));
+                assert_eq!(
+                    archive_layout.subdir,
+                    Some(std::path::PathBuf::from("openclaw/weather"))
+                );
+                assert!(archive_layout.strip_first_component);
+            }
+            _ => panic!("expected remote archive source"),
+        }
     }
 
     #[test]
@@ -3758,6 +4154,114 @@ mod tests {
         .unwrap();
 
         assert!(destination.join("SKILL.md").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn installs_local_packaged_skill_archive() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_cli_local_archive_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let source = root.join("archive-skill");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            source.join("SKILL.md"),
+            "name: archive-skill\nversion: 1.0.0\ndescription: Archive test\n## Instructions\nUse archive install.\n",
+        )
+        .unwrap();
+        std::fs::write(source.join("README.md"), "archive docs").unwrap();
+        let archive = root.join("archive-skill.tar.gz");
+        let skills_path = root.join("installed");
+
+        package_skill(&source, Some(&archive)).await.unwrap();
+        let destination = install_skill(&skills_path, archive.to_str().unwrap(), None)
+            .await
+            .unwrap();
+
+        assert!(destination.join("SKILL.md").exists());
+        assert!(destination.join("README.md").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resolves_github_raw_skill_urls_to_archive_installs() {
+        let spec = resolve_skill_source(
+            "https://raw.githubusercontent.com/openclaw/clawhub/main/openclaw/weather/SKILL.md",
+            None,
+        )
+        .unwrap();
+
+        match spec {
+            SkillSource::RemoteArchive {
+                url,
+                install_id,
+                archive_layout,
+            } => {
+                assert_eq!(
+                    url,
+                    "https://codeload.github.com/openclaw/clawhub/tar.gz/refs/heads/main"
+                );
+                assert_eq!(install_id.as_deref(), Some("weather"));
+                assert_eq!(
+                    archive_layout.subdir,
+                    Some(std::path::PathBuf::from("openclaw/weather"))
+                );
+                assert!(archive_layout.strip_first_component);
+            }
+            _ => panic!("expected remote archive install source"),
+        }
+    }
+
+    #[test]
+    fn extracts_selected_skill_subdirectory_from_archive() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_cli_archive_extract_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let archive = root.join("registry.tar.gz");
+        let extract = root.join("extract");
+        std::fs::create_dir_all(&root).unwrap();
+        let tar_gz = std::fs::File::create(&archive).unwrap();
+        let enc = flate2::write::GzEncoder::new(tar_gz, flate2::Compression::default());
+        let mut tar = tar::Builder::new(enc);
+
+        let entries = [
+            (
+                "clawhub-main/openclaw/weather/SKILL.md",
+                "name: weather\ndescription: Weather skill\n## Instructions\nUse weather APIs.\n",
+            ),
+            ("clawhub-main/openclaw/weather/assets/icon.txt", "icon"),
+            (
+                "clawhub-main/openclaw/calendar/SKILL.md",
+                "name: calendar\ndescription: Calendar skill\n## Instructions\nUse calendar APIs.\n",
+            ),
+        ];
+        for (path, content) in entries {
+            let bytes = content.as_bytes();
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar.append_data(&mut header, path, bytes).unwrap();
+        }
+        let enc = tar.into_inner().unwrap();
+        enc.finish().unwrap();
+
+        std::fs::create_dir_all(&extract).unwrap();
+
+        let bytes = std::fs::read(&archive).unwrap();
+        extract_skill_archive(
+            &bytes,
+            &extract,
+            &ArchiveLayout::github_subdir("openclaw/weather"),
+        )
+        .unwrap();
+
+        assert!(extract.join("SKILL.md").exists());
+        assert!(extract.join("assets/icon.txt").exists());
+        assert!(!extract.join("calendar/SKILL.md").exists());
+
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -3831,14 +4335,17 @@ mod tests {
         assert_eq!(strip_think_blocks(input), "Hello world");
 
         let input_with_newlines = "Response\n<think>\nMulti-line\nreasoning\n</think>\nMore text";
-        assert_eq!(strip_think_blocks(input_with_newlines), "Response\nMore text");
+        assert_eq!(
+            strip_think_blocks(input_with_newlines),
+            "Response\nMore text"
+        );
 
         let no_think = "Just regular text";
         assert_eq!(strip_think_blocks(no_think), "Just regular text");
 
         let empty_think = "Before <think></think> After";
         assert_eq!(strip_think_blocks(empty_think), "Before After");
-        
+
         let multiple_thinks = "Start <think>first</think> middle <think>second</think> end";
         assert_eq!(strip_think_blocks(multiple_thinks), "Start middle end");
     }
@@ -4432,7 +4939,7 @@ mod tests {
         // Clear any existing provider env vars to ensure test is deterministic
         let _ = std::env::remove_var("OPENAI_API_KEY");
         let _ = std::env::remove_var("ANTHROPIC_API_KEY");
-        
+
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let mut config = temp_config();
         config.agent.workspace = std::env::temp_dir().join(format!(
@@ -4476,20 +4983,105 @@ mod tests {
             .iter()
             .any(|line| line == "sub-agent state has 1 dead-lettered of 1 persisted task"));
     }
+
+    #[tokio::test]
+    async fn trigger_heartbeat_task_executes_persisted_task_immediately() {
+        let workspace = std::env::temp_dir().join(format!(
+            "borgclaw_cli_heartbeat_trigger_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = workspace.join("heartbeat.json");
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let id = create_heartbeat_task(&path, "health_check", "0 0 0 * * *", "", 0, 60).unwrap();
+
+        let outcome = trigger_heartbeat_task(&path, &id).await.unwrap();
+        match outcome {
+            HeartbeatTriggerOutcome::Triggered(result) => {
+                assert!(result.success);
+                assert_eq!(result.message, "Health check passed");
+            }
+            _ => panic!("expected triggered heartbeat result"),
+        }
+
+        let lines = heartbeat_detail_lines(&path, &id).unwrap();
+        assert!(lines.iter().any(|line| line == "run_count: 1"));
+        assert!(lines
+            .iter()
+            .any(|line| line == "last_result: ok - Health check passed"));
+    }
+
+    #[tokio::test]
+    async fn trigger_heartbeat_task_reports_disabled_tasks_without_running_them() {
+        let workspace = std::env::temp_dir().join(format!(
+            "borgclaw_cli_heartbeat_disabled_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = workspace.join("heartbeat.json");
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let id = create_heartbeat_task(&path, "health_check", "0 0 0 * * *", "", 0, 60).unwrap();
+        assert!(update_heartbeat_task_status(&path, &id, false).unwrap());
+
+        let outcome = trigger_heartbeat_task(&path, &id).await.unwrap();
+        assert!(matches!(outcome, HeartbeatTriggerOutcome::Disabled));
+    }
+
+    #[tokio::test]
+    async fn trigger_heartbeat_task_reports_missing_tasks() {
+        let workspace = std::env::temp_dir().join(format!(
+            "borgclaw_cli_heartbeat_missing_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = workspace.join("heartbeat.json");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(&path, "{}").unwrap();
+
+        let outcome = trigger_heartbeat_task(&path, "missing").await.unwrap();
+        assert!(matches!(outcome, HeartbeatTriggerOutcome::Missing));
+    }
 }
 
 fn print_help() {
     println!("{}", "Available Commands:".cyan().bold());
     println!();
-    println!("  {}  {:12} - {}", "🚪".yellow(), "exit, quit", "Exit the REPL");
-    println!("  {}  {:12} - {}", "❓".yellow(), "help", "Show this help message");
-    println!("  {}  {:12} - {}", "📊".yellow(), "status", "Show agent and system status");
-    println!("  {}  {:12} - {}", "🧹".yellow(), "clear", "Clear the screen");
-    println!("  {}  {:12} - {}", "📜".yellow(), "history", "Show command history");
+    println!(
+        "  {}  {:12} - {}",
+        "🚪".yellow(),
+        "exit, quit",
+        "Exit the REPL"
+    );
+    println!(
+        "  {}  {:12} - {}",
+        "❓".yellow(),
+        "help",
+        "Show this help message"
+    );
+    println!(
+        "  {}  {:12} - {}",
+        "📊".yellow(),
+        "status",
+        "Show agent and system status"
+    );
+    println!(
+        "  {}  {:12} - {}",
+        "🧹".yellow(),
+        "clear",
+        "Clear the screen"
+    );
+    println!(
+        "  {}  {:12} - {}",
+        "📜".yellow(),
+        "history",
+        "Show command history"
+    );
     println!();
     println!("{}", "Tips:".dimmed().bold());
     println!("  • Type any message to chat with the agent");
-    println!("  • Use {} to enable verbose timing output", "BORGCLAW_REPL_VERBOSE=1".cyan());
+    println!(
+        "  • Use {} to enable verbose timing output",
+        "BORGCLAW_REPL_VERBOSE=1".cyan()
+    );
     println!("  • Command history is saved between sessions");
 }
 
