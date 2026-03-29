@@ -84,7 +84,7 @@ impl WasmPlugin {
                 .unwrap_or("unknown");
             PluginManifest {
                 name: name.to_string(),
-                version: "0.1.0".to_string(),
+                version: DEFAULT_PLUGIN_VERSION.to_string(),
                 description: "WASM plugin".to_string(),
                 author: None,
                 permissions: vec![],
@@ -411,9 +411,8 @@ mod tests {
 
     #[test]
     fn plugin_manifest_parses_documented_permissions_table() {
-        let manifest = PluginManifest::from_toml(
-            &format!(
-                r#"
+        let manifest = PluginManifest::from_toml(&format!(
+            r#"
 name = "my-plugin"
 version = "{}"
 description = "My custom plugin"
@@ -427,9 +426,8 @@ network = ["api.example.com"]
 memory = true
 shell = false
 "#,
-                DEFAULT_PLUGIN_VERSION
-            ),
-        )
+            DEFAULT_PLUGIN_VERSION
+        ))
         .unwrap();
 
         assert_eq!(manifest.name, "my-plugin");

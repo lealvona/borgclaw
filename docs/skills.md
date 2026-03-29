@@ -2,6 +2,24 @@
 
 BorgClaw skills are modular capabilities that extend agent functionality.
 
+## Version Compatibility
+
+Skill manifests can declare `min_version` to require a minimum BorgClaw release before the skill is considered loadable.
+
+```yaml
+name: release-auditor
+version: 1.2.0
+min_version: 0.14.0
+```
+
+Compatibility checks use semantic version ordering rather than string comparison.
+That means:
+
+- `0.14.0` is compatible with `min_version: 0.14`
+- `0.14.10` correctly sorts after `0.14.2`
+- prerelease versions such as `0.14.0-beta.1` are treated as lower than `0.14.0`
+- invalid version strings fail closed and the skill is treated as incompatible
+
 ## Available Skills
 
 | Skill | Description | Backend |
@@ -14,6 +32,25 @@ BorgClaw skills are modular capabilities that extend agent functionality.
 | Image | Image generation | DALL-E / Stable Diffusion |
 | QR | QR code generation | qrcode crate |
 | URL | URL shortening | is.gd / tinyurl / YOURLS |
+
+## Tool Module Layout
+
+Built-in tools are registered from focused modules under `borgclaw-core/src/agent/tools/`.
+Each module owns its own `register()` function plus the handler implementations for its tool family, while `mod.rs` retains only shared dispatch, approval helpers, workspace/path helpers, and other common runtime glue.
+
+Current registry split:
+
+- `memory.rs`
+- `file.rs`
+- `shell.rs`
+- `web.rs`
+- `plugin.rs`
+- `mcp.rs`
+- `schedule.rs`
+- `github.rs`
+- `google.rs`
+- `browser.rs`
+- `media.rs`
 
 ## GitHub Integration
 

@@ -11,7 +11,8 @@
 - Completed: tranche 3b `TICKET-086-tools-core-modules`
 - Completed: tranche 4a `TICKET-086-tools-service-runtime-modules`
 - Completed: tranche 4b `TICKET-086-tools-github-google-modules`
-- Ready to land: tranche 4c `TICKET-086-tools-browser-media-modules`
+- Completed: tranche 4c `TICKET-086-tools-browser-media-modules`
+- In progress: tranche 5 `TICKET-086-tools-cleanup-docs`
 
 ## Small-Step Execution Plan
 
@@ -60,21 +61,32 @@
 - [x] Extract `media.rs`
 - [x] Run `cargo check`
 - [x] Run focused browser and media tool tests
-- [ ] Commit tranche 4c
-- [ ] Push tranche 4c branch
-- [ ] Open tranche 4c PR
-- [ ] Merge tranche 4c PR
+- [x] Commit tranche 4c
+- [x] Push tranche 4c branch
+- [x] Open tranche 4c PR
+- [x] Merge tranche 4c PR
 
 ### Tranche 5: Cleanup and Docs
 
-- [ ] Remove tranche-related warnings and dead helpers
-- [ ] Add semver edge-case tests where coverage is still thin
-- [ ] Update `docs/skills.md` with semver compatibility notes
-- [ ] Document the final tool registry/module pattern
-- [ ] Run `cargo test --workspace`
-- [ ] Run `cargo clippy -- -D warnings`
-- [ ] Run `cargo fmt --check`
+- [x] Remove tranche-related warnings and dead helpers in the tool-split surface
+- [x] Add semver edge-case tests where coverage is still thin
+- [x] Update `docs/skills.md` with semver compatibility notes
+- [x] Document the final tool registry/module pattern
+- [x] Run `cargo test --workspace` or capture remaining blockers
+- [x] Run `cargo clippy -- -D warnings` or capture remaining blockers
+- [x] Run `cargo fmt --check`
 - [ ] Commit tranche 5
 - [ ] Push tranche 5 branch
 - [ ] Open tranche 5 PR
 - [ ] Merge tranche 5 PR
+
+## Remaining Global Quality Blockers
+
+- `cargo clippy -p borgclaw-core -- -D warnings` still fails on pre-existing repo-wide issues outside the tool-split tranche, including:
+- `borgclaw-core/src/agent/mod.rs`: `clippy::needless_borrow`
+- `borgclaw-core/src/config/mod.rs`: `clippy::module_inception`
+- `borgclaw-core/src/scheduler/jobs.rs`: `clippy::derivable_impls`
+- `borgclaw-core/src/skills/browser.rs`: `clippy::derivable_impls`
+- `borgclaw-core/src/skills/github.rs`: `clippy::too_many_arguments`
+- `borgclaw-core/src/skills/plugin.rs`: `clippy::if_same_then_else`
+- `borgclaw-core/src/skills/stt.rs`: `clippy::needless_borrows_for_generic_args`

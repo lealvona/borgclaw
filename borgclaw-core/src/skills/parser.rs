@@ -163,29 +163,12 @@ impl SkillManifest {
 
     /// Check whether this skill is compatible with the given borgclaw version.
     /// Returns true if no min_version is set or if `current >= min_version`.
-    /// 
+    ///
     /// Uses proper semantic versioning comparison via the semver crate.
     pub fn is_compatible(&self, current_version: &str) -> bool {
         match &self.min_version {
             None => true,
-            Some(min) => {
-                // Normalize versions to handle partial semver (e.g., "1.8" -> "1.8.0")
-                let current_norm = normalize_version(current_version);
-                let min_norm = normalize_version(min);
-                
-                // Parse both versions using semver
-                let current = match semver::Version::parse(&current_norm) {
-                    Ok(v) => v,
-                    Err(_) => return false, // Invalid current version is not compatible
-                };
-                let minimum = match semver::Version::parse(&min_norm) {
-                    Ok(v) => v,
-                    Err(_) => return false, // Invalid min version means not compatible
-                };
-                
-                // Compare: current >= minimum
-                current >= minimum
-            }
+            Some(min) => version_gte(current_version, min),
         }
     }
 }
@@ -202,13 +185,16 @@ fn normalize_version(version: &str) -> String {
 
 /// Compare two versions using proper semantic versioning.
 /// Returns true if `current >= minimum`.
-/// 
+///
 /// This function normalizes partial versions (e.g., "1.8" -> "1.8.0") before comparison.
 pub fn version_gte(current: &str, minimum: &str) -> bool {
     let current_norm = normalize_version(current);
     let minimum_norm = normalize_version(minimum);
-    
-    match (semver::Version::parse(&current_norm), semver::Version::parse(&minimum_norm)) {
+
+    match (
+        semver::Version::parse(&current_norm),
+        semver::Version::parse(&minimum_norm),
+    ) {
         (Ok(current), Ok(minimum)) => current >= minimum,
         _ => false, // Invalid versions are not compatible
     }
@@ -257,5 +243,23 @@ mod tests {
         assert!(version_gte("1.8", "1.8.0"));
         assert!(version_gte("1.8.0", "1.8"));
         assert!(!version_gte("1.7", "1.8.0"));
+    }
+
+    #[test]
+    fn version_gte_handles_double_digit_minor_versions() {
+        assert!(version_gte("1.10.0", "1.9.9"));
+        assert!(!version_gte("1.9.9", "1.10.0"));
+    }
+
+    #[test]
+    fn version_gte_rejects_prerelease_before_stable_release() {
+        assert!(!version_gte("1.10.0-beta.1", "1.10.0"));
+        assert!(version_gte("1.10.0", "1.10.0-beta.1"));
+    }
+
+    #[test]
+    fn version_gte_returns_false_for_invalid_versions() {
+        assert!(!version_gte("not-a-version", "1.8.0"));
+        assert!(!version_gte("1.8.0", "still-not-a-version"));
     }
 }
