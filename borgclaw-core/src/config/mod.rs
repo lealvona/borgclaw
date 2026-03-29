@@ -37,8 +37,8 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    pub fn validate(&self) -> Result<(), config::ValidationError> {
-        let mut error = config::ValidationError::default();
+    pub fn validate(&self) -> Result<(), config_support::ValidationError> {
+        let mut error = config_support::ValidationError::default();
 
         for (name, server) in &self.mcp.servers {
             if let Some(url) = &server.url {
@@ -781,9 +781,10 @@ pub struct McpServerConfig {
 }
 
 /// Load configuration from file
-pub fn load_config(path: &PathBuf) -> Result<AppConfig, config::ConfigError> {
+pub fn load_config(path: &PathBuf) -> Result<AppConfig, config_support::ConfigError> {
     let content = std::fs::read_to_string(path)?;
-    let mut config: AppConfig = toml::from_str(&content).map_err(config::ConfigError::Parse)?;
+    let mut config: AppConfig =
+        toml::from_str(&content).map_err(config_support::ConfigError::Parse)?;
 
     // Normalize deprecated model names
     config.agent.model = normalize_model_name(&config.agent.model);
@@ -815,13 +816,13 @@ fn normalize_model_name(model: &str) -> String {
 }
 
 /// Save configuration to file
-pub fn save_config(config: &AppConfig, path: &PathBuf) -> Result<(), config::ConfigError> {
+pub fn save_config(config: &AppConfig, path: &PathBuf) -> Result<(), config_support::ConfigError> {
     let content = toml::to_string_pretty(config)?;
     std::fs::write(path, content)?;
     Ok(())
 }
 
-mod config {
+mod config_support {
     use thiserror::Error;
 
     #[derive(Error, Debug)]

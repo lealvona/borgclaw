@@ -221,17 +221,13 @@ impl SsrfGuard {
         }
 
         // Check for localhost variants
-        if !self.allow_localhost {
-            if Self::is_localhost(host) {
-                return Err(SsrfError::LocalhostNotAllowed);
-            }
+        if !self.allow_localhost && Self::is_localhost(host) {
+            return Err(SsrfError::LocalhostNotAllowed);
         }
 
         // Check for private IP ranges
-        if !self.allow_private_ips {
-            if Self::is_private_ip(host)? {
-                return Err(SsrfError::PrivateIpNotAllowed);
-            }
+        if !self.allow_private_ips && Self::is_private_ip(host)? {
+            return Err(SsrfError::PrivateIpNotAllowed);
         }
 
         Ok(())
@@ -737,6 +733,12 @@ impl SecurityLayer {
             }
             ApprovalMode::Autonomous => false,
         }
+    }
+}
+
+impl Default for SecurityLayer {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

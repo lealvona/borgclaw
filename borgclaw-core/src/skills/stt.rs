@@ -182,7 +182,7 @@ impl SttClient {
 
         let response = self
             .http
-            .post(&format!("{}/api/v1/audio/transcriptions", config.base_url))
+            .post(format!("{}/api/v1/audio/transcriptions", config.base_url))
             .bearer_auth(&config.api_key)
             .multipart(form)
             .send()

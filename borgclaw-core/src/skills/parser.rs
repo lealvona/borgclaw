@@ -21,6 +21,8 @@ pub struct SkillManifest {
     pub env: HashMap<String, String>,
     /// Dependencies
     pub dependencies: Vec<String>,
+    /// Companion files that should be installed alongside SKILL.md
+    pub files: Vec<String>,
     /// Instructions for the AI
     pub instructions: String,
     /// Examples
@@ -60,6 +62,14 @@ pub struct Parameter {
 impl SkillManifest {
     /// Parse SKILL.md content
     pub fn parse(content: &str) -> Result<Self, super::SkillsError> {
+        #[derive(Clone, Copy)]
+        enum ManifestList {
+            Commands,
+            Env,
+            Dependencies,
+            Files,
+        }
+
         let mut name = String::new();
         let mut version = DEFAULT_SKILL_VERSION.to_string();
         let mut description = String::new();
@@ -67,12 +77,14 @@ impl SkillManifest {
         let mut commands = Vec::new();
         let mut env = HashMap::new();
         let mut dependencies = Vec::new();
+        let mut files = Vec::new();
         let mut instructions = String::new();
         let mut examples = Vec::new();
 
         let mut min_version = None;
         let mut in_instructions = false;
         let mut in_examples = false;
+        let mut current_list = None;
 
         for line in content.lines() {
             let line = line.trim();
@@ -80,40 +92,56 @@ impl SkillManifest {
             // Frontmatter parsing
             if line.starts_with("min_version:") {
                 min_version = Some(line.trim_start_matches("min_version:").trim().to_string());
+                current_list = None;
             } else if line.starts_with("name:") {
                 name = line.trim_start_matches("name:").trim().to_string();
+                current_list = None;
             } else if line.starts_with("version:") {
                 version = line.trim_start_matches("version:").trim().to_string();
+                current_list = None;
             } else if line.starts_with("description:") {
                 description = line.trim_start_matches("description:").trim().to_string();
+                current_list = None;
             } else if line.starts_with("author:") {
                 author = Some(line.trim_start_matches("author:").trim().to_string());
+                current_list = None;
             } else if line.starts_with("commands:") {
-                // Commands follow on subsequent lines
-            } else if line.starts_with("-") && !in_instructions && !in_examples {
-                let cmd = line.trim_start_matches('-').trim();
-                if !cmd.is_empty() {
-                    commands.push(cmd.to_string());
-                }
+                current_list = Some(ManifestList::Commands);
             } else if line.starts_with("env:") {
-                // Environment variables follow
+                current_list = Some(ManifestList::Env);
+            } else if line.starts_with("dependencies:") {
+                current_list = Some(ManifestList::Dependencies);
+            } else if line.starts_with("files:") {
+                current_list = Some(ManifestList::Files);
             } else if line.starts_with("- ") && !in_instructions && !in_examples {
-                // Could be env or dependency
                 let item = line.trim_start_matches("- ").trim();
-                if item.contains('=') {
-                    let parts: Vec<_> = item.splitn(2, '=').collect();
-                    if parts.len() == 2 {
-                        env.insert(parts[0].to_string(), parts[1].to_string());
+                match current_list {
+                    Some(ManifestList::Commands) | None => {
+                        if !item.is_empty() {
+                            commands.push(item.to_string());
+                        }
                     }
-                } else {
-                    dependencies.push(item.to_string());
+                    Some(ManifestList::Env) => {
+                        let parts: Vec<_> = item.splitn(2, '=').collect();
+                        if parts.len() == 2 {
+                            env.insert(parts[0].to_string(), parts[1].to_string());
+                        }
+                    }
+                    Some(ManifestList::Dependencies) => {
+                        dependencies.push(item.to_string());
+                    }
+                    Some(ManifestList::Files) => {
+                        files.push(item.to_string());
+                    }
                 }
             } else if line == "## Instructions" || line == "## instructions" {
                 in_instructions = true;
                 in_examples = false;
+                current_list = None;
             } else if line == "## Examples" || line == "## examples" {
                 in_examples = true;
                 in_instructions = false;
+                current_list = None;
             } else if (in_instructions || in_examples) && line.starts_with("## ") {
                 in_instructions = false;
                 in_examples = false;
@@ -155,6 +183,7 @@ impl SkillManifest {
             commands,
             env,
             dependencies,
+            files,
             instructions: instructions.trim().to_string(),
             examples,
             min_version,
@@ -216,6 +245,19 @@ mod tests {
         let content = "---\nname: test-skill\n---\n# Test Skill\n";
         let manifest = SkillManifest::parse(content).unwrap();
         assert!(manifest.min_version.is_none());
+    }
+
+    #[test]
+    fn parse_extracts_manifest_files() {
+        let content = "---\nname: test-skill\nfiles:\n- assets/icon.txt\n- prompts/system.txt\n---\n# Test Skill\n";
+        let manifest = SkillManifest::parse(content).unwrap();
+        assert_eq!(
+            manifest.files,
+            vec![
+                "assets/icon.txt".to_string(),
+                "prompts/system.txt".to_string()
+            ]
+        );
     }
 
     #[test]

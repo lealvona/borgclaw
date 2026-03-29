@@ -3,6 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -106,6 +107,17 @@ pub struct PendingConfirmation {
     pub expires_at: DateTime<Utc>,
     pub operation: OperationType,
     pub target: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateFileRequest {
+    pub owner: String,
+    pub repo: String,
+    pub path: String,
+    pub content: String,
+    pub message: String,
+    pub sha: String,
+    pub branch: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -414,6 +426,36 @@ impl GitHubClient {
         self.check_repo_access(owner, repo).await?;
 
         let url = format!("{}/repos/{}/{}", self.config.base_url, owner, repo);
+        if let Some(bytes) = read_fixture_response(&self.config.base_url, "GET", &url)? {
+            #[derive(Deserialize)]
+            struct RepoResponse {
+                name: String,
+                full_name: String,
+                owner: Owner,
+                description: Option<String>,
+                private: bool,
+                html_url: String,
+                default_branch: String,
+            }
+
+            #[derive(Deserialize)]
+            struct Owner {
+                login: String,
+            }
+
+            let r: RepoResponse = serde_json::from_slice(&bytes)
+                .map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
+
+            return Ok(GitHubRepo {
+                name: r.name,
+                full_name: r.full_name,
+                owner: r.owner.login,
+                description: r.description,
+                private: r.private,
+                html_url: r.html_url,
+                default_branch: r.default_branch,
+            });
+        }
         let response = self
             .http
             .get(&url)
@@ -467,6 +509,31 @@ impl GitHubClient {
         self.check_repo_access(owner, repo).await?;
 
         let url = format!("{}/repos/{}/{}/branches", self.config.base_url, owner, repo);
+        if let Some(bytes) = read_fixture_response(&self.config.base_url, "GET", &url)? {
+            #[derive(Deserialize)]
+            struct BranchItem {
+                name: String,
+                commit: Commit,
+                protected: bool,
+            }
+
+            #[derive(Deserialize)]
+            struct Commit {
+                sha: String,
+            }
+
+            let branches: Vec<BranchItem> = serde_json::from_slice(&bytes)
+                .map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
+
+            return Ok(branches
+                .into_iter()
+                .map(|b| GitHubBranch {
+                    name: b.name,
+                    sha: b.commit.sha,
+                    protected: b.protected,
+                })
+                .collect());
+        }
         let response = self
             .http
             .get(&url)
@@ -945,6 +1012,28 @@ impl GitHubClient {
             "{}/repos/{}/{}/contents/{}?ref={}",
             self.config.base_url, owner, repo, path, r#ref
         );
+        if let Some(bytes) = read_fixture_response(&self.config.base_url, "GET", &url)? {
+            #[derive(Deserialize)]
+            struct ContentResponse {
+                content: Option<String>,
+                encoding: Option<String>,
+            }
+
+            let content: ContentResponse = serde_json::from_slice(&bytes)
+                .map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
+
+            if let (Some(encoded), Some("base64")) = (content.content, content.encoding.as_deref())
+            {
+                use base64::Engine;
+                let decoded = base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .map_err(|e| GitHubError::ParseFailed(e.to_string()))?;
+                return String::from_utf8(decoded)
+                    .map_err(|e| GitHubError::ParseFailed(e.to_string()));
+            }
+
+            return Err(GitHubError::NotFound(format!("{}/{}", path, r#ref)));
+        }
 
         let response = self
             .http
@@ -1024,31 +1113,23 @@ impl GitHubClient {
         Ok(())
     }
 
-    pub async fn update_file(
-        &self,
-        owner: &str,
-        repo: &str,
-        path: &str,
-        content: &str,
-        message: &str,
-        sha: &str,
-        branch: &str,
-    ) -> Result<(), GitHubError> {
-        self.check_repo_access(owner, repo).await?;
+    pub async fn update_file(&self, request: &UpdateFileRequest) -> Result<(), GitHubError> {
+        self.check_repo_access(&request.owner, &request.repo)
+            .await?;
 
         let url = format!(
             "{}/repos/{}/{}/contents/{}",
-            self.config.base_url, owner, repo, path
+            self.config.base_url, request.owner, request.repo, request.path
         );
 
         use base64::Engine;
-        let encoded = base64::engine::general_purpose::STANDARD.encode(content);
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&request.content);
 
         let body = serde_json::json!({
-            "message": message,
+            "message": request.message,
             "content": encoded,
-            "sha": sha,
-            "branch": branch
+            "sha": request.sha,
+            "branch": request.branch
         });
 
         let response = self
@@ -1143,6 +1224,63 @@ impl GitHubClient {
 
         Ok(())
     }
+}
+
+pub(crate) fn fixture_path_for_request(
+    base_url: &str,
+    method: &str,
+    request_url: &str,
+) -> Result<Option<PathBuf>, GitHubError> {
+    let Ok(base) = url::Url::parse(base_url) else {
+        return Ok(None);
+    };
+    if base.scheme() != "file" {
+        return Ok(None);
+    }
+
+    let root = base.to_file_path().map_err(|_| {
+        GitHubError::ParseFailed(format!("Invalid file fixture base URL: {base_url}"))
+    })?;
+    let request = url::Url::parse(request_url)
+        .map_err(|e| GitHubError::ParseFailed(format!("Invalid fixture request URL: {e}")))?;
+    let request_path = request.to_file_path().map_err(|_| {
+        GitHubError::ParseFailed(format!("Invalid file fixture request URL: {request_url}"))
+    })?;
+    let relative = request_path
+        .strip_prefix(&root)
+        .unwrap_or(request_path.as_path());
+    let mut key = format!("{method} {}", relative.to_string_lossy());
+    if let Some(query) = request.query() {
+        key.push('?');
+        key.push_str(query);
+    }
+    let sanitized = key
+        .chars()
+        .map(|ch| match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '-' | '_' => ch,
+            _ => '_',
+        })
+        .collect::<String>();
+
+    Ok(Some(root.join(".borgclaw-fixtures").join(sanitized)))
+}
+
+fn read_fixture_response(
+    base_url: &str,
+    method: &str,
+    request_url: &str,
+) -> Result<Option<Vec<u8>>, GitHubError> {
+    let Some(path) = fixture_path_for_request(base_url, method, request_url)? else {
+        return Ok(None);
+    };
+    let bytes = std::fs::read(&path).map_err(|e| {
+        GitHubError::ParseFailed(format!(
+            "Failed to read fixture '{}': {}",
+            path.display(),
+            e
+        ))
+    })?;
+    Ok(Some(bytes))
 }
 
 #[derive(Debug, thiserror::Error)]

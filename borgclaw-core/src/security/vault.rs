@@ -164,11 +164,9 @@ impl VaultClient for BitwardenClient {
         };
 
         let mut args = vec!["list", "items"];
-        args.extend(folder_arg.iter().map(|s| *s));
+        args.extend(folder_arg.iter().copied());
 
-        let output = self
-            .run_bw(&args.iter().map(|s| *s).collect::<Vec<_>>())
-            .await?;
+        let output = self.run_bw(args.as_slice()).await?;
 
         #[derive(Deserialize)]
         struct BwListItem {

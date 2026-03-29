@@ -132,7 +132,7 @@ Current skill lifecycle status:
 - local skill installs and local packaged `.tar.gz` installs are implemented
 - GitHub `owner/repo` installs, GitHub-backed registry installs, direct GitHub `SKILL.md` URLs, and remote `.tar.gz` archive URLs are implemented
 - skill packaging, publishing, and package inspection are implemented
-- arbitrary non-GitHub direct `SKILL.md` URLs remain manifest-only because there is no portable companion-asset discovery contract
+- arbitrary non-GitHub direct `SKILL.md` URLs can install companion files via manifest `files:` entries, an adjacent `SKILL.files.json` sidecar, or manifest-directory discovery when the source exposes a browsable listing
 
 ### ➡️ Right Face — Security
 

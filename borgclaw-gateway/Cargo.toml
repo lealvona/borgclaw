@@ -29,5 +29,7 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 reqwest.workspace = true
-tower = "0.4"
+tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.5", features = ["cors", "trace"] }
+hyper = "1"
+hyper-util = { version = "0.1", features = ["service", "tokio"] }

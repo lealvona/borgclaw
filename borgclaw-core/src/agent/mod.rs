@@ -593,7 +593,7 @@ impl Agent for SimpleAgent {
         }
         // Run the agent loop: get LLM response, execute tools if needed, get final response
         let final_response = match self
-            .run_agent_loop(&ctx, model, temperature, max_tokens)
+            .run_agent_loop(ctx, model, temperature, max_tokens)
             .await
         {
             Ok(response) => response,

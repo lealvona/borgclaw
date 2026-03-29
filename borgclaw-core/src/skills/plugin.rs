@@ -41,9 +41,7 @@ impl PluginManifest {
             .clone()
             .unwrap_or_else(|| "invoke".to_string());
         let mut exports = documented.exports.unwrap_or_default();
-        if exports.is_empty() {
-            exports.push(entry_point.clone());
-        } else if !exports.iter().any(|export| export == &entry_point) {
+        if !exports.iter().any(|export| export == &entry_point) {
             exports.push(entry_point.clone());
         }
 

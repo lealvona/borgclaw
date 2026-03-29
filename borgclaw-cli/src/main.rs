@@ -497,15 +497,11 @@ fn print_repl_banner(config: &AppConfig) {
     );
     println!(
         "{}",
-        format!("│  Provider: {:<34}│", config.agent.provider)
-            .cyan()
-            .to_string()
+        format!("│  Provider: {:<34}│", config.agent.provider).cyan()
     );
     println!(
         "{}",
-        format!("│  Model:    {:<34}│", config.agent.model)
-            .cyan()
-            .to_string()
+        format!("│  Model:    {:<34}│", config.agent.model).cyan()
     );
     println!(
         "{}",
@@ -1049,13 +1045,15 @@ fn schedules(config: AppConfig, action: ScheduleAction) {
             println!("=======================");
             match create_scheduled_job(
                 &path,
-                &name,
-                &job_action,
-                &trigger,
-                &value,
-                description.as_deref(),
-                retries,
-                retry_delay,
+                CreateScheduledJobRequest {
+                    name: &name,
+                    action: &job_action,
+                    trigger_type: &trigger,
+                    trigger_value: &value,
+                    description: description.as_deref(),
+                    max_retries: retries,
+                    retry_delay_seconds: retry_delay,
+                },
             ) {
                 Ok(id) => println!("Created scheduled task '{}' (ID: {})", name, id),
                 Err(err) => println!("Failed to create scheduled task: {}", err),
@@ -2344,31 +2342,37 @@ fn schedule_trigger_label(trigger: &JobTrigger) -> String {
     }
 }
 
-fn create_scheduled_job(
-    path: &std::path::Path,
-    name: &str,
-    action: &str,
-    trigger_type: &str,
-    trigger_value: &str,
-    description: Option<&str>,
+struct CreateScheduledJobRequest<'a> {
+    name: &'a str,
+    action: &'a str,
+    trigger_type: &'a str,
+    trigger_value: &'a str,
+    description: Option<&'a str>,
     max_retries: u32,
     retry_delay_seconds: u64,
+}
+
+fn create_scheduled_job(
+    path: &std::path::Path,
+    request: CreateScheduledJobRequest<'_>,
 ) -> Result<String, String> {
     use borgclaw_core::scheduler::{with_retry_policy, Job, JobTrigger};
     use chrono::Utc;
     use std::collections::HashMap;
     use uuid::Uuid;
 
-    let trigger = match trigger_type.to_lowercase().as_str() {
-        "cron" => JobTrigger::Cron(trigger_value.to_string()),
+    let trigger = match request.trigger_type.to_lowercase().as_str() {
+        "cron" => JobTrigger::Cron(request.trigger_value.to_string()),
         "interval" => {
-            let seconds = trigger_value
+            let seconds = request
+                .trigger_value
                 .parse::<u64>()
                 .map_err(|_| "interval value must be a number (seconds)".to_string())?;
             JobTrigger::Interval(seconds)
         }
         "oneshot" => {
-            let datetime = trigger_value
+            let datetime = request
+                .trigger_value
                 .parse::<chrono::DateTime<Utc>>()
                 .map_err(|_| "oneshot value must be an ISO 8601 datetime".to_string())?;
             JobTrigger::OneShot(datetime)
@@ -2376,7 +2380,7 @@ fn create_scheduled_job(
         _ => {
             return Err(format!(
                 "unknown trigger type: {}. Use cron, interval, or oneshot",
-                trigger_type
+                request.trigger_type
             ))
         }
     };
@@ -2384,18 +2388,18 @@ fn create_scheduled_job(
     let next_run = trigger.next_run();
     let job = Job {
         id: Uuid::new_v4().to_string(),
-        name: name.to_string(),
-        description: description.map(|s| s.to_string()),
+        name: request.name.to_string(),
+        description: request.description.map(str::to_string),
         trigger,
-        action: action.to_string(),
+        action: request.action.to_string(),
         status: borgclaw_core::scheduler::JobStatus::Pending,
         created_at: Utc::now(),
         last_run: None,
         next_run,
         run_count: 0,
-        max_retries,
+        max_retries: request.max_retries,
         retry_count: 0,
-        retry_delay_seconds: retry_delay_seconds.max(1),
+        retry_delay_seconds: request.retry_delay_seconds.max(1),
         dead_lettered_at: None,
         run_history: Vec::new(),
         metadata: HashMap::new(),
@@ -2403,8 +2407,8 @@ fn create_scheduled_job(
         missed_runs: 0,
     };
 
-    let job = if max_retries > 0 {
-        with_retry_policy(job, max_retries, retry_delay_seconds)
+    let job = if request.max_retries > 0 {
+        with_retry_policy(job, request.max_retries, request.retry_delay_seconds)
     } else {
         job
     };
@@ -3195,7 +3199,7 @@ async fn install_skill(
         return match spec {
             SkillSource::RemoteManifest { url } => {
                 let content = fetch_skill_manifest(&url).await?;
-                install_skill_manifest(skills_path, source, &content)
+                install_skill_manifest(skills_path, &url, &content).await
             }
             SkillSource::RemoteArchive {
                 url,
@@ -3278,7 +3282,7 @@ fn install_local_skill(
         return Err(format!("Skill '{}' is already installed", skill_id));
     }
 
-    copy_dir_recursive(&source_path, &destination)?;
+    copy_dir_recursive(source_path, &destination)?;
     Ok(destination)
 }
 
@@ -3297,12 +3301,14 @@ fn install_skill_archive(
     )
 }
 
-fn install_skill_manifest(
+async fn install_skill_manifest(
     skills_path: &std::path::Path,
     source: &str,
     content: &str,
 ) -> Result<std::path::PathBuf, String> {
-    borgclaw_core::skills::SkillManifest::parse(content).map_err(|e| e.to_string())?;
+    let manifest =
+        borgclaw_core::skills::SkillManifest::parse(content).map_err(|e| e.to_string())?;
+    let companion_files = fetch_manifest_companion_paths(source, &manifest).await?;
 
     std::fs::create_dir_all(skills_path).map_err(|e| e.to_string())?;
     let skill_id = skill_install_id(source)?;
@@ -3311,9 +3317,37 @@ fn install_skill_manifest(
         return Err(format!("Skill '{}' is already installed", skill_id));
     }
 
-    std::fs::create_dir_all(&destination).map_err(|e| e.to_string())?;
-    std::fs::write(destination.join("SKILL.md"), content).map_err(|e| e.to_string())?;
-    Ok(destination)
+    let temp_root =
+        std::env::temp_dir().join(format!("borgclaw_skill_manifest_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&temp_root).map_err(|e| e.to_string())?;
+
+    let result = async {
+        std::fs::write(temp_root.join("SKILL.md"), content).map_err(|e| e.to_string())?;
+
+        for relative_file in &companion_files {
+            let relative_path = std::path::PathBuf::from(relative_file);
+            ensure_safe_archive_path(&relative_path)?;
+            let file_url = resolve_companion_url(source, &relative_path)?;
+            let bytes = fetch_remote_resource(&file_url).await?;
+            let output_path = temp_root.join(&relative_path);
+            if let Some(parent) = output_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            std::fs::write(output_path, bytes).map_err(|e| e.to_string())?;
+        }
+
+        std::fs::rename(&temp_root, &destination)
+            .or_else(|_| copy_dir_recursive(&temp_root, &destination).map(|_| ()))
+            .map_err(|e| e.to_string())?;
+        Ok(destination)
+    }
+    .await;
+
+    if temp_root.exists() {
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    result
 }
 
 fn install_skill_archive_bytes(
@@ -3353,15 +3387,8 @@ fn install_skill_archive_bytes(
 }
 
 async fn fetch_skill_manifest(url: &str) -> Result<String, String> {
-    let response = reqwest::get(url).await.map_err(|e| e.to_string())?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "failed to download skill manifest: http {}",
-            response.status()
-        ));
-    }
-
-    let content = response.text().await.map_err(|e| e.to_string())?;
+    let content = String::from_utf8(fetch_remote_resource(url).await?)
+        .map_err(|e| format!("downloaded skill manifest is not valid UTF-8: {}", e))?;
     if content.trim().is_empty() {
         return Err("downloaded skill manifest is empty".to_string());
     }
@@ -3370,10 +3397,39 @@ async fn fetch_skill_manifest(url: &str) -> Result<String, String> {
 }
 
 async fn fetch_skill_archive(url: &str) -> Result<Vec<u8>, String> {
+    fetch_remote_resource(url).await
+}
+
+async fn fetch_remote_resource(url: &str) -> Result<Vec<u8>, String> {
+    match try_fetch_remote_resource(url).await? {
+        Some(bytes) => Ok(bytes),
+        None => Err(format!(
+            "failed to download remote resource '{}': not found",
+            url
+        )),
+    }
+}
+
+async fn try_fetch_remote_resource(url: &str) -> Result<Option<Vec<u8>>, String> {
+    if let Some(path) = file_url_to_path(url)? {
+        return match std::fs::read(&path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(format!(
+                "failed to read local resource {}: {}",
+                path.display(),
+                err
+            )),
+        };
+    }
+
     let response = reqwest::get(url).await.map_err(|e| e.to_string())?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
     if !response.status().is_success() {
         return Err(format!(
-            "failed to download skill archive: http {}",
+            "failed to download remote resource: http {}",
             response.status()
         ));
     }
@@ -3381,12 +3437,210 @@ async fn fetch_skill_archive(url: &str) -> Result<Vec<u8>, String> {
     response
         .bytes()
         .await
-        .map(|bytes| bytes.to_vec())
+        .map(|bytes| Some(bytes.to_vec()))
         .map_err(|e| e.to_string())
 }
 
+async fn fetch_manifest_companion_paths(
+    manifest_url: &str,
+    manifest: &borgclaw_core::skills::SkillManifest,
+) -> Result<Vec<String>, String> {
+    if !manifest.files.is_empty() {
+        return Ok(manifest.files.clone());
+    }
+
+    if reqwest::Url::parse(manifest_url).is_err() {
+        return Ok(Vec::new());
+    }
+
+    let sidecar_url =
+        resolve_companion_url(manifest_url, std::path::Path::new("SKILL.files.json"))?;
+    if let Some(bytes) = try_fetch_remote_resource(&sidecar_url).await? {
+        return parse_manifest_file_index(&bytes);
+    }
+
+    if let Some(path) = file_url_to_path(manifest_url)? {
+        let base_dir = path.parent().ok_or_else(|| {
+            format!(
+                "Manifest file URL '{}' does not have a parent directory",
+                manifest_url
+            )
+        })?;
+        return discover_local_manifest_files(base_dir);
+    }
+
+    discover_remote_manifest_files(manifest_url).await
+}
+
+fn parse_manifest_file_index(bytes: &[u8]) -> Result<Vec<String>, String> {
+    #[derive(serde::Deserialize)]
+    struct FileIndex {
+        files: Vec<String>,
+    }
+
+    if let Ok(files) = serde_json::from_slice::<Vec<String>>(bytes) {
+        return Ok(files);
+    }
+
+    serde_json::from_slice::<FileIndex>(bytes)
+        .map(|index| index.files)
+        .map_err(|e| format!("invalid SKILL.files.json: {}", e))
+}
+
+fn discover_local_manifest_files(base_dir: &std::path::Path) -> Result<Vec<String>, String> {
+    let mut files = Vec::new();
+    for entry in walkdir::WalkDir::new(base_dir) {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let relative_path = entry
+            .path()
+            .strip_prefix(base_dir)
+            .map_err(|e| e.to_string())?;
+        if should_skip_manifest_support_file(relative_path) {
+            continue;
+        }
+        ensure_safe_archive_path(relative_path)?;
+        files.push(relative_path.to_string_lossy().to_string());
+    }
+    files.sort();
+    Ok(files)
+}
+
+async fn discover_remote_manifest_files(manifest_url: &str) -> Result<Vec<String>, String> {
+    let base_url = manifest_directory_url(manifest_url)?;
+    let base_path = base_url.path().to_string();
+    let mut pending = std::collections::VecDeque::from([base_url.clone()]);
+    let mut visited = std::collections::HashSet::from([base_url.to_string()]);
+    let mut files = std::collections::BTreeSet::new();
+
+    while let Some(dir_url) = pending.pop_front() {
+        let Some(body) = try_fetch_remote_text(dir_url.as_str()).await? else {
+            continue;
+        };
+
+        for href in extract_directory_listing_hrefs(&body) {
+            if href.starts_with('#')
+                || href.starts_with('?')
+                || href.starts_with("../")
+                || href == "../"
+            {
+                continue;
+            }
+
+            let Some(target_url) = dir_url.join(&href).ok() else {
+                continue;
+            };
+            if target_url.scheme() != base_url.scheme()
+                || target_url.domain() != base_url.domain()
+                || !target_url.path().starts_with(&base_path)
+            {
+                continue;
+            }
+
+            let relative_path = target_url
+                .path()
+                .strip_prefix(&base_path)
+                .unwrap_or(target_url.path())
+                .trim_start_matches('/');
+
+            if href.ends_with('/') || target_url.path().ends_with('/') {
+                if !relative_path.is_empty() && visited.insert(target_url.to_string()) {
+                    pending.push_back(target_url);
+                }
+                continue;
+            }
+
+            if relative_path.is_empty() {
+                continue;
+            }
+
+            let relative_path = std::path::PathBuf::from(relative_path);
+            if should_skip_manifest_support_file(&relative_path) {
+                continue;
+            }
+            ensure_safe_archive_path(&relative_path)?;
+            files.insert(relative_path.to_string_lossy().to_string());
+        }
+    }
+
+    Ok(files.into_iter().collect())
+}
+
+async fn try_fetch_remote_text(url: &str) -> Result<Option<String>, String> {
+    match try_fetch_remote_resource(url).await? {
+        Some(bytes) => String::from_utf8(bytes)
+            .map(Some)
+            .map_err(|e| format!("downloaded directory listing is not valid UTF-8: {}", e)),
+        None => Ok(None),
+    }
+}
+
+fn manifest_directory_url(manifest_url: &str) -> Result<reqwest::Url, String> {
+    let mut url = reqwest::Url::parse(manifest_url).map_err(|e| e.to_string())?;
+    {
+        let mut segments = url.path_segments_mut().map_err(|_| {
+            format!(
+                "Manifest URL '{}' cannot be used as a base path",
+                manifest_url
+            )
+        })?;
+        segments.pop_if_empty();
+        segments.pop();
+    }
+    if !url.path().ends_with('/') {
+        let new_path = format!("{}/", url.path());
+        url.set_path(&new_path);
+    }
+    Ok(url)
+}
+
+fn extract_directory_listing_hrefs(body: &str) -> Vec<String> {
+    let mut hrefs = Vec::new();
+    let mut remaining = body;
+    while let Some(index) = remaining.find("href=") {
+        remaining = &remaining[index + 5..];
+        let Some(quote) = remaining.chars().next() else {
+            break;
+        };
+        if quote != '"' && quote != '\'' {
+            continue;
+        }
+        remaining = &remaining[quote.len_utf8()..];
+        let Some(end) = remaining.find(quote) else {
+            break;
+        };
+        let href = &remaining[..end];
+        if !href.is_empty() {
+            hrefs.push(html_unescape_minimal(href));
+        }
+        remaining = &remaining[end + quote.len_utf8()..];
+    }
+    hrefs
+}
+
+fn html_unescape_minimal(value: &str) -> String {
+    value
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+}
+
+fn should_skip_manifest_support_file(path: &std::path::Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("SKILL.md") | Some("SKILL.files.json")
+    )
+}
+
 fn resolve_skill_source(source: &str, registry_url: Option<&str>) -> Option<SkillSource> {
-    if source.starts_with("http://") || source.starts_with("https://") {
+    if source.starts_with("http://")
+        || source.starts_with("https://")
+        || source.starts_with("file://")
+    {
         if is_tar_gz_str(source) {
             return Some(SkillSource::RemoteArchive {
                 url: source.to_string(),
@@ -3464,6 +3718,48 @@ fn github_archive_source_from_url(source: &str) -> Option<SkillSource> {
     }
 
     None
+}
+
+fn resolve_companion_url(
+    manifest_url: &str,
+    relative_path: &std::path::Path,
+) -> Result<String, String> {
+    if let Some(path) = file_url_to_path(manifest_url)? {
+        let base_dir = path.parent().ok_or_else(|| {
+            format!(
+                "Manifest file URL '{}' does not have a parent directory",
+                manifest_url
+            )
+        })?;
+        return reqwest::Url::from_file_path(base_dir.join(relative_path))
+            .map(|url| url.to_string())
+            .map_err(|_| format!("Could not build companion file URL from '{}'", manifest_url));
+    }
+
+    let mut base = reqwest::Url::parse(manifest_url).map_err(|e| e.to_string())?;
+    if !base.path().ends_with('/') {
+        let mut segments = base.path_segments_mut().map_err(|_| {
+            format!(
+                "Manifest URL '{}' cannot be used as a base path",
+                manifest_url
+            )
+        })?;
+        segments.pop();
+    }
+    base.join(&relative_path.to_string_lossy())
+        .map(|url| url.to_string())
+        .map_err(|e| e.to_string())
+}
+
+fn file_url_to_path(url: &str) -> Result<Option<std::path::PathBuf>, String> {
+    let parsed = reqwest::Url::parse(url).map_err(|e| e.to_string())?;
+    if parsed.scheme() != "file" {
+        return Ok(None);
+    }
+    parsed
+        .to_file_path()
+        .map(Some)
+        .map_err(|_| format!("Invalid file URL '{}'", url))
 }
 
 fn is_tar_gz_path(path: &std::path::Path) -> bool {
@@ -3696,7 +3992,7 @@ async fn publish_skill(
         ));
     }
 
-    if !package_path.extension().map_or(false, |ext| ext == "gz")
+    if !package_path.extension().is_some_and(|ext| ext == "gz")
         && !package_path.to_string_lossy().ends_with(".tar.gz")
     {
         return Err("Package file must be a .tar.gz archive".to_string());
@@ -4139,8 +4435,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn installs_downloaded_skill_manifest() {
+    #[tokio::test]
+    async fn installs_downloaded_skill_manifest() {
         let root = std::env::temp_dir().join(format!(
             "borgclaw_cli_remote_skill_test_{}",
             uuid::Uuid::new_v4()
@@ -4151,10 +4447,147 @@ mod tests {
             "openclaw/weather",
             "name: Weather\ndescription: Weather skill\n## Instructions\nUse weather APIs.\n",
         )
+        .await
         .unwrap();
 
         assert!(destination.join("SKILL.md").exists());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn installs_manifest_declared_companion_files_from_file_url() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_cli_manifest_files_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let remote = root.join("remote");
+        let skills_path = root.join("installed");
+        std::fs::create_dir_all(remote.join("assets")).unwrap();
+        std::fs::create_dir_all(remote.join("prompts")).unwrap();
+        std::fs::write(
+            remote.join("SKILL.md"),
+            "name: weather\nversion: 1.0.0\ndescription: Weather skill\nfiles:\n- assets/icon.txt\n- prompts/system.txt\n## Instructions\nUse weather APIs.\n",
+        )
+        .unwrap();
+        std::fs::write(remote.join("assets/icon.txt"), "icon").unwrap();
+        std::fs::write(remote.join("prompts/system.txt"), "prompt").unwrap();
+
+        let manifest_url = reqwest::Url::from_file_path(remote.join("SKILL.md"))
+            .unwrap()
+            .to_string();
+        let content = fetch_skill_manifest(&manifest_url).await.unwrap();
+        let destination = install_skill_manifest(&skills_path, &manifest_url, &content)
+            .await
+            .unwrap();
+
+        assert!(destination.join("SKILL.md").exists());
+        assert_eq!(
+            std::fs::read_to_string(destination.join("assets/icon.txt")).unwrap(),
+            "icon"
+        );
+        assert_eq!(
+            std::fs::read_to_string(destination.join("prompts/system.txt")).unwrap(),
+            "prompt"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn installs_manifest_companion_files_from_sidecar_index() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_cli_manifest_sidecar_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let remote = root.join("remote");
+        let skills_path = root.join("installed");
+        std::fs::create_dir_all(remote.join("assets")).unwrap();
+        std::fs::create_dir_all(remote.join("prompts")).unwrap();
+        std::fs::write(
+            remote.join("SKILL.md"),
+            "name: weather\nversion: 1.0.0\ndescription: Weather skill\n## Instructions\nUse weather APIs.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            remote.join("SKILL.files.json"),
+            "[\"assets/icon.txt\", \"prompts/system.txt\"]",
+        )
+        .unwrap();
+        std::fs::write(remote.join("assets/icon.txt"), "icon").unwrap();
+        std::fs::write(remote.join("prompts/system.txt"), "prompt").unwrap();
+
+        let manifest_url = reqwest::Url::from_file_path(remote.join("SKILL.md"))
+            .unwrap()
+            .to_string();
+        let content = fetch_skill_manifest(&manifest_url).await.unwrap();
+        let destination = install_skill_manifest(&skills_path, &manifest_url, &content)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(destination.join("assets/icon.txt")).unwrap(),
+            "icon"
+        );
+        assert_eq!(
+            std::fs::read_to_string(destination.join("prompts/system.txt")).unwrap(),
+            "prompt"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn installs_manifest_companion_files_from_local_directory_discovery() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_cli_manifest_discovery_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let remote = root.join("remote");
+        let skills_path = root.join("installed");
+        std::fs::create_dir_all(remote.join("assets")).unwrap();
+        std::fs::create_dir_all(remote.join("prompts")).unwrap();
+        std::fs::write(
+            remote.join("SKILL.md"),
+            "name: weather\nversion: 1.0.0\ndescription: Weather skill\n## Instructions\nUse weather APIs.\n",
+        )
+        .unwrap();
+        std::fs::write(remote.join("assets/icon.txt"), "icon").unwrap();
+        std::fs::write(remote.join("prompts/system.txt"), "prompt").unwrap();
+
+        let manifest_url = reqwest::Url::from_file_path(remote.join("SKILL.md"))
+            .unwrap()
+            .to_string();
+        let content = fetch_skill_manifest(&manifest_url).await.unwrap();
+        let destination = install_skill_manifest(&skills_path, &manifest_url, &content)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(destination.join("assets/icon.txt")).unwrap(),
+            "icon"
+        );
+        assert_eq!(
+            std::fs::read_to_string(destination.join("prompts/system.txt")).unwrap(),
+            "prompt"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extracts_hrefs_from_directory_listing_html() {
+        let body = r#"
+            <html><body>
+            <a href="assets/">assets/</a>
+            <a href="prompts/system.txt">system</a>
+            <a href="../">parent</a>
+            </body></html>
+        "#;
+        assert_eq!(
+            extract_directory_listing_hrefs(body),
+            vec![
+                "assets/".to_string(),
+                "prompts/system.txt".to_string(),
+                "../".to_string()
+            ]
+        );
     }
 
     #[tokio::test]
@@ -4937,8 +5370,8 @@ mod tests {
     #[test]
     fn self_test_failures_surface_missing_provider_credentials() {
         // Clear any existing provider env vars to ensure test is deterministic
-        let _ = std::env::remove_var("OPENAI_API_KEY");
-        let _ = std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("OPENAI_API_KEY");
+        std::env::remove_var("ANTHROPIC_API_KEY");
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let mut config = temp_config();
@@ -5045,35 +5478,22 @@ mod tests {
 fn print_help() {
     println!("{}", "Available Commands:".cyan().bold());
     println!();
+    println!("  {}  {:12} - Exit the REPL", "🚪".yellow(), "exit, quit",);
     println!(
-        "  {}  {:12} - {}",
-        "🚪".yellow(),
-        "exit, quit",
-        "Exit the REPL"
-    );
-    println!(
-        "  {}  {:12} - {}",
+        "  {}  {:12} - Show this help message",
         "❓".yellow(),
         "help",
-        "Show this help message"
     );
     println!(
-        "  {}  {:12} - {}",
+        "  {}  {:12} - Show agent and system status",
         "📊".yellow(),
         "status",
-        "Show agent and system status"
     );
+    println!("  {}  {:12} - Clear the screen", "🧹".yellow(), "clear",);
     println!(
-        "  {}  {:12} - {}",
-        "🧹".yellow(),
-        "clear",
-        "Clear the screen"
-    );
-    println!(
-        "  {}  {:12} - {}",
+        "  {}  {:12} - Show command history",
         "📜".yellow(),
         "history",
-        "Show command history"
     );
     println!();
     println!("{}", "Tips:".dimmed().bold());

@@ -2400,20 +2400,13 @@ async fn route_webhook_request(
                     .get("trigger_id")
                     .and_then(|value| value.as_str())
                 {
-                    match webhook.get_trigger(trigger_id).await {
-                        Some(trigger) => {
-                            if let Err(err) =
-                                forward_configured_webhook(&trigger, &route_outcome.response.text)
-                                    .await
-                            {
-                                warn!("webhook forward failed for trigger {}: {}", trigger_id, err);
-                                return json_error_response(
-                                    StatusCode::BAD_GATEWAY,
-                                    "forward failed",
-                                );
-                            }
+                    if let Some(trigger) = webhook.get_trigger(trigger_id).await {
+                        if let Err(err) =
+                            forward_configured_webhook(&trigger, &route_outcome.response.text).await
+                        {
+                            warn!("webhook forward failed for trigger {}: {}", trigger_id, err);
+                            return json_error_response(StatusCode::BAD_GATEWAY, "forward failed");
                         }
-                        None => {}
                     }
                 }
 
@@ -2743,7 +2736,8 @@ async fn api_config_post(
             let mode = match approval_mode.as_str() {
                 "readonly" | "ReadOnly" => borgclaw_core::config::ApprovalMode::ReadOnly,
                 "supervised" | "Supervised" => borgclaw_core::config::ApprovalMode::Supervised,
-                "autonomous" | "Autonomous" | _ => borgclaw_core::config::ApprovalMode::Autonomous,
+                "autonomous" | "Autonomous" => borgclaw_core::config::ApprovalMode::Autonomous,
+                _ => borgclaw_core::config::ApprovalMode::Autonomous,
             };
             updated_config.security.approval_mode = mode;
             changes_made.push(format!("security.approval_mode = {}", approval_mode));
@@ -3092,8 +3086,16 @@ async fn api_doctor(State(state): State<GatewayState>) -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::{to_bytes, Body};
+    use axum::http::{header, Request};
+    use axum::response::Response;
     use futures_util::{SinkExt, StreamExt};
-    use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
+    use hyper::server::conn::http1;
+    use hyper_util::rt::TokioIo;
+    use hyper_util::service::TowerToHyperService;
+    use tokio::io::DuplexStream;
+    use tokio_tungstenite::{client_async, tungstenite::Message as WsMessage};
+    use tower::util::ServiceExt;
 
     #[test]
     fn error_event_is_structured() {
@@ -3192,8 +3194,10 @@ mod tests {
 
     #[test]
     fn configured_webhook_trigger_contract_is_loaded_from_config() {
-        let mut channel = borgclaw_core::config::ChannelConfig::default();
-        channel.enabled = true;
+        let mut channel = borgclaw_core::config::ChannelConfig {
+            enabled: true,
+            ..Default::default()
+        };
         channel.extra.insert(
             "triggers".to_string(),
             toml::Value::Table(toml::map::Map::from_iter([(
@@ -3289,13 +3293,7 @@ mod tests {
         let app = Router::new()
             .route("/ws", get(websocket_handler))
             .with_state(state);
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
-
-        let (mut socket, _) = connect_async(format!("ws://{addr}/ws")).await.unwrap();
+        let mut socket = connect_test_websocket(app, "/ws").await.unwrap();
 
         let welcome = next_event_of_type(&mut socket, "welcome").await;
         assert_eq!(welcome["type"], "welcome");
@@ -3372,7 +3370,6 @@ mod tests {
         assert_eq!(error["message"], "Unknown message type");
 
         socket.close(None).await.unwrap();
-        server.abort();
     }
 
     #[tokio::test]
@@ -3394,21 +3391,13 @@ mod tests {
         let app = Router::new()
             .route("/ws", get(websocket_handler))
             .with_state(state);
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
-
-        let err = connect_async(format!("ws://{addr}/ws")).await.unwrap_err();
+        let err = connect_test_websocket(app, "/ws").await.unwrap_err();
         match err {
             tokio_tungstenite::tungstenite::Error::Http(response) => {
                 assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
             }
             other => panic!("unexpected websocket connect error: {other:?}"),
         }
-
-        server.abort();
     }
 
     #[tokio::test]
@@ -3439,79 +3428,92 @@ mod tests {
             .route("/webhook/health", get(webhook_health))
             .layer(DefaultBodyLimit::max(DEFAULT_WEBHOOK_BODY_LIMIT_BYTES))
             .with_state(state);
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
-        let client = reqwest::Client::new();
-
-        let health = client
-            .get(format!("http://{addr}/webhook/health"))
-            .send()
+        let health = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/webhook/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(health.status(), StatusCode::OK);
-        let health_body: serde_json::Value = health.json().await.unwrap();
+        let health_body = response_json(health).await;
         assert_eq!(health_body["status"], "ok");
         assert_eq!(health_body["webhook_enabled"], true);
 
-        let unauthorized = client
-            .post(format!("http://{addr}/webhook"))
-            .header("content-type", "application/json")
-            .header("x-forwarded-for", "10.0.0.1")
-            .body(r#"{"content":"hello"}"#)
-            .send()
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhook")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("x-forwarded-for", "10.0.0.1")
+                    .body(Body::from(r#"{"content":"hello"}"#))
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
-        let unauthorized_body: serde_json::Value = unauthorized.json().await.unwrap();
+        let unauthorized_body = response_json(unauthorized).await;
         assert_eq!(unauthorized_body["error"], "Unauthorized");
 
-        let first = client
-            .post(format!("http://{addr}/webhook"))
-            .header("content-type", "application/json")
-            .header("x-webhook-secret", "test-secret")
-            .header("x-forwarded-for", "10.0.0.1")
-            .body(r#"{"content":"hello"}"#)
-            .send()
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhook")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("x-webhook-secret", "test-secret")
+                    .header("x-forwarded-for", "10.0.0.1")
+                    .body(Body::from(r#"{"content":"hello"}"#))
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(first.status(), StatusCode::BAD_REQUEST);
-        let first_body: serde_json::Value = first.json().await.unwrap();
+        let first_body = response_json(first).await;
         assert_eq!(first_body["error"], "request rejected");
 
-        let limited = client
-            .post(format!("http://{addr}/webhook"))
-            .header("content-type", "application/json")
-            .header("x-webhook-secret", "test-secret")
-            .header("x-forwarded-for", "10.0.0.1")
-            .body(r#"{"content":"hello again"}"#)
-            .send()
+        let limited = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhook")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("x-webhook-secret", "test-secret")
+                    .header("x-forwarded-for", "10.0.0.1")
+                    .body(Body::from(r#"{"content":"hello again"}"#))
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
-        assert!(limited
-            .headers()
-            .get(reqwest::header::RETRY_AFTER)
-            .is_some());
-        let limited_body: serde_json::Value = limited.json().await.unwrap();
+        assert!(limited.headers().get(header::RETRY_AFTER).is_some());
+        let limited_body = response_json(limited).await;
         assert_eq!(limited_body["error"], "Rate limited");
 
-        let other_requester = client
-            .post(format!("http://{addr}/webhook"))
-            .header("content-type", "application/json")
-            .header("x-webhook-secret", "test-secret")
-            .header("x-forwarded-for", "10.0.0.2")
-            .body(r#"{"content":"hello from elsewhere"}"#)
-            .send()
+        let other_requester = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhook")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("x-webhook-secret", "test-secret")
+                    .header("x-forwarded-for", "10.0.0.2")
+                    .body(Body::from(r#"{"content":"hello from elsewhere"}"#))
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(other_requester.status(), StatusCode::BAD_REQUEST);
-        let other_body: serde_json::Value = other_requester.json().await.unwrap();
+        let other_body = response_json(other_requester).await;
         assert_eq!(other_body["error"], "request rejected");
-
-        server.abort();
     }
 
     #[tokio::test]
@@ -3535,32 +3537,68 @@ mod tests {
             .route("/webhook/health", get(webhook_health))
             .layer(DefaultBodyLimit::max(DEFAULT_WEBHOOK_BODY_LIMIT_BYTES))
             .with_state(state);
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
-        let client = reqwest::Client::new();
-
         let oversized = "x".repeat(DEFAULT_WEBHOOK_BODY_LIMIT_BYTES + 1);
-        let response = client
-            .post(format!("http://{addr}/webhook"))
-            .header("content-type", "application/json")
-            .body(oversized)
-            .send()
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhook")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(oversized))
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-
-        server.abort();
     }
 
-    async fn next_text_message(
-        socket: &mut tokio_tungstenite::WebSocketStream<
-            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-        >,
-    ) -> serde_json::Value {
+    async fn response_json(response: Response) -> serde_json::Value {
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap()
+    }
+
+    async fn connect_test_websocket(
+        app: Router,
+        path: &str,
+    ) -> Result<
+        tokio_tungstenite::WebSocketStream<DuplexStream>,
+        tokio_tungstenite::tungstenite::Error,
+    > {
+        let (client_io, server_io) = tokio::io::duplex(16 * 1024);
+        tokio::spawn(async move {
+            http1::Builder::new()
+                .serve_connection(
+                    TokioIo::new(server_io),
+                    TowerToHyperService::new(app.into_service()),
+                )
+                .with_upgrades()
+                .await
+                .unwrap();
+        });
+
+        client_async(
+            Request::builder()
+                .method("GET")
+                .uri(format!("ws://localhost{path}"))
+                .header(header::HOST, "localhost")
+                .header(header::CONNECTION, "upgrade")
+                .header(header::UPGRADE, "websocket")
+                .header("sec-websocket-version", "13")
+                .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+                .body(())
+                .unwrap(),
+            client_io,
+        )
+        .await
+        .map(|(socket, _)| socket)
+    }
+
+    async fn next_text_message<S>(
+        socket: &mut tokio_tungstenite::WebSocketStream<S>,
+    ) -> serde_json::Value
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
         loop {
             match socket.next().await.unwrap().unwrap() {
                 WsMessage::Text(text) => return serde_json::from_str(&text).unwrap(),
@@ -3570,12 +3608,13 @@ mod tests {
         }
     }
 
-    async fn next_event_of_type(
-        socket: &mut tokio_tungstenite::WebSocketStream<
-            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-        >,
+    async fn next_event_of_type<S>(
+        socket: &mut tokio_tungstenite::WebSocketStream<S>,
         event_type: &str,
-    ) -> serde_json::Value {
+    ) -> serde_json::Value
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
         loop {
             let event = next_text_message(socket).await;
             if event["type"] == event_type {

@@ -209,11 +209,13 @@ impl Scheduler {
     pub async fn get_by_trigger(&self, trigger_type: TriggerType) -> Vec<Job> {
         let jobs = self.jobs.read().await;
         jobs.values()
-            .filter(|j| match (&j.trigger, trigger_type) {
-                (JobTrigger::Cron(_), TriggerType::Cron) => true,
-                (JobTrigger::Interval(_), TriggerType::Interval) => true,
-                (JobTrigger::OneShot(_), TriggerType::OneShot) => true,
-                _ => false,
+            .filter(|j| {
+                matches!(
+                    (&j.trigger, trigger_type),
+                    (JobTrigger::Cron(_), TriggerType::Cron)
+                        | (JobTrigger::Interval(_), TriggerType::Interval)
+                        | (JobTrigger::OneShot(_), TriggerType::OneShot)
+                )
             })
             .cloned()
             .collect()
@@ -305,7 +307,7 @@ impl Scheduler {
 
         let mut results = Vec::with_capacity(due_jobs.len());
         for batch in due_jobs.chunks(max_concurrent_jobs) {
-            let batch_results = join_all(batch.iter().cloned().map(|job| async {
+            let batch_results = join_all(batch.iter().map(|job| async {
                 let started_at = Utc::now();
                 let result = match job_timeout {
                     Some(timeout) => {
@@ -319,7 +321,7 @@ impl Scheduler {
                     }
                     None => handler(job.clone()).await,
                 };
-                (job, started_at, result)
+                (job.clone(), started_at, result)
             }))
             .await;
 

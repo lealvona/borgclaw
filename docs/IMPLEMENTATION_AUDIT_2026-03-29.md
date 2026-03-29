@@ -5,7 +5,7 @@ This document records a code-and-doc audit performed after the TICKET-086 and TI
 Superseded in part by later March 29, 2026 follow-up work:
 - manual heartbeat trigger has since been implemented
 - archive-backed skill install has since landed for local packages, remote archive URLs, and GitHub-backed sources
-- arbitrary non-GitHub direct `SKILL.md` URLs remain the main manifest-only limitation
+- direct `SKILL.md` installs now support explicit companion `files:` entries, adjacent `SKILL.files.json` sidecar discovery, and manifest-directory discovery where listings are available
 
 It has two goals:
 
@@ -45,7 +45,9 @@ The following claims were re-checked against code and are implemented:
 
 The audit did not find live `todo!()` or `unimplemented!()` macros in the main Rust crates.
 
-## Confirmed Gaps
+## Historical Gaps Found During The Audit
+
+The first two findings below were resolved later on March 29, 2026. They remain here as an audit trail of what was verified at the time, not as current product gaps.
 
 ### 1. Heartbeat manual trigger is still placeholder-only
 
@@ -87,40 +89,19 @@ Required fix steps:
 4. Extract into the destination skill directory atomically.
 5. Add tests for success, malformed archives, duplicate installs, and missing `SKILL.md`.
 
-### 3. Remote manifest installs still fetch only `SKILL.md`
+## Current Remaining Gaps
 
-Evidence:
+### 1. Repo-wide quality debt remained outside the original audited feature work
 
-- `install_skill_manifest()` creates a destination directory and writes only `SKILL.md`.
-- Companion assets from remote installs are not fetched.
+Status update:
 
-Required fix steps:
-
-1. Decide whether remote GitHub/URL installs should remain manifest-only or become archive-backed.
-2. If asset-complete installs are desired, use packaged archives or a registry manifest format that declares companion files.
-3. Update docs so "remote install" clearly distinguishes manifest-only installs from packaged installs.
-
-### 4. Repo-wide quality debt remains outside the audited feature work
-
-Evidence:
-
-- `cargo clippy -p borgclaw-core -- -D warnings` still fails on pre-existing issues outside this audit tranche.
-
-Representative blockers:
-
-- `borgclaw-core/src/agent/mod.rs`
-- `borgclaw-core/src/config/mod.rs`
-- `borgclaw-core/src/scheduler/jobs.rs`
-- `borgclaw-core/src/skills/browser.rs`
-- `borgclaw-core/src/skills/github.rs`
-- `borgclaw-core/src/skills/plugin.rs`
-- `borgclaw-core/src/skills/stt.rs`
+- This was resolved in a later follow-up pass.
+- `cargo clippy --workspace --all-targets -- -D warnings` now passes.
 
 Required fix steps:
 
-1. Open a dedicated lint-hardening tranche instead of mixing lint debt into product-contract work.
-2. Fix one module family at a time.
-3. Re-run `cargo clippy -p borgclaw-core -- -D warnings` after each slice.
+1. Keep the workspace on the passing `clippy -D warnings` baseline.
+2. Treat new clippy regressions as release blockers rather than deferred cleanup.
 
 ## Documentation Problems Found
 
@@ -142,17 +123,13 @@ Required fix steps:
 3. Update `docs/integrations.md` to:
    - use the correct `borgclaw skills ...` command spelling
    - describe packaging/publishing as implemented
-   - keep remote archive installs listed as pending
+   - distinguish archive-backed installs from direct manifest installs with explicit `files:` entries, `SKILL.files.json` sidecars, or manifest-directory discovery
 4. Add superseded/historical framing to `docs/REMAINING_TASKS.md`.
 5. Update `README.md` where the top-level product description should reflect real skill lifecycle limitations.
 6. Keep `CHANGELOG.md` accurate for historical releases when a listed feature is only partial or placeholder.
 
 ## Current Recommended Priorities
 
-1. Implement heartbeat manual trigger for real runtime execution or durable queueing.
-2. Decide and implement the intended remote skill install model:
-   - manifest-only
-   - archive-by-URL
-   - registry-first packaged installs
-3. Resolve the repo-wide clippy debt in dedicated follow-up PRs.
-4. Continue treating docs as contract and re-audit feature claims whenever a major tranche lands.
+1. Keep docs explicit about the distinction between archive-backed installs and direct manifest installs with declared companion files.
+2. Keep the workspace on the passing lint baseline and treat regressions as blocking.
+3. Continue treating docs as contract and re-audit feature claims whenever a major tranche lands.

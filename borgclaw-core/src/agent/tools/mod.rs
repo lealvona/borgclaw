@@ -685,6 +685,7 @@ pub(super) fn number_property(description: &str, default: serde_json::Value) -> 
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use crate::agent::{AgentContext, SenderInfo, SessionId};
@@ -696,35 +697,9 @@ mod tests {
     use crate::mcp::transport::McpTransportConfig;
     use crate::memory::{Memory, MemoryQuery};
     use crate::scheduler::{JobStatus, JobTrigger, SchedulerTrait};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    async fn spawn_github_stub(
-        responses: Vec<(&'static str, &'static str, String)>,
-    ) -> (String, tokio::task::JoinHandle<()>) {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            for (method, path, body) in responses {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut buf = [0_u8; 8192];
-                let read = socket.read(&mut buf).await.unwrap();
-                let request = String::from_utf8_lossy(&buf[..read]);
-                assert!(
-                    request.starts_with(method),
-                    "unexpected method: {}",
-                    request
-                );
-                assert!(request.contains(path), "unexpected path: {}", request);
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                );
-                socket.write_all(response.as_bytes()).await.unwrap();
-            }
-        });
-
-        (format!("http://{addr}"), server)
+    fn write_fixture(path: &std::path::Path, body: impl AsRef<[u8]>) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
     }
 
     #[test]
@@ -1215,31 +1190,13 @@ file_write = ["/etc"]
 
     #[tokio::test]
     async fn url_shorten_uses_configured_yourls_provider() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
         let root = std::env::temp_dir().join(format!(
             "borgclaw_url_shorten_test_{}",
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(&root).unwrap();
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut buf = [0_u8; 2048];
-            let read = socket.read(&mut buf).await.unwrap();
-            let request = String::from_utf8_lossy(&buf[..read]);
-            assert!(request.contains("action=shorturl"));
-            assert!(request.contains("signature=testsig"));
-            let body = r#"{"shorturl":"https://sho.rt/abc"}"#;
-            let response = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            socket.write_all(response.as_bytes()).await.unwrap();
-        });
+        let fixture = root.join("yourls-response.json");
+        std::fs::write(&fixture, r#"{"shorturl":"https://sho.rt/abc"}"#).unwrap();
 
         let runtime = ToolRuntime::from_config(
             &AgentConfig {
@@ -1256,7 +1213,7 @@ file_write = ["/etc"]
                 url_shortener: crate::config::UrlShortenerSkillConfig {
                     provider: "yourls".to_string(),
                     yourls: crate::config::DocumentedYourlsConfig {
-                        base_url: format!("http://{addr}/yourls-api.php"),
+                        base_url: format!("file://{}", fixture.display()),
                         signature: "testsig".to_string(),
                         username: String::new(),
                         password: String::new(),
@@ -1282,7 +1239,6 @@ file_write = ["/etc"]
         )
         .await;
 
-        server.await.unwrap();
         std::fs::remove_dir_all(root).unwrap();
         assert!(result.success);
         assert_eq!(result.output, "https://sho.rt/abc");
@@ -1460,8 +1416,10 @@ file_write = ["/etc"]
             std::env::temp_dir().join(format!("borgclaw_warn_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
 
-        let mut security = SecurityConfig::default();
-        security.leak_action = crate::config::LeakAction::Warn;
+        let security = SecurityConfig {
+            leak_action: crate::config::LeakAction::Warn,
+            ..Default::default()
+        };
 
         let runtime = ToolRuntime::from_config(
             &AgentConfig {
@@ -1511,8 +1469,10 @@ file_write = ["/etc"]
             std::env::temp_dir().join(format!("borgclaw_block_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
 
-        let mut security = SecurityConfig::default();
-        security.leak_action = crate::config::LeakAction::Block;
+        let security = SecurityConfig {
+            leak_action: crate::config::LeakAction::Block,
+            ..Default::default()
+        };
 
         let runtime = ToolRuntime::from_config(
             &AgentConfig {
@@ -2415,44 +2375,48 @@ file_write = ["/etc"]
         std::fs::create_dir_all(&root).unwrap();
 
         let readme = base64::engine::general_purpose::STANDARD.encode("hello from github");
-        let (base_url, server) = spawn_github_stub(vec![
-            (
-                "GET /repos/owner/repo ",
-                "authorization: Bearer test-token",
-                serde_json::json!({
-                    "name": "repo",
-                    "full_name": "owner/repo",
-                    "owner": {"login": "owner"},
-                    "description": "stub repo",
-                    "private": false,
-                    "html_url": "https://github.com/owner/repo",
-                    "default_branch": "main"
-                })
-                .to_string(),
-            ),
-            (
-                "GET /repos/owner/repo/branches ",
-                "authorization: Bearer test-token",
-                serde_json::json!([
-                    {
-                        "name": "main",
-                        "commit": {"sha": "abc123"},
-                        "protected": true
-                    }
-                ])
-                .to_string(),
-            ),
-            (
-                "GET /repos/owner/repo/contents/README.md?ref=main ",
-                "authorization: Bearer test-token",
-                serde_json::json!({
-                    "content": readme,
-                    "encoding": "base64"
-                })
-                .to_string(),
-            ),
-        ])
-        .await;
+        let base_url = format!("file://{}", root.display());
+        let repo_url = format!("{}/repos/owner/repo", base_url);
+        let branches_url = format!("{}/repos/owner/repo/branches", base_url);
+        let readme_url = format!("{}/repos/owner/repo/contents/README.md?ref=main", base_url);
+        write_fixture(
+            &crate::skills::github::fixture_path_for_request(&base_url, "GET", &repo_url)
+                .unwrap()
+                .unwrap(),
+            serde_json::json!({
+                "name": "repo",
+                "full_name": "owner/repo",
+                "owner": {"login": "owner"},
+                "description": "stub repo",
+                "private": false,
+                "html_url": "https://github.com/owner/repo",
+                "default_branch": "main"
+            })
+            .to_string(),
+        );
+        write_fixture(
+            &crate::skills::github::fixture_path_for_request(&base_url, "GET", &branches_url)
+                .unwrap()
+                .unwrap(),
+            serde_json::json!([
+                {
+                    "name": "main",
+                    "commit": {"sha": "abc123"},
+                    "protected": true
+                }
+            ])
+            .to_string(),
+        );
+        write_fixture(
+            &crate::skills::github::fixture_path_for_request(&base_url, "GET", &readme_url)
+                .unwrap()
+                .unwrap(),
+            serde_json::json!({
+                "content": readme,
+                "encoding": "base64"
+            })
+            .to_string(),
+        );
 
         let runtime = ToolRuntime::from_config(
             &AgentConfig {
@@ -2520,8 +2484,6 @@ file_write = ["/etc"]
             &runtime,
         )
         .await;
-
-        server.await.unwrap();
         std::fs::remove_dir_all(&root).unwrap();
 
         assert!(repo.success);
@@ -2647,42 +2609,46 @@ for line in sys.stdin:
         )
         .unwrap();
 
-        let (base_url, server) = spawn_github_stub(vec![
-            (
-                "GET /gmail/v1/users/me/messages/msg-1 ",
-                "authorization: Bearer test-token",
-                serde_json::json!({
-                    "id": "msg-1",
-                    "thread_id": "thread-1",
-                    "snippet": "hello",
-                    "payload": {
-                        "headers": [
-                            {"name": "From", "value": "sender@example.com"},
-                            {"name": "Subject", "value": "Stub message"}
-                        ]
-                    }
-                })
-                .to_string(),
-            ),
-            (
-                "GET /drive/v3/files/file-1?alt=media ",
-                "authorization: Bearer test-token",
-                "drive-bytes".to_string(),
-            ),
-            (
-                "POST /calendar/v3/calendars/primary/events ",
-                "authorization: Bearer test-token",
-                serde_json::json!({
-                    "id": "event-1",
-                    "summary": "Stub event",
-                    "description": "calendar body",
-                    "start": { "dateTime": "2026-03-19T15:00:00Z" },
-                    "end": { "dateTime": "2026-03-19T16:00:00Z" }
-                })
-                .to_string(),
-            ),
-        ])
-        .await;
+        let base_url = format!("file://{}", root.display());
+        let message_url = format!("{}/gmail/v1/users/me/messages/msg-1", base_url);
+        let download_url = format!("{}/drive/v3/files/file-1?alt=media", base_url);
+        let event_url = format!("{}/calendar/v3/calendars/primary/events", base_url);
+        write_fixture(
+            &crate::skills::google::fixture_path_for_request(&base_url, "GET", &message_url)
+                .unwrap()
+                .unwrap(),
+            serde_json::json!({
+                "id": "msg-1",
+                "thread_id": "thread-1",
+                "snippet": "hello",
+                "payload": {
+                    "headers": [
+                        {"name": "From", "value": "sender@example.com"},
+                        {"name": "Subject", "value": "Stub message"}
+                    ]
+                }
+            })
+            .to_string(),
+        );
+        write_fixture(
+            &crate::skills::google::fixture_path_for_request(&base_url, "GET", &download_url)
+                .unwrap()
+                .unwrap(),
+            b"drive-bytes",
+        );
+        write_fixture(
+            &crate::skills::google::fixture_path_for_request(&base_url, "POST", &event_url)
+                .unwrap()
+                .unwrap(),
+            serde_json::json!({
+                "id": "event-1",
+                "summary": "Stub event",
+                "description": "calendar body",
+                "start": { "dateTime": "2026-03-19T15:00:00Z" },
+                "end": { "dateTime": "2026-03-19T16:00:00Z" }
+            })
+            .to_string(),
+        );
 
         let runtime = ToolRuntime::from_config(
             &AgentConfig {
@@ -2750,8 +2716,6 @@ for line in sys.stdin:
             &runtime,
         )
         .await;
-
-        server.await.unwrap();
         std::fs::remove_dir_all(&root).unwrap();
 
         assert!(message.success);
@@ -3093,15 +3057,15 @@ for line in sys.stdin:
 
         // First retry should be around initial_delay
         let delay1 = policy.calculate_delay(1);
-        assert!(delay1 >= 900 && delay1 <= 1100); // 1000ms with 10% jitter
+        assert!((900..=1100).contains(&delay1)); // 1000ms with 10% jitter
 
         // Second retry should be around 2x initial_delay
         let delay2 = policy.calculate_delay(2);
-        assert!(delay2 >= 1800 && delay2 <= 2200); // 2000ms with 10% jitter
+        assert!((1800..=2200).contains(&delay2)); // 2000ms with 10% jitter
 
         // Third retry should be around 4x initial_delay
         let delay3 = policy.calculate_delay(3);
-        assert!(delay3 >= 3600 && delay3 <= 4400); // 4000ms with 10% jitter
+        assert!((3600..=4400).contains(&delay3)); // 4000ms with 10% jitter
     }
 
     #[test]

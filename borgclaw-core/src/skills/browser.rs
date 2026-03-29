@@ -9,18 +9,13 @@ use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, RwLock};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum BrowserType {
+    #[default]
     Chromium,
     Firefox,
     Webkit,
-}
-
-impl Default for BrowserType {
-    fn default() -> Self {
-        Self::Chromium
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

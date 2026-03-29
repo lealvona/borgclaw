@@ -568,7 +568,7 @@ mod tests {
 
         // Add many messages to exceed threshold
         for i in 0..50 {
-            session.add_message(Message::user(&format!(
+            session.add_message(Message::user(format!(
                 "Message {} with lots of words to increase token count",
                 i
             )));
