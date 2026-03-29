@@ -10,7 +10,8 @@
 - Completed: tranche 3a `TICKET-086-memory-tool-module`
 - Completed: tranche 3b `TICKET-086-tools-core-modules`
 - Completed: tranche 4a `TICKET-086-tools-service-runtime-modules`
-- In progress: tranche 4b `TICKET-086-tools-github-google-modules`
+- Completed: tranche 4b `TICKET-086-tools-github-google-modules`
+- Ready to land: tranche 4c `TICKET-086-tools-browser-media-modules`
 
 ## Small-Step Execution Plan
 
@@ -48,17 +49,17 @@
 - [x] Extract `google.rs`
 - [x] Run `cargo check`
 - [x] Run focused GitHub and Google tool tests
-- [ ] Commit tranche 4b
-- [ ] Push tranche 4b branch
-- [ ] Open tranche 4b PR
-- [ ] Merge tranche 4b PR
+- [x] Commit tranche 4b
+- [x] Push tranche 4b branch
+- [x] Open tranche 4b PR
+- [x] Merge tranche 4b PR
 
 ### Tranche 4c: Browser and Media Modules
 
-- [ ] Extract `browser.rs`
-- [ ] Extract `media.rs`
-- [ ] Run `cargo check`
-- [ ] Run `cargo test -p borgclaw-core`
+- [x] Extract `browser.rs`
+- [x] Extract `media.rs`
+- [x] Run `cargo check`
+- [x] Run focused browser and media tool tests
 - [ ] Commit tranche 4c
 - [ ] Push tranche 4c branch
 - [ ] Open tranche 4c PR
