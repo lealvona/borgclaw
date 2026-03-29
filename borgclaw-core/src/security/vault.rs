@@ -641,17 +641,14 @@ mod tests {
     fn bitwarden_client_new_stores_config() {
         let config = BitwardenConfig::default();
         let client = BitwardenClient::new(config);
-        // Client was created successfully
-        // Actual operations require CLI which isn't available in tests
-        assert!(true);
+        assert!(client.config.server_url.is_none());
     }
 
     #[test]
     fn onepassword_client_new_stores_config() {
         let config = OnePasswordConfig::default();
         let client = OnePasswordClient::new(config);
-        // Client was created successfully
-        assert!(true);
+        assert_eq!(client.config.account, None);
     }
 
     #[test]

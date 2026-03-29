@@ -181,8 +181,7 @@ mod tests {
     #[test]
     fn wasm_sandbox_new() {
         let sandbox = WasmSandbox::new(10);
-        // Sandbox created successfully with max 10 instances
-        assert!(true);
+        assert_eq!(sandbox.instance_semaphore.available_permits(), 10);
     }
 
     #[tokio::test]
@@ -284,15 +283,13 @@ mod tests {
     fn wasm_sandbox_with_zero_instances() {
         // Edge case: semaphore with 0 permits
         let sandbox = WasmSandbox::new(0);
-        // Should still create but all acquires will block forever
-        assert!(true);
+        assert_eq!(sandbox.instance_semaphore.available_permits(), 0);
     }
 
     #[test]
     fn wasm_sandbox_with_large_instance_count() {
         let sandbox = WasmSandbox::new(10000);
-        // Should handle large counts
-        assert!(true);
+        assert_eq!(sandbox.instance_semaphore.available_permits(), 10000);
     }
 
     #[tokio::test]

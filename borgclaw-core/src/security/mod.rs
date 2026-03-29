@@ -1055,7 +1055,6 @@ mod tests {
     #[test]
     fn ssrf_blocks_ipv6_loopback() {
         // IPv6 loopback is blocked via is_ip_private when parsed as IpAddr
-        let guard = SsrfGuard::new();
         assert!(SsrfGuard::is_ip_private(&"::1".parse().unwrap()));
     }
 

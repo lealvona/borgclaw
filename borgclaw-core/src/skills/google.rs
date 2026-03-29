@@ -1629,7 +1629,6 @@ mod tests {
     #[test]
     fn move_file_metadata_construction() {
         // Test the JSON structure used in move_file
-        let file_id = "file123";
         let new_parent = "folder456";
         let body = serde_json::json!({
             "addParents": [new_parent],
@@ -1654,7 +1653,6 @@ mod tests {
     fn delete_file_permanent_vs_trash() {
         // Test that permanent delete uses DELETE method
         // and trash uses update to trashed=true
-        let file_id = "file123";
         let permanent = true;
 
         // Permanent delete uses DELETE endpoint
