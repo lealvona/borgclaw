@@ -118,7 +118,7 @@ All three providers are now first-class citizens alongside OpenAI, Anthropic, Go
 - `borgclaw heartbeat show <id>` - Display task details
 - `borgclaw heartbeat enable <id>` - Enable disabled tasks
 - `borgclaw heartbeat disable <id>` - Disable tasks
-- `borgclaw heartbeat trigger <id>` - Manual task trigger
+- `borgclaw heartbeat trigger <id>` - CLI trigger surface added, but full runtime dispatch remains follow-up work
 
 **Gateway Control Plane (PR #192)**
 - `/api/metrics` endpoint with connection stats, message counts, auth metrics
@@ -358,7 +358,7 @@ All three providers are now first-class citizens alongside OpenAI, Anthropic, Go
 - heartbeat list - Show all persisted heartbeat tasks
 - heartbeat show <id> - Display task details
 - heartbeat enable/disable <id> - Toggle task state
-- heartbeat trigger <id> - Manual task trigger (placeholder)
+- heartbeat trigger <id> - CLI placeholder for manual task trigger; full runtime dispatch remains follow-up work
 
 **Sub-Agent Operator Commands**
 - subagent list - Show all persisted sub-agent tasks

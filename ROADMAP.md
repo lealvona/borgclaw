@@ -4,13 +4,13 @@
 
 Implement the remaining documented BorgClaw feature set in a security-first sequence. The goal is to make the runtime match the README and `docs/` contract without breaking the existing config and crate layout.
 
-Status note as of March 19, 2026:
-- Phase 1 is largely complete.
-- Phase 2 is largely complete.
-- Phase 3 is largely complete. Memory, session compaction, scheduler execution, scheduler persistence, sub-agent persistence, heartbeat persistence, retry/dead-letter behavior, and background-context inheritance are landed; explicit workspace/security policy depth still remains.
-- Phase 4 is partially complete, with substantial shared tool/runtime coverage across documented skill families, but broader operational completeness still remains.
-- Phase 5 is partially complete, with security enforcement substantially improved but security-pipeline unification and operator UX still behind the documented end state.
-- Recent upstream follow-up tightened the remaining priorities further: restart-safe background behavior, operator-visible recovery/schedule management, MCP/runtime correctness polish, transport-specific security hardening, and backup/recovery workflows are now the clearest remaining deltas versus the inspiration set.
+Status note as of March 29, 2026:
+- Phase 1 is complete.
+- Phase 2 is complete.
+- Phase 3 is mostly complete. The main audited remaining gap is a real manual heartbeat trigger path.
+- Phase 4 is mostly complete. The main audited remaining gaps are remote archive skill installs and asset-complete remote skill installs.
+- Phase 5 is mostly complete. The main audited remaining gap is repo-wide lint/doc hardening rather than missing core product-contract features.
+- See `docs/IMPLEMENTATION_AUDIT_2026-03-29.md` for the evidence-backed issue list and concrete fix steps.
 
 ## Phase 1: Core Runtime
 
@@ -52,8 +52,7 @@ Recent landed work in this phase:
 - Background scheduled and sub-agent tool selection now reject approval-gated tools when interactive approval is unavailable.
 - Tool execution now carries conversation context so memory tools respect `group_id`, and scheduled tool jobs inherit originating sender/session metadata.
 - CLI `status`/`doctor` now surface persisted scheduler, heartbeat, and sub-agent recovery state from the workspace, including task counts and dead-letter counts when state files exist.
-- The next remaining gaps in this phase are deeper restart-safe catch-up/recovery behavior across more transports, clearer operator visibility into recovered background state over time, and more explicit schedule-management surfaces.
-- CLI now provides read-only `schedules list` and `schedules show <job-id>` views over persisted scheduler state, narrowing the operator visibility gap without yet adding schedule mutation UX.
+- The next remaining gap in this phase is implementing a real manual heartbeat trigger path instead of the current CLI placeholder.
 - Signal polling now rejects duplicate receiver starts, performs a health check before entering the receive loop, and tracks/aborts the background poll task on shutdown.
 - Telegram polling now rejects duplicate receiver starts and tracks/aborts the background receive task on shutdown.
 
@@ -70,7 +69,7 @@ Recent landed work in this phase:
 - Shared runtime Google happy-path coverage now exercises configured Gmail, Drive, and Calendar endpoints against a local stub, instead of relying only on client-level tests.
 - Shared runtime browser happy-path coverage now exercises a configured local bridge for `browser_get_url` and `browser_eval_js`, instead of relying only on browser-client unit tests.
 - Shared runtime coverage now includes local happy-path tests for QR URL encoding and URL shortening via a configured YOURLS-compatible provider.
-- The next remaining gaps in this phase are broader happy-path coverage for the documented skill families, transport/control-plane introspection surfaces, and more operational completeness around managed skill lifecycle.
+- The next remaining gaps in this phase are remote archive installs by URL and support for asset-complete remote skill installs instead of manifest-only fetches.
 
 ## Phase 5: Hardening and UX
 
@@ -94,6 +93,6 @@ Recent landed work in this phase:
 - The shared router now rejects explicitly disabled channels instead of treating `enabled = false` as informational only, tightening routing correctness against the documented channel contract.
 - The gateway now also rejects WebSocket upgrades when the channel is explicitly disabled, aligning transport entry with the same channel-enable contract.
 - Webhook rate limiting now returns `Retry-After` metadata on `429` responses, improving transport-facing retry semantics instead of leaving operators to guess the backoff window.
-- The next remaining gaps in this phase are backup/recovery workflows, deeper end-to-end security coverage across deferred/background execution paths, stronger routing/ownership correctness coverage, and operator-facing health/self-test surfaces.
-- CLI now provides a first concrete backup workflow via `backup export`, snapshotting persisted scheduler, heartbeat, and sub-agent state for operator recovery and later restore work.
+- The next remaining gaps in this phase are repo-wide lint hardening, deeper end-to-end security coverage across deferred/background execution paths, and continued docs-as-contract maintenance.
+- CLI now provides backup export, import, and verify workflows over persisted scheduler, heartbeat, and sub-agent state.
 - `self-test` now treats persisted dead-lettered scheduler, heartbeat, and sub-agent state as explicit operator-facing failures instead of leaving them only to manual inspection.
