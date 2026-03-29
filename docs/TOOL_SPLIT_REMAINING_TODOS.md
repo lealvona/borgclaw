@@ -8,7 +8,8 @@
 - Completed: tranche 1 `TICKET-087-semver-and-tool-split-plan`
 - Completed: tranche 2 `TICKET-086-tools-types-extraction`
 - Completed: tranche 3a `TICKET-086-memory-tool-module`
-- In progress: tranche 3b `TICKET-086-tools-core-modules`
+- Completed: tranche 3b `TICKET-086-tools-core-modules`
+- In progress: tranche 4a `TICKET-086-tools-service-runtime-modules`
 
 ## Small-Step Execution Plan
 
@@ -22,26 +23,36 @@
 - [x] Keep shared approval, path, and truncation helpers centralized in `mod.rs`
 - [x] Run focused `cargo test -p borgclaw-core builtin_tools`
 - [x] Run focused command and scheduler tests that cover moved behavior
-- [ ] Commit tranche 3b
-- [ ] Push tranche 3b branch
-- [ ] Open tranche 3b PR
-- [ ] Merge tranche 3b PR
+- [x] Commit tranche 3b
+- [x] Push tranche 3b branch
+- [x] Open tranche 3b PR
+- [x] Merge tranche 3b PR
 
-### Tranche 4: Service Tool Modules
+### Tranche 4a: Service Runtime Modules
+
+- [x] Extract `plugin.rs`
+- [x] Extract `mcp.rs`
+- [x] Extract `schedule.rs`
+- [x] Centralize `builtin_tools()` around per-module `register()` calls for these services
+- [x] Run `cargo check`
+- [x] Run focused tool tests in a non-sandboxed environment
+- [ ] Commit tranche 4a
+- [ ] Push tranche 4a branch
+- [ ] Open tranche 4a PR
+- [ ] Merge tranche 4a PR
+
+### Tranche 4b: Remaining Service Tool Modules
 
 - [ ] Extract `github.rs`
 - [ ] Extract `google.rs`
 - [ ] Extract `browser.rs`
 - [ ] Extract `media.rs`
-- [ ] Extract `plugin.rs`
-- [ ] Extract `schedule.rs`
-- [ ] Centralize `builtin_tools()` around per-module `register()` calls
 - [ ] Run `cargo check`
 - [ ] Run `cargo test -p borgclaw-core`
-- [ ] Commit tranche 4
-- [ ] Push tranche 4 branch
-- [ ] Open tranche 4 PR
-- [ ] Merge tranche 4 PR
+- [ ] Commit tranche 4b
+- [ ] Push tranche 4b branch
+- [ ] Open tranche 4b PR
+- [ ] Merge tranche 4b PR
 
 ### Tranche 5: Cleanup and Docs
 
