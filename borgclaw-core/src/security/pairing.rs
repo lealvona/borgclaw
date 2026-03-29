@@ -373,7 +373,7 @@ mod tests {
 
         // Generate multiple codes for same sender
         let code1 = manager.generate_code("same-sender").unwrap();
-        let code2 = manager.generate_code("same-sender").unwrap();
+        let _code2 = manager.generate_code("same-sender").unwrap();
 
         // Both codes should work
         assert!(manager.approve_code(&code1).is_ok());

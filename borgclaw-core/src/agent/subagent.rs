@@ -1476,7 +1476,6 @@ mod tests {
 
     #[test]
     fn workspace_policy_allows_tools_when_not_strict() {
-        let task = SubAgentBuilder::new("relaxed").build("hello");
         let relaxed_policy = crate::config::WorkspacePolicyConfig {
             workspace_only: false,
             allowed_roots: vec![],

@@ -331,9 +331,7 @@ mod tests {
     #[test]
     fn http_embedding_provider_new() {
         let provider = HttpEmbeddingProvider::new("https://api.example.com/embed");
-        // Provider created successfully
-        // Actual embedding requires HTTP call which isn't available in tests
-        assert!(true);
+        assert_eq!(provider.endpoint, "https://api.example.com/embed");
     }
 
     #[tokio::test]
