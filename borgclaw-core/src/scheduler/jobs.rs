@@ -6,19 +6,14 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 /// Policy for handling missed scheduled runs (e.g., after process restart)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CatchUpPolicy {
     /// Skip all missed windows, advance to next future run (default)
+    #[default]
     Skip,
     /// Coalesce: run once on recovery regardless of how many were missed
     RunOnce,
-}
-
-impl Default for CatchUpPolicy {
-    fn default() -> Self {
-        Self::Skip
-    }
 }
 
 /// Job definition
@@ -112,10 +107,11 @@ impl JobTrigger {
 }
 
 /// Job status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum JobStatus {
     /// Job is pending
+    #[default]
     Pending,
     /// Job is running
     Running,
@@ -127,12 +123,6 @@ pub enum JobStatus {
     Cancelled,
     /// Job is disabled
     Disabled,
-}
-
-impl Default for JobStatus {
-    fn default() -> Self {
-        Self::Pending
-    }
 }
 
 impl std::fmt::Display for JobStatus {

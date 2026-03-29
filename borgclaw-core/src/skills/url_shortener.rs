@@ -189,6 +189,25 @@ impl UrlShortener {
             ));
         }
 
+        if let Some(body) = read_file_url(&config.api_url)? {
+            #[derive(Deserialize)]
+            struct YourlsResponse {
+                shorturl: Option<String>,
+                error: Option<String>,
+            }
+
+            let result: YourlsResponse =
+                serde_json::from_str(&body).map_err(|e| UrlError::ParseFailed(e.to_string()))?;
+
+            return if let Some(shorturl) = result.shorturl {
+                Ok(shorturl)
+            } else {
+                Err(UrlError::ShortenFailed(
+                    result.error.unwrap_or_else(|| "Unknown error".to_string()),
+                ))
+            };
+        }
+
         let response = self
             .http
             .post(&config.api_url)
@@ -325,6 +344,27 @@ impl UrlShortener {
             "Custom provider does not support expansion".to_string(),
         ))
     }
+}
+
+fn read_file_url(url: &str) -> Result<Option<String>, UrlError> {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return Ok(None);
+    };
+    if parsed.scheme() != "file" {
+        return Ok(None);
+    }
+
+    let path = parsed
+        .to_file_path()
+        .map_err(|_| UrlError::ConfigError(format!("Invalid file URL: {url}")))?;
+    let body = std::fs::read_to_string(&path).map_err(|e| {
+        UrlError::RequestFailed(format!(
+            "Failed to read fixture '{}': {}",
+            path.display(),
+            e
+        ))
+    })?;
+    Ok(Some(body))
 }
 
 #[derive(Debug, thiserror::Error)]

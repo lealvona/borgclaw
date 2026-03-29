@@ -418,6 +418,56 @@ impl GmailClient {
             self.auth.config.gmail_base_url.trim_end_matches('/'),
             id
         );
+        if let Some(bytes) = read_fixture_response(&self.auth.config.gmail_base_url, "GET", &url)? {
+            #[derive(Deserialize)]
+            struct MsgResponse {
+                id: String,
+                thread_id: String,
+                payload: Option<Payload>,
+                snippet: Option<String>,
+            }
+
+            #[derive(Deserialize)]
+            struct Payload {
+                headers: Vec<Header>,
+            }
+
+            #[derive(Deserialize)]
+            struct Header {
+                name: String,
+                value: String,
+            }
+
+            let msg: MsgResponse = serde_json::from_slice(&bytes)
+                .map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
+
+            let mut subject = None;
+            let mut from = None;
+            let mut to = None;
+            let mut date = None;
+
+            if let Some(payload) = msg.payload {
+                for header in payload.headers {
+                    match header.name.as_str() {
+                        "Subject" => subject = Some(header.value),
+                        "From" => from = Some(header.value),
+                        "To" => to = Some(header.value),
+                        "Date" => date = Some(header.value),
+                        _ => {}
+                    }
+                }
+            }
+
+            return Ok(GmailMessage {
+                id: msg.id,
+                thread_id: msg.thread_id,
+                subject,
+                from,
+                to,
+                date,
+                snippet: msg.snippet,
+            });
+        }
 
         let response = self
             .auth
@@ -654,6 +704,9 @@ impl DriveClient {
             self.auth.config.drive_base_url.trim_end_matches('/'),
             id
         );
+        if let Some(bytes) = read_fixture_response(&self.auth.config.drive_base_url, "GET", &url)? {
+            return Ok(bytes);
+        }
 
         let response = self
             .auth
@@ -1195,6 +1248,13 @@ impl CalendarClient {
             "start": { "dateTime": event.start.to_rfc3339() },
             "end": { "dateTime": event.end.to_rfc3339() }
         });
+        if let Some(bytes) =
+            read_fixture_response(&self.auth.config.calendar_base_url, "POST", &url)?
+        {
+            let event: ApiCalendarEvent = serde_json::from_slice(&bytes)
+                .map_err(|e| GoogleError::ParseFailed(e.to_string()))?;
+            return CalendarEvent::try_from(event);
+        }
 
         let response = self
             .auth
@@ -1333,6 +1393,63 @@ fn parse_google_event_time(value: Option<ApiEventDateTime>) -> Result<DateTime<U
     }
 
     Err(GoogleError::ParseFailed("missing event time".to_string()))
+}
+
+pub(crate) fn fixture_path_for_request(
+    base_url: &str,
+    method: &str,
+    request_url: &str,
+) -> Result<Option<PathBuf>, GoogleError> {
+    let Ok(base) = url::Url::parse(base_url) else {
+        return Ok(None);
+    };
+    if base.scheme() != "file" {
+        return Ok(None);
+    }
+
+    let root = base.to_file_path().map_err(|_| {
+        GoogleError::ParseFailed(format!("Invalid file fixture base URL: {base_url}"))
+    })?;
+    let request = url::Url::parse(request_url)
+        .map_err(|e| GoogleError::ParseFailed(format!("Invalid fixture request URL: {e}")))?;
+    let request_path = request.to_file_path().map_err(|_| {
+        GoogleError::ParseFailed(format!("Invalid file fixture request URL: {request_url}"))
+    })?;
+    let relative = request_path
+        .strip_prefix(&root)
+        .unwrap_or(request_path.as_path());
+    let mut key = format!("{method} {}", relative.to_string_lossy());
+    if let Some(query) = request.query() {
+        key.push('?');
+        key.push_str(query);
+    }
+    let sanitized = key
+        .chars()
+        .map(|ch| match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '-' | '_' => ch,
+            _ => '_',
+        })
+        .collect::<String>();
+
+    Ok(Some(root.join(".borgclaw-fixtures").join(sanitized)))
+}
+
+fn read_fixture_response(
+    base_url: &str,
+    method: &str,
+    request_url: &str,
+) -> Result<Option<Vec<u8>>, GoogleError> {
+    let Some(path) = fixture_path_for_request(base_url, method, request_url)? else {
+        return Ok(None);
+    };
+    let bytes = std::fs::read(&path).map_err(|e| {
+        GoogleError::ParseFailed(format!(
+            "Failed to read fixture '{}': {}",
+            path.display(),
+            e
+        ))
+    })?;
+    Ok(Some(bytes))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1483,14 +1600,14 @@ mod tests {
     #[test]
     fn batch_operations_handle_single_item() {
         // Test batch with single item
-        let files = vec![(
+        let files = [(
             "file1.txt".to_string(),
             b"content".to_vec(),
             "text/plain".to_string(),
         )];
         assert_eq!(files.len(), 1);
 
-        let shares = vec![(
+        let shares = [(
             "file123".to_string(),
             "user@example.com".to_string(),
             "reader".to_string(),
@@ -1501,7 +1618,7 @@ mod tests {
     #[test]
     fn batch_operations_handle_multiple_items() {
         // Test batch with multiple items
-        let files = vec![
+        let files = [
             (
                 "file1.txt".to_string(),
                 b"content1".to_vec(),
@@ -1520,7 +1637,7 @@ mod tests {
         ];
         assert_eq!(files.len(), 3);
 
-        let shares = vec![
+        let shares = [
             (
                 "file1".to_string(),
                 "user1@example.com".to_string(),

@@ -20,6 +20,31 @@ That means:
 - prerelease versions such as `0.14.0-beta.1` are treated as lower than `0.14.0`
 - invalid version strings fail closed and the skill is treated as incompatible
 
+## Manifest Companion Files
+
+Direct `SKILL.md` installs can declare companion files explicitly with a `files:` list. Each entry must be a relative path. During install, BorgClaw resolves each path relative to the manifest URL and installs the fetched files alongside `SKILL.md`.
+
+If `files:` is omitted, BorgClaw also looks for an adjacent `SKILL.files.json` sidecar file. The sidecar may be either a JSON array of relative paths or an object with a `files` array.
+
+If neither contract is present, BorgClaw falls back to manifest-directory discovery:
+- `file://` installs recursively include sibling files from the local manifest directory
+- HTTP(S) installs can recurse standard directory listings when the host exposes browsable indexes
+
+```yaml
+name: release-auditor
+version: 1.2.0
+description: Audits release artifacts
+files:
+  - prompts/system.txt
+  - assets/checklist.md
+```
+
+This keeps direct manifest installs portable while still allowing a best-effort fallback on hosts that expose directory listings.
+
+```json
+["prompts/system.txt", "assets/checklist.md"]
+```
+
 ## Available Skills
 
 | Skill | Description | Backend |
@@ -621,7 +646,7 @@ borgclaw skills install https://example.com/skills/weather-1.0.0.tar.gz
 
 Current install limitations:
 - local installs must point to a skill directory containing `SKILL.md`
-- arbitrary non-GitHub direct `SKILL.md` URLs remain manifest-only
+- direct `SKILL.md` installs only fetch companion assets that are declared explicitly in manifest `files:`
 
 **Registry Format:**
 

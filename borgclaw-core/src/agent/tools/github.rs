@@ -2,6 +2,7 @@ use super::{
     get_required_string, get_u64, github_client, number_property, string_property, truncate_output,
     Tool, ToolResult, ToolRuntime, ToolSchema,
 };
+use crate::skills::github::UpdateFileRequest;
 use std::collections::HashMap;
 
 pub fn register(tools: &mut Vec<Tool>) {
@@ -842,10 +843,17 @@ pub async fn github_update_file(
         .and_then(|value| value.as_str())
         .unwrap_or("main");
 
-    match client
-        .update_file(&owner, &repo, &path, &content, &message, &sha, branch)
-        .await
-    {
+    let request = UpdateFileRequest {
+        owner: owner.clone(),
+        repo: repo.clone(),
+        path: path.clone(),
+        content,
+        message,
+        sha,
+        branch: branch.to_string(),
+    };
+
+    match client.update_file(&request).await {
         Ok(()) => ToolResult::ok(format!("updated {}", path))
             .with_metadata("owner", owner)
             .with_metadata("repo", repo)

@@ -322,11 +322,8 @@ mod tests {
 
         let result = manager.approve_code(&code);
         assert!(result.is_err());
-        match result {
-            Err(super::super::SecurityError::PairingError(msg)) => {
-                assert!(msg.contains("expired") || msg.contains("Invalid code"));
-            }
-            _ => {}
+        if let Err(super::super::SecurityError::PairingError(msg)) = result {
+            assert!(msg.contains("expired") || msg.contains("Invalid code"));
         }
     }
 

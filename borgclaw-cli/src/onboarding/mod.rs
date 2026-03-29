@@ -5,7 +5,7 @@ use crate::onboarding::colors::{
     banner, paint, HEADER, INFO, MANDATORY, OPTIONAL, PROMPT, SUCCESS, WARN,
 };
 use crate::onboarding::providers::{ProviderDef, ProviderRegistry};
-use borgclaw_core::config::{AppConfig, ChannelConfig, DmPolicy};
+use borgclaw_core::config::{AppConfig, DmPolicy};
 use borgclaw_core::security::SecurityLayer;
 use clap::Args;
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Password, Select};
@@ -166,7 +166,7 @@ fn print_provider_info(provider_id: &str) {
 }
 
 pub async fn run_init(
-    config_path: &PathBuf,
+    config_path: &Path,
     mut config: AppConfig,
     args: &InitArgs,
 ) -> Result<InitOutcome, String> {
@@ -560,10 +560,7 @@ async fn configure_channels(
     );
     println!();
     if quick {
-        let ws = config
-            .channels
-            .entry("websocket".to_string())
-            .or_insert_with(ChannelConfig::default);
+        let ws = config.channels.entry("websocket".to_string()).or_default();
         ws.enabled = true;
         ws.extra
             .insert("port".to_string(), toml::Value::Integer(18789));
@@ -578,10 +575,7 @@ async fn configure_channels(
             .interact()
             .map_err(|e| e.to_string())?;
         let id = channel.to_lowercase();
-        let entry = config
-            .channels
-            .entry(id.clone())
-            .or_insert_with(ChannelConfig::default);
+        let entry = config.channels.entry(id.clone()).or_default();
         entry.enabled = enable;
         if !enable {
             continue;
@@ -763,7 +757,7 @@ fn configure_security(
             "{}",
             paint(
                 WARN,
-                &format!(
+                format!(
                     "Encryption key: {}\n  Back up this file — without it, stored secrets cannot be recovered.",
                     key_path.display()
                 ),
@@ -1448,10 +1442,7 @@ fn apply_component_action(
 
             match (title.as_str(), chapter.as_str()) {
                 ("channel", _) => {
-                    let entry = config
-                        .channels
-                        .entry(chapter.clone())
-                        .or_insert_with(ChannelConfig::default);
+                    let entry = config.channels.entry(chapter.clone()).or_default();
                     entry.enabled = true;
                 }
                 ("sandbox", "wasm") => {
@@ -1516,7 +1507,7 @@ async fn reconfigure_section(
     );
     println!();
 
-    let sections = vec![
+    let sections = [
         (
             "Provider & Model",
             "AI brain configuration (OpenAI, Anthropic, local models)",
@@ -1697,14 +1688,13 @@ async fn generate_env_file(
         }
     }
 
-    let mut lines = Vec::new();
-    lines.push("# BorgClaw Environment (generated)".to_string());
-    lines.push(
+    let mut lines = vec![
+        "# BorgClaw Environment (generated)".to_string(),
         "# Non-sensitive configuration only - secrets are stored in encrypted store".to_string(),
-    );
-    lines.push("# Run: borgclaw secrets list  # to see stored secrets".to_string());
-    lines.push("".to_string());
-    lines.push("# Provider Configuration".to_string());
+        "# Run: borgclaw secrets list  # to see stored secrets".to_string(),
+        "".to_string(),
+        "# Provider Configuration".to_string(),
+    ];
 
     for (k, v) in &env {
         lines.push(format!("{}={}", k, v));
@@ -1758,6 +1748,7 @@ async fn store_provider_secret(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
 
@@ -1804,8 +1795,10 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(&root).unwrap();
-        let mut security = borgclaw_core::config::SecurityConfig::default();
-        security.secrets_path = root.join("secrets.enc");
+        let security = borgclaw_core::config::SecurityConfig {
+            secrets_path: root.join("secrets.enc"),
+            ..Default::default()
+        };
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime
@@ -2036,9 +2029,10 @@ mod tests {
     fn deleting_channel_component_removes_channel_config() {
         let mut config = AppConfig::default();
         let registry = ProviderRegistry::default_registry();
-        config
-            .channels
-            .insert("telegram".to_string(), ChannelConfig::default());
+        config.channels.insert(
+            "telegram".to_string(),
+            borgclaw_core::config::ChannelConfig::default(),
+        );
         config
             .registrar
             .chapters

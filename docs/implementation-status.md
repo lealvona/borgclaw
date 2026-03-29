@@ -26,7 +26,7 @@ Audit note:
 | Sub-agent coordinator | `complete` | Spawn/status/result flow, concurrency limits, cancellation precedence, memory policy enforcement, parent-context inheritance, persisted task snapshots, retry/dead-letter behavior, workspace policy enforcement, and audit logging are all landed. |
 | Security config contract | `complete` | Documented TOML shape parses and core enforcement exists. |
 | Secret storage + vault | `complete` | Encrypted secrets, vault clients (Bitwarden, 1Password), CLI commands (list, set, delete, check), and onboarding/auth UX are complete. |
-| Skill registry lifecycle | `partial` | Local directory install, local `.tar.gz` install, GitHub-backed listing, archive-backed GitHub repo/registry installs, remote archive install-by-URL, packaging, publishing, inspection, and version compatibility are implemented. Arbitrary non-GitHub direct `SKILL.md` URLs remain manifest-only because there is no portable asset discovery contract. |
+| Skill registry lifecycle | `complete` | Local directory install, local `.tar.gz` install, GitHub-backed listing, archive-backed GitHub repo/registry installs, remote archive install-by-URL, packaging, publishing, inspection, version compatibility, and direct manifest installs with explicit `files:` support, adjacent `SKILL.files.json` sidecar discovery, or manifest-directory discovery are implemented. |
 | MCP client | `complete` | Documented transports (Stdio, SSE, WebSocket) and client API are aligned. |
 | GitHub skill client | `complete` | Core client surface, shared tool/runtime coverage, local shared-runtime happy-path coverage, and operational completeness are landed. |
 | Google skill client | `complete` | Gmail/Drive/Calendar facade, shared runtime coverage, local shared-runtime happy-path coverage, and operational completeness are landed. |
@@ -84,7 +84,7 @@ Audit note:
 - ✅ Local packaged skill install via `borgclaw skills install ./skill.tar.gz`
 - ✅ Remote archive install-by-URL
 - ✅ GitHub-backed remote installs now extract companion files instead of persisting only `SKILL.md`
-- ⚠️ Arbitrary non-GitHub direct `SKILL.md` URLs still install manifest-only
+- ✅ Direct `SKILL.md` installs can fetch companion files via manifest `files:`, adjacent `SKILL.files.json`, or manifest-directory discovery when listings are available
 - ✅ GitHub runtime happy-path coverage
 - ✅ Google runtime happy-path coverage (Gmail, Drive, Calendar)
 - ✅ Browser runtime happy-path coverage (Playwright/CDP)
@@ -101,9 +101,6 @@ Audit note:
 - ✅ Hybrid search with HTTP embedding provider
 
 ## Temporary Limitations
-
-- Arbitrary non-GitHub direct `SKILL.md` URLs still install manifest-only.
-- Repo-wide `clippy -D warnings` cleanup remains separate follow-up work.
 
 ## Historical Note
 

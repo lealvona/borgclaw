@@ -117,7 +117,7 @@ Current runtime support:
 Current limitations within that support:
 - Registry listing currently supports GitHub-hosted registries only
 - Remote URL installs must point directly to `SKILL.md`
-- Arbitrary non-GitHub direct `SKILL.md` URLs remain manifest-only because the URL alone does not define a portable asset-discovery contract
+- Arbitrary non-GitHub direct `SKILL.md` URLs can fetch companion files when the manifest declares relative `files:` entries, provides an adjacent `SKILL.files.json`, or the source exposes a browsable directory listing
 
 ```bash
 # From local path
@@ -142,7 +142,7 @@ Packaging and publishing are implemented in the current CLI.
 
 Current limitation:
 
-- Arbitrary non-GitHub direct `SKILL.md` URLs remain manifest-only; archive-backed installs are available for GitHub-backed sources and `.tar.gz` URLs.
+- Arbitrary non-GitHub direct `SKILL.md` URLs fetch companion assets from manifest `files:`, an adjacent `SKILL.files.json`, or manifest-directory discovery when listings are available; archive-backed installs remain available for GitHub-backed sources and `.tar.gz` URLs.
 
 ```bash
 # Package
@@ -479,7 +479,7 @@ borgclaw skills install ./my-skill
 ```
 
 Current installation limitation:
-- arbitrary non-GitHub direct `SKILL.md` URLs remain manifest-only
+- arbitrary non-GitHub direct `SKILL.md` URLs fetch companion assets from manifest `files:`, adjacent `SKILL.files.json`, or manifest-directory discovery when listings are available
 
 ### Registry Implementation Example
 

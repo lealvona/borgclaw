@@ -783,8 +783,10 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(&root).unwrap();
-        let mut security = SecurityConfig::default();
-        security.secrets_path = root.join("secrets.enc");
+        let security = SecurityConfig {
+            secrets_path: root.join("secrets.enc"),
+            ..Default::default()
+        };
         SecurityLayer::with_config(security.clone())
             .store_secret("OPENAI_API_KEY", "from-store")
             .await
