@@ -128,29 +128,32 @@ Current limitations within that support:
 
 Planned but not yet implemented:
 - Remote archive installs by URL
-- Publishing/package workflow
 
 ```bash
 # From local path
-borgclaw skill install ./my-skill
+borgclaw skills install ./my-skill
 
 # From ClawHub-style GitHub repo path
-borgclaw skill install openclaw/weather
+borgclaw skills install openclaw/weather
 
 # From direct SKILL.md URL
-borgclaw skill install https://example.com/skills/weather/SKILL.md
+borgclaw skills install https://example.com/skills/weather/SKILL.md
 ```
 
 ### Publishing Skills
 
-Planned workflow only; packaging and publishing are not implemented in the current CLI.
+Packaging and publishing are implemented in the current CLI.
+
+Current limitation:
+
+- Remote archive installs by URL are still pending; remote installs currently use local directories, GitHub `owner/repo`, or direct `SKILL.md` URLs.
 
 ```bash
 # Package
-# borgclaw skill package ./my-skill
+borgclaw skills package ./my-skill
 
 # Publish to ClawHub
-# borgclaw skill publish ./my-skill.tar.gz
+borgclaw skills publish ./my-skill.tar.gz
 ```
 
 ## Custom Integrations
@@ -391,10 +394,10 @@ file = ".local/logs/borgclaw.log"
 
 ### Overview
 
-BorgClaw provides a complete skill packaging and publishing system that allows you to:
+BorgClaw provides a skill packaging and publishing system that allows you to:
 - Package skills into distributable archives
 - Publish skills to public or private registries
-- Install skills from various sources (registry, GitHub, URL, local file)
+- Install skills from local directories, GitHub `owner/repo`, direct `SKILL.md` URLs, and packaged archives already present on disk
 
 ### Packaging
 
@@ -405,10 +408,10 @@ Skills are packaged as `.tar.gz` archives containing:
 
 ```bash
 # Package a skill directory
-borgclaw skill package ./my-skill
+borgclaw skills package ./my-skill
 
 # Package with specific output
-borgclaw skill package ./my-skill --output my-skill-1.0.0.tar.gz
+borgclaw skills package ./my-skill --output my-skill-1.0.0.tar.gz
 ```
 
 ### Publishing
@@ -417,13 +420,13 @@ Skills can be published to a registry for others to install:
 
 ```bash
 # Publish to default registry
-borgclaw skill publish ./my-skill-1.0.0.tar.gz
+borgclaw skills publish ./my-skill-1.0.0.tar.gz
 
 # Publish to specific registry
-borgclaw skill publish ./my-skill-1.0.0.tar.gz --registry https://registry.example.com
+borgclaw skills publish ./my-skill-1.0.0.tar.gz --registry https://registry.example.com
 
 # Force publish without confirmation
-borgclaw skill publish ./my-skill-1.0.0.tar.gz --force
+borgclaw skills publish ./my-skill-1.0.0.tar.gz --force
 ```
 
 ### Registry Configuration

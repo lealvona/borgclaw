@@ -2,6 +2,10 @@
 
 > Document created: 2026-03-28
 > Based on analysis of codebase during TICKET-086 and TICKET-087 implementation
+>
+> Historical note: this document is a pre-merge snapshot from the tool-split/semver audit pass.
+> It is superseded by `docs/IMPLEMENTATION_AUDIT_2026-03-29.md` and `docs/TOOL_SPLIT_REMAINING_TODOS.md`.
+> The tool split described below has since been completed.
 
 ## TICKET-087: Semver Comparison for Skill Versioning ✅ COMPLETE
 

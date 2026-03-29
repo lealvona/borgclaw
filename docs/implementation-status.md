@@ -4,7 +4,13 @@ This document tracks BorgClaw against the current README and `docs/` contract.
 
 It is additive status only. It does not narrow the documented feature set.
 
-Last reviewed: March 26, 2026, with upstream inspiration follow-up through March 26, 2026
+Last reviewed: March 29, 2026, with code verification against the current CLI/runtime surfaces.
+
+Audit note:
+
+- Most documented functionality is implemented and exercised.
+- This document no longer claims blanket feature completeness.
+- The current audited gaps are listed explicitly below.
 
 ## Status Matrix
 
@@ -15,12 +21,12 @@ Last reviewed: March 26, 2026, with upstream inspiration follow-up through March
 | WebSocket gateway auth/events | `complete` | Auth, pairing, error, heartbeat, and control-plane events are implemented. |
 | SQLite memory + group isolation | `complete` | Metadata round-trip, isolation, recall, and compaction are implemented. |
 | Solution memory | `complete` | Documented public structs and search helpers are aligned. |
-| Heartbeat engine | `complete` | Task/handler surface, engine state gating, background loop startup, shared-runtime ownership, enable/disable consistency, manual-run state updates, persisted task snapshots, retry/dead-letter behavior, and operator ergonomics (list, show, enable, disable, trigger) are all landed. |
+| Heartbeat engine | `partial` | Core engine, persistence, retries, enable/disable flow, and operator visibility are landed. `heartbeat trigger` is still a CLI placeholder rather than a real dispatch path. |
 | Scheduler | `complete` | Execution loop, timeout/concurrency policy, retries/dead-letter behavior, persisted job state, bounded run history, restart-recovery coverage, catch-up/recovery semantics, and full operator CRUD (list, show, create, delete, pause, resume) are all landed. |
 | Sub-agent coordinator | `complete` | Spawn/status/result flow, concurrency limits, cancellation precedence, memory policy enforcement, parent-context inheritance, persisted task snapshots, retry/dead-letter behavior, workspace policy enforcement, and audit logging are all landed. |
 | Security config contract | `complete` | Documented TOML shape parses and core enforcement exists. |
 | Secret storage + vault | `complete` | Encrypted secrets, vault clients (Bitwarden, 1Password), CLI commands (list, set, delete, check), and onboarding/auth UX are complete. |
-| Skill registry lifecycle | `complete` | Local install, remote `SKILL.md`, GitHub-backed listing, packaging (`borgclaw skills package`), publishing (`borgclaw skills publish`), inspection (`borgclaw skills inspect`), and version compatibility are all complete. |
+| Skill registry lifecycle | `partial` | Local install, remote `SKILL.md`, GitHub-backed listing, packaging, publishing, inspection, and version compatibility are implemented. Remote archive install-by-URL and asset-complete remote installs are still missing. |
 | MCP client | `complete` | Documented transports (Stdio, SSE, WebSocket) and client API are aligned. |
 | GitHub skill client | `complete` | Core client surface, shared tool/runtime coverage, local shared-runtime happy-path coverage, and operational completeness are landed. |
 | Google skill client | `complete` | Gmail/Drive/Calendar facade, shared runtime coverage, local shared-runtime happy-path coverage, and operational completeness are landed. |
@@ -57,7 +63,8 @@ Last reviewed: March 26, 2026, with upstream inspiration follow-up through March
 - ✅ Self-test command with dead-letter state detection
 - ✅ Backup export/import/verify workflows
 - ✅ Full schedule management: `list`, `show`, `create`, `delete`, `pause`, `resume`
-- ✅ Full heartbeat management: `list`, `show`, `enable`, `disable`, `trigger`
+- ✅ Heartbeat management: `list`, `show`, `enable`, `disable`
+- ⚠️ `heartbeat trigger` CLI surface exists but is still placeholder-only
 - ✅ Sub-agent management: `list`, `show`, `cancel`
 - ✅ Secret management: `list`, `set`, `delete`, `check`
 - ✅ Doctor with aggregate MCP failure summaries
@@ -75,6 +82,7 @@ Last reviewed: March 26, 2026, with upstream inspiration follow-up through March
 - ✅ Skill publishing (`borgclaw skills publish`)
 - ✅ Skill inspection (`borgclaw skills inspect`)
 - ✅ Version compatibility checking (semver)
+- ⚠️ Remote skill installs by URL still fetch only `SKILL.md`; archive-by-URL installs are not implemented
 - ✅ GitHub runtime happy-path coverage
 - ✅ Google runtime happy-path coverage (Gmail, Drive, Calendar)
 - ✅ Browser runtime happy-path coverage (Playwright/CDP)
@@ -90,10 +98,12 @@ Last reviewed: March 26, 2026, with upstream inspiration follow-up through March
 - ✅ Session compaction with token counting
 - ✅ Hybrid search with HTTP embedding provider
 
-## Temporary Limitations (If Any)
+## Temporary Limitations
 
-None. All documented features are fully implemented.
+- `heartbeat trigger` does not yet execute or enqueue a real manual heartbeat run.
+- Remote skill installs are still manifest-only for GitHub/direct-URL sources.
+- Repo-wide `clippy -D warnings` cleanup remains separate follow-up work.
 
 ## Historical Note
 
-This project has reached feature completeness as of version 1.11.0. All major phases (Core Runtime, Shared Routing, Memory and Scheduling, Skills and Integrations, Hardening and UX) have been implemented according to the documented contract.
+Use [IMPLEMENTATION_AUDIT_2026-03-29](IMPLEMENTATION_AUDIT_2026-03-29.md) for the evidence-backed audit details and follow-up steps.

@@ -127,6 +127,13 @@ Shared consciousness across all interactions:
 | **URLs** | Shortening via is.gd, tinyurl, YOURLS |
 | **Plugins** | WASM sandboxed extensions |
 
+Current skill lifecycle status:
+
+- local skill installs are implemented
+- GitHub `owner/repo` installs and direct `SKILL.md` URL installs are implemented
+- skill packaging, publishing, and package inspection are implemented
+- remote archive install-by-URL is still pending, and remote manifest installs currently fetch `SKILL.md` only
+
 ### ➡️ Right Face — Security
 
 *How the collective protects itself*
