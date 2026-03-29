@@ -1,9 +1,11 @@
 //! Tools module - defines tools agents can use
 
+mod browser;
 mod file;
 mod github;
 mod google;
 mod mcp;
+mod media;
 mod memory;
 mod plugin;
 mod schedule;
@@ -18,8 +20,7 @@ use crate::memory::SqliteMemory;
 use crate::scheduler::Scheduler;
 use crate::security::SecurityLayer;
 use crate::skills::{
-    BrowserSkill, CdpClient, GitHubClient, GoogleClient, ImageClient, ImageParams,
-    PlaywrightClient, PluginRegistry, QrFormat, QrSkill, SttClient, TtsClient, UrlShortener,
+    BrowserSkill, CdpClient, GitHubClient, GoogleClient, PlaywrightClient, PluginRegistry,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -296,30 +297,30 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "google_get_file_details" => {
             google::google_get_file_details(&call.arguments, runtime).await
         }
-        "browser_navigate" => browser_navigate(&call.arguments, runtime).await,
-        "browser_click" => browser_click(&call.arguments, runtime).await,
-        "browser_fill" => browser_fill(&call.arguments, runtime).await,
-        "browser_wait_for" => browser_wait_for(&call.arguments, runtime).await,
-        "browser_get_text" => browser_get_text(&call.arguments, runtime).await,
-        "browser_get_html" => browser_get_html(&call.arguments, runtime).await,
-        "browser_get_url" => browser_get_url(runtime).await,
-        "browser_eval_js" => browser_eval_js(&call.arguments, runtime).await,
-        "browser_screenshot" => browser_screenshot(&call.arguments, runtime).await,
-        "browser_go_back" => browser_go_back(runtime).await,
-        "browser_go_forward" => browser_go_forward(runtime).await,
-        "browser_reload" => browser_reload(runtime).await,
-        "stt_transcribe" => stt_transcribe(&call.arguments, runtime).await,
-        "stt_transcribe_url" => stt_transcribe_url(&call.arguments, runtime).await,
-        "tts_list_voices" => tts_list_voices(runtime).await,
-        "tts_speak_stream" => tts_speak_stream(&call.arguments, runtime).await,
-        "tts_speak" => tts_speak(&call.arguments, runtime).await,
-        "image_generate" => image_generate(&call.arguments, runtime).await,
-        "image_analyze" => image_analyze(&call.arguments, runtime).await,
-        "image_analyze_file" => image_analyze_file(&call.arguments, runtime).await,
-        "qr_encode" => qr_encode(&call.arguments).await,
-        "qr_encode_url" => qr_encode_url(&call.arguments).await,
-        "url_shorten" => url_shorten(&call.arguments, runtime).await,
-        "url_expand" => url_expand(&call.arguments, runtime).await,
+        "browser_navigate" => browser::browser_navigate(&call.arguments, runtime).await,
+        "browser_click" => browser::browser_click(&call.arguments, runtime).await,
+        "browser_fill" => browser::browser_fill(&call.arguments, runtime).await,
+        "browser_wait_for" => browser::browser_wait_for(&call.arguments, runtime).await,
+        "browser_get_text" => browser::browser_get_text(&call.arguments, runtime).await,
+        "browser_get_html" => browser::browser_get_html(&call.arguments, runtime).await,
+        "browser_get_url" => browser::browser_get_url(runtime).await,
+        "browser_eval_js" => browser::browser_eval_js(&call.arguments, runtime).await,
+        "browser_screenshot" => browser::browser_screenshot(&call.arguments, runtime).await,
+        "browser_go_back" => browser::browser_go_back(runtime).await,
+        "browser_go_forward" => browser::browser_go_forward(runtime).await,
+        "browser_reload" => browser::browser_reload(runtime).await,
+        "stt_transcribe" => media::stt_transcribe(&call.arguments, runtime).await,
+        "stt_transcribe_url" => media::stt_transcribe_url(&call.arguments, runtime).await,
+        "tts_list_voices" => media::tts_list_voices(runtime).await,
+        "tts_speak_stream" => media::tts_speak_stream(&call.arguments, runtime).await,
+        "tts_speak" => media::tts_speak(&call.arguments, runtime).await,
+        "image_generate" => media::image_generate(&call.arguments, runtime).await,
+        "image_analyze" => media::image_analyze(&call.arguments, runtime).await,
+        "image_analyze_file" => media::image_analyze_file(&call.arguments, runtime).await,
+        "qr_encode" => media::qr_encode(&call.arguments).await,
+        "qr_encode_url" => media::qr_encode_url(&call.arguments).await,
+        "url_shorten" => media::url_shorten(&call.arguments, runtime).await,
+        "url_expand" => media::url_expand(&call.arguments, runtime).await,
         "mcp_list_tools" => mcp::mcp_list_tools(&call.arguments, runtime).await,
         "mcp_call_tool" => mcp::mcp_call_tool(&call.arguments, runtime).await,
         other => ToolResult::err(format!("unknown tool: {}", other)),
@@ -442,508 +443,6 @@ fn scheduled_metadata(job: &crate::scheduler::Job) -> HashMap<String, String> {
     schedule::scheduled_metadata(job)
 }
 
-async fn browser_navigate(
-    arguments: &HashMap<String, serde_json::Value>,
-    runtime: &ToolRuntime,
-) -> ToolResult {
-    let url = match get_required_string(arguments, "url") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-
-    // Validate URL against SSRF attacks
-    if let Err(e) = runtime.security.validate_url(&url) {
-        return ToolResult::err(format!("URL blocked by SSRF protection: {}", e));
-    }
-
-    // Block dangerous URL schemes
-    if url.starts_with("file://") || url.starts_with("data://") || url.starts_with("javascript:") {
-        return ToolResult::err(
-            "Browser cannot navigate to file://, data://, or javascript: URLs".to_string(),
-        );
-    }
-
-    with_browser(runtime, |browser| async move {
-        browser.navigate(&url).await?;
-        Ok(ToolResult::ok(url))
-    })
-    .await
-}
-
-async fn browser_click(
-    arguments: &HashMap<String, serde_json::Value>,
-    runtime: &ToolRuntime,
-) -> ToolResult {
-    let selector = match get_required_string(arguments, "selector") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-
-    with_browser(runtime, |browser| async move {
-        browser.click(&selector).await?;
-        Ok(ToolResult::ok(format!("clicked {}", selector)))
-    })
-    .await
-}
-
-async fn browser_fill(
-    arguments: &HashMap<String, serde_json::Value>,
-    runtime: &ToolRuntime,
-) -> ToolResult {
-    let selector = match get_required_string(arguments, "selector") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-    let value = match get_required_string(arguments, "value") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-
-    with_browser(runtime, |browser| async move {
-        browser.fill(&selector, &value).await?;
-        Ok(ToolResult::ok(format!("filled {}", selector)))
-    })
-    .await
-}
-
-async fn browser_wait_for(
-    arguments: &HashMap<String, serde_json::Value>,
-    runtime: &ToolRuntime,
-) -> ToolResult {
-    let timeout_ms = get_u64(arguments, "timeout_ms").unwrap_or(5000);
-    if let Some(selector) = arguments.get("selector").and_then(|value| value.as_str()) {
-        let selector = selector.to_string();
-        return with_browser(runtime, |browser| async move {
-            browser.wait_for(&selector, timeout_ms).await?;
-            Ok(ToolResult::ok(format!("found {}", selector)))
-        })
-        .await;
-    }
-    if let Some(text) = arguments.get("text").and_then(|value| value.as_str()) {
-        let text = text.to_string();
-        return with_browser(runtime, |browser| async move {
-            browser.wait_for_text(&text, timeout_ms).await?;
-            Ok(ToolResult::ok(format!("found text {}", text)))
-        })
-        .await;
-    }
-    ToolResult::err("browser_wait_for requires 'selector' or 'text'")
-}
-
-async fn browser_get_text(
-    arguments: &HashMap<String, serde_json::Value>,
-    runtime: &ToolRuntime,
-) -> ToolResult {
-    let selector = arguments
-        .get("selector")
-        .and_then(|value| value.as_str())
-        .unwrap_or("body")
-        .to_string();
-
-    with_browser(runtime, |browser| async move {
-        let text = browser.extract_text(&selector).await?;
-        Ok(ToolResult::ok(text))
-    })
-    .await
-}
-
-async fn browser_get_html(
-    arguments: &HashMap<String, serde_json::Value>,
-    runtime: &ToolRuntime,
-) -> ToolResult {
-    let selector = arguments
-        .get("selector")
-        .and_then(|value| value.as_str())
-        .unwrap_or("body")
-        .to_string();
-
-    with_browser(runtime, |browser| async move {
-        let html = browser.extract_html(&selector).await?;
-        Ok(ToolResult::ok(truncate_output(&html)))
-    })
-    .await
-}
-
-async fn browser_get_url(runtime: &ToolRuntime) -> ToolResult {
-    with_browser(runtime, |browser| async move {
-        let url = browser.get_url().await?;
-        Ok(ToolResult::ok(url))
-    })
-    .await
-}
-
-async fn browser_eval_js(
-    arguments: &HashMap<String, serde_json::Value>,
-    runtime: &ToolRuntime,
-) -> ToolResult {
-    let script = match get_required_string(arguments, "script") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-
-    with_browser(runtime, |browser| async move {
-        let value = browser.eval_js(&script).await?;
-        Ok(ToolResult::ok(value.to_string()))
-    })
-    .await
-}
-
-async fn browser_go_back(runtime: &ToolRuntime) -> ToolResult {
-    with_browser(runtime, |browser| async move {
-        browser.eval_js("history.back()").await?;
-        Ok(ToolResult::ok("navigated back"))
-    })
-    .await
-}
-
-async fn browser_go_forward(runtime: &ToolRuntime) -> ToolResult {
-    with_browser(runtime, |browser| async move {
-        browser.eval_js("history.forward()").await?;
-        Ok(ToolResult::ok("navigated forward"))
-    })
-    .await
-}
-
-async fn browser_reload(runtime: &ToolRuntime) -> ToolResult {
-    with_browser(runtime, |browser| async move {
-        browser.eval_js("location.reload()").await?;
-        Ok(ToolResult::ok("reloaded page"))
-    })
-    .await
-}
-
-async fn browser_screenshot(
-    arguments: &HashMap<String, serde_json::Value>,
-    runtime: &ToolRuntime,
-) -> ToolResult {
-    let _full_page = arguments
-        .get("full_page")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(true);
-
-    with_browser(runtime, move |browser| async move {
-        let bytes = browser.screenshot().await?;
-        Ok(ToolResult::ok(format!("captured {} bytes", bytes.len()))
-            .with_metadata("bytes", bytes.len().to_string()))
-    })
-    .await
-}
-
-async fn stt_transcribe(
-    arguments: &HashMap<String, serde_json::Value>,
-    runtime: &ToolRuntime,
-) -> ToolResult {
-    let path = match get_required_string(arguments, "path") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-    let format = match audio_format(arguments.get("format").and_then(|value| value.as_str())) {
-        Ok(format) => format,
-        Err(err) => return ToolResult::err(err),
-    };
-    let resolved =
-        match resolve_workspace_path(&runtime.workspace_root, &runtime.workspace_policy, &path) {
-            Ok(path) => path,
-            Err(err) => return ToolResult::err(err),
-        };
-    let audio = match std::fs::read(&resolved) {
-        Ok(audio) => audio,
-        Err(err) => return ToolResult::err(err.to_string()),
-    };
-    let client = SttClient::new(runtime.skills.stt.backend_config());
-
-    match client.transcribe(&audio, format).await {
-        Ok(text) => ToolResult::ok(text),
-        Err(err) => ToolResult::err(err.to_string()),
-    }
-}
-
-async fn stt_transcribe_url(
-    arguments: &HashMap<String, serde_json::Value>,
-    runtime: &ToolRuntime,
-) -> ToolResult {
-    let url = match get_required_string(arguments, "url") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-    let format = match audio_format(arguments.get("format").and_then(|value| value.as_str())) {
-        Ok(format) => format,
-        Err(err) => return ToolResult::err(err),
-    };
-    let client = SttClient::new(runtime.skills.stt.backend_config());
-
-    match client.transcribe_url(&url, format).await {
-        Ok(text) => ToolResult::ok(text),
-        Err(err) => ToolResult::err(err.to_string()),
-    }
-}
-
-async fn tts_speak(
-    arguments: &HashMap<String, serde_json::Value>,
-    runtime: &ToolRuntime,
-) -> ToolResult {
-    let text = match get_required_string(arguments, "text") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-    let client = TtsClient::new(resolve_tts_config(&runtime.skills.tts));
-
-    match client.speak(&text).await {
-        Ok(audio) => ToolResult::ok(format!("generated {} bytes", audio.len()))
-            .with_metadata("bytes", audio.len().to_string()),
-        Err(err) => ToolResult::err(err.to_string()),
-    }
-}
-
-async fn tts_speak_stream(
-    arguments: &HashMap<String, serde_json::Value>,
-    runtime: &ToolRuntime,
-) -> ToolResult {
-    let text = match get_required_string(arguments, "text") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-    let output_path = match get_required_string(arguments, "output_path") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-    let client = TtsClient::new(resolve_tts_config(&runtime.skills.tts));
-
-    let resolved = match resolve_workspace_path(
-        &runtime.workspace_root,
-        &runtime.workspace_policy,
-        &output_path,
-    ) {
-        Ok(path) => path,
-        Err(err) => return ToolResult::err(err),
-    };
-
-    use futures_util::StreamExt;
-    let mut stream = match client.speak_stream(&text).await {
-        Ok(s) => s,
-        Err(err) => return ToolResult::err(err.to_string()),
-    };
-
-    let mut file = match std::fs::File::create(&resolved) {
-        Ok(f) => f,
-        Err(err) => return ToolResult::err(err.to_string()),
-    };
-
-    let mut total_bytes = 0usize;
-    while let Some(chunk) = stream.next().await {
-        match chunk {
-            Ok(bytes) => {
-                total_bytes += bytes.len();
-                if let Err(err) = std::io::Write::write_all(&mut file, &bytes) {
-                    return ToolResult::err(err.to_string());
-                }
-            }
-            Err(err) => return ToolResult::err(err.to_string()),
-        }
-    }
-
-    ToolResult::ok(format!("streamed {} bytes to {}", total_bytes, output_path))
-        .with_metadata("bytes", total_bytes.to_string())
-        .with_metadata("path", output_path)
-}
-
-async fn tts_list_voices(runtime: &ToolRuntime) -> ToolResult {
-    let client = TtsClient::new(resolve_tts_config(&runtime.skills.tts));
-
-    match client.list_voices().await {
-        Ok(voices) if voices.is_empty() => ToolResult::ok("no voices"),
-        Ok(voices) => ToolResult::ok(
-            voices
-                .into_iter()
-                .map(|voice| format!("{} | {}", voice.voice_id, voice.name))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        ),
-        Err(err) => ToolResult::err(err.to_string()),
-    }
-}
-
-async fn image_generate(
-    arguments: &HashMap<String, serde_json::Value>,
-    runtime: &ToolRuntime,
-) -> ToolResult {
-    let prompt = match get_required_string(arguments, "prompt") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-    let mut params = ImageParams::default();
-    if let Some(width) = get_u64(arguments, "width") {
-        params.width = width as u32;
-    }
-    if let Some(height) = get_u64(arguments, "height") {
-        params.height = height as u32;
-    }
-    let mut client = ImageClient::new(runtime.skills.image.backend());
-    let openai_api_key = resolve_env_reference(&runtime.skills.image.dalle.api_key);
-    if !openai_api_key.is_empty() {
-        client = client.with_openai_api_key(openai_api_key);
-    }
-
-    match client.generate(&prompt, params).await {
-        Ok(image) => {
-            let byte_len = image.bytes.as_ref().map(|bytes| bytes.len()).unwrap_or(0);
-            let mut result = ToolResult::ok(format!(
-                "generated {:?} image ({}) bytes",
-                image.format, byte_len
-            ))
-            .with_metadata("format", format!("{:?}", image.format).to_lowercase())
-            .with_metadata("bytes", byte_len.to_string());
-            if let Some(url) = image.url {
-                result = result.with_metadata("url", url);
-            }
-            if let Some(revised_prompt) = image.revised_prompt {
-                result = result.with_metadata("revised_prompt", revised_prompt);
-            }
-            result
-        }
-        Err(err) => ToolResult::err(err.to_string()),
-    }
-}
-
-async fn image_analyze(
-    arguments: &HashMap<String, serde_json::Value>,
-    runtime: &ToolRuntime,
-) -> ToolResult {
-    let image_url = match get_required_string(arguments, "image_url") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-    let prompt = match get_required_string(arguments, "prompt") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-
-    let mut client = ImageClient::new(runtime.skills.image.backend());
-    let openai_api_key = resolve_env_reference(&runtime.skills.image.dalle.api_key);
-    if !openai_api_key.is_empty() {
-        client = client.with_openai_api_key(openai_api_key);
-    }
-
-    match client.analyze(&image_url, &prompt).await {
-        Ok(analysis) => ToolResult::ok(analysis),
-        Err(err) => ToolResult::err(err.to_string()),
-    }
-}
-
-async fn image_analyze_file(
-    arguments: &HashMap<String, serde_json::Value>,
-    runtime: &ToolRuntime,
-) -> ToolResult {
-    let path = match get_required_string(arguments, "path") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-    let prompt = match get_required_string(arguments, "prompt") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-
-    let resolved =
-        match resolve_workspace_path(&runtime.workspace_root, &runtime.workspace_policy, &path) {
-            Ok(path) => path,
-            Err(err) => return ToolResult::err(err),
-        };
-
-    let image_bytes = match std::fs::read(&resolved) {
-        Ok(bytes) => bytes,
-        Err(err) => return ToolResult::err(err.to_string()),
-    };
-
-    let mut client = ImageClient::new(runtime.skills.image.backend());
-    let openai_api_key = resolve_env_reference(&runtime.skills.image.dalle.api_key);
-    if !openai_api_key.is_empty() {
-        client = client.with_openai_api_key(openai_api_key);
-    }
-
-    match client.analyze_file(&image_bytes, &prompt).await {
-        Ok(analysis) => ToolResult::ok(analysis),
-        Err(err) => ToolResult::err(err.to_string()),
-    }
-}
-
-async fn qr_encode(arguments: &HashMap<String, serde_json::Value>) -> ToolResult {
-    let data = match get_required_string(arguments, "data") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-    let format = match arguments.get("format").and_then(|value| value.as_str()) {
-        Some("svg") => QrFormat::Svg,
-        Some("terminal") => QrFormat::Terminal,
-        _ => QrFormat::default(),
-    };
-
-    match QrSkill::encode(&data, format) {
-        Ok(bytes) => ToolResult::ok(format!("generated {} bytes", bytes.len()))
-            .with_metadata("bytes", bytes.len().to_string()),
-        Err(err) => ToolResult::err(err.to_string()),
-    }
-}
-
-async fn qr_encode_url(arguments: &HashMap<String, serde_json::Value>) -> ToolResult {
-    let url = match get_required_string(arguments, "url") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-    let format = match arguments.get("format").and_then(|value| value.as_str()) {
-        Some("svg") => QrFormat::Svg,
-        Some("terminal") => QrFormat::Terminal,
-        _ => QrFormat::default(),
-    };
-
-    match QrSkill::encode_url(&url, format) {
-        Ok(bytes) => ToolResult::ok(format!("generated {} bytes", bytes.len()))
-            .with_metadata("bytes", bytes.len().to_string()),
-        Err(err) => ToolResult::err(err.to_string()),
-    }
-}
-
-async fn url_shorten(
-    arguments: &HashMap<String, serde_json::Value>,
-    runtime: &ToolRuntime,
-) -> ToolResult {
-    let url = match get_required_string(arguments, "url") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-
-    // Validate URL against SSRF attacks
-    if let Err(e) = runtime.security.validate_url(&url) {
-        return ToolResult::err(format!("URL blocked by SSRF protection: {}", e));
-    }
-
-    let shortener = UrlShortener::new(resolve_url_shortener_provider(&runtime.skills));
-    match shortener.shorten(&url).await {
-        Ok(short) => ToolResult::ok(short),
-        Err(err) => ToolResult::err(err.to_string()),
-    }
-}
-
-async fn url_expand(
-    arguments: &HashMap<String, serde_json::Value>,
-    runtime: &ToolRuntime,
-) -> ToolResult {
-    let url = match get_required_string(arguments, "url") {
-        Ok(value) => value,
-        Err(err) => return ToolResult::err(err),
-    };
-
-    // Validate URL against SSRF attacks
-    if let Err(e) = runtime.security.validate_url(&url) {
-        return ToolResult::err(format!("URL blocked by SSRF protection: {}", e));
-    }
-
-    let shortener = UrlShortener::new(resolve_url_shortener_provider(&runtime.skills));
-    match shortener.expand(&url).await {
-        Ok(expanded) => ToolResult::ok(expanded),
-        Err(err) => ToolResult::err(err.to_string()),
-    }
-}
-
 pub(super) fn github_client(runtime: &ToolRuntime) -> Result<GitHubClient, String> {
     let mut config = runtime
         .skills
@@ -964,7 +463,7 @@ pub(super) fn google_client(runtime: &ToolRuntime) -> GoogleClient {
     GoogleClient::new(config)
 }
 
-async fn with_browser<F, Fut>(runtime: &ToolRuntime, f: F) -> ToolResult
+pub(super) async fn with_browser<F, Fut>(runtime: &ToolRuntime, f: F) -> ToolResult
 where
     F: FnOnce(Box<dyn BrowserSkill>) -> Fut,
     Fut: std::future::Future<Output = Result<ToolResult, crate::skills::browser::BrowserError>>,
@@ -991,7 +490,7 @@ where
     }
 }
 
-fn audio_format(value: Option<&str>) -> Result<crate::skills::AudioFormat, String> {
+pub(super) fn audio_format(value: Option<&str>) -> Result<crate::skills::AudioFormat, String> {
     match value.unwrap_or("wav") {
         "wav" => Ok(crate::skills::AudioFormat::Wav),
         "mp3" => Ok(crate::skills::AudioFormat::Mp3),
@@ -1002,13 +501,15 @@ fn audio_format(value: Option<&str>) -> Result<crate::skills::AudioFormat, Strin
     }
 }
 
-fn resolve_tts_config(config: &crate::config::TtsSkillConfig) -> crate::skills::ElevenLabsConfig {
+pub(super) fn resolve_tts_config(
+    config: &crate::config::TtsSkillConfig,
+) -> crate::skills::ElevenLabsConfig {
     let mut resolved = config.elevenlabs.clone();
     resolved.api_key = resolve_env_reference(&resolved.api_key);
     resolved
 }
 
-fn resolve_url_shortener_provider(
+pub(super) fn resolve_url_shortener_provider(
     skills: &crate::config::SkillsConfig,
 ) -> crate::skills::UrlShortenerProvider {
     let mut provider = skills.url_shortener.provider_config();
@@ -1027,7 +528,7 @@ fn resolve_url_shortener_provider(
     provider
 }
 
-fn resolve_env_reference(value: &str) -> String {
+pub(super) fn resolve_env_reference(value: &str) -> String {
     if let Some(var) = value.strip_prefix("${").and_then(|v| v.strip_suffix('}')) {
         std::env::var(var).unwrap_or_default()
     } else {
@@ -4005,253 +3506,31 @@ for line in sys.stdin:
 /// Built-in tools
 pub fn builtin_tools() -> Vec<Tool> {
     let mut tools = Vec::new();
+    browser::register(&mut tools);
     file::register(&mut tools);
     github::register(&mut tools);
     google::register(&mut tools);
     mcp::register(&mut tools);
+    media::register(&mut tools);
     memory::register(&mut tools);
     plugin::register(&mut tools);
     schedule::register(&mut tools);
     shell::register(&mut tools);
     web::register(&mut tools);
-    tools.extend(vec![
-        Tool::new("browser_navigate", "Navigate the browser to a URL")
-            .with_schema(ToolSchema::object(
-                [("url".to_string(), string_property("Target URL"))].into(),
-                vec!["url".to_string()],
-            ))
-            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
-        Tool::new("browser_click", "Click an element in the current page")
-            .with_schema(ToolSchema::object(
-                [("selector".to_string(), string_property("CSS selector"))].into(),
-                vec!["selector".to_string()],
-            ))
-            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
-        Tool::new("browser_fill", "Fill an input element in the current page")
-            .with_schema(ToolSchema::object(
-                [
-                    ("selector".to_string(), string_property("CSS selector")),
-                    ("value".to_string(), string_property("Input value")),
-                ]
-                .into(),
-                vec!["selector".to_string(), "value".to_string()],
-            ))
-            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
-        Tool::new(
-            "browser_wait_for",
-            "Wait for a selector or text on the current page",
-        )
-        .with_schema(ToolSchema::object(
-            [
-                (
-                    "selector".to_string(),
-                    string_property("Optional CSS selector"),
-                ),
-                ("text".to_string(), string_property("Optional page text")),
-                (
-                    "timeout_ms".to_string(),
-                    number_property("Timeout in milliseconds", serde_json::json!(5000)),
-                ),
-            ]
-            .into(),
-            Vec::new(),
-        ))
-        .with_tags(vec!["browser".to_string(), "integration".to_string()]),
-        Tool::new("browser_get_text", "Extract text from the current page")
-            .with_schema(ToolSchema::object(
-                [("selector".to_string(), string_property("CSS selector"))].into(),
-                Vec::new(),
-            ))
-            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
-        Tool::new("browser_get_html", "Extract HTML from the current page")
-            .with_schema(ToolSchema::object(
-                [("selector".to_string(), string_property("CSS selector"))].into(),
-                Vec::new(),
-            ))
-            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
-        Tool::new("browser_get_url", "Get the current browser URL")
-            .with_schema(ToolSchema::object(HashMap::new(), Vec::new()))
-            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
-        Tool::new("browser_eval_js", "Evaluate JavaScript in the current page")
-            .with_schema(ToolSchema::object(
-                [("script".to_string(), string_property("JavaScript source"))].into(),
-                vec!["script".to_string()],
-            ))
-            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
-        Tool::new(
-            "browser_screenshot",
-            "Capture a screenshot from the current page",
-        )
+    tools.extend(vec![Tool::new("message", "Send a message to the user")
         .with_schema(ToolSchema::object(
             [(
-                "full_page".to_string(),
+                "text".to_string(),
                 PropertySchema {
-                    prop_type: "boolean".to_string(),
-                    description: Some("Capture the full page".to_string()),
-                    default: Some(serde_json::json!(true)),
+                    prop_type: "string".to_string(),
+                    description: Some("Message text".to_string()),
+                    default: None,
                     enum_values: None,
                 },
             )]
             .into(),
-            Vec::new(),
+            vec!["text".to_string()],
         ))
-        .with_tags(vec!["browser".to_string(), "integration".to_string()]),
-        Tool::new("browser_go_back", "Navigate back in browser history")
-            .with_schema(ToolSchema::object(HashMap::new(), Vec::new()))
-            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
-        Tool::new("browser_go_forward", "Navigate forward in browser history")
-            .with_schema(ToolSchema::object(HashMap::new(), Vec::new()))
-            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
-        Tool::new("browser_reload", "Reload the current page")
-            .with_schema(ToolSchema::object(HashMap::new(), Vec::new()))
-            .with_tags(vec!["browser".to_string(), "integration".to_string()]),
-        Tool::new("stt_transcribe", "Transcribe audio to text")
-            .with_schema(ToolSchema::object(
-                [
-                    ("path".to_string(), string_property("Audio file path")),
-                    ("format".to_string(), string_property("Audio format")),
-                ]
-                .into(),
-                vec!["path".to_string()],
-            ))
-            .with_tags(vec!["stt".to_string(), "integration".to_string()]),
-        Tool::new("stt_transcribe_url", "Transcribe audio from URL")
-            .with_schema(ToolSchema::object(
-                [
-                    ("url".to_string(), string_property("Audio file URL")),
-                    ("format".to_string(), string_property("Audio format")),
-                ]
-                .into(),
-                vec!["url".to_string()],
-            ))
-            .with_tags(vec!["stt".to_string(), "integration".to_string()]),
-        Tool::new("tts_list_voices", "List available TTS voices")
-            .with_schema(ToolSchema::object(HashMap::new(), Vec::new()))
-            .with_tags(vec!["tts".to_string(), "integration".to_string()]),
-        Tool::new("tts_speak", "Synthesize speech from text")
-            .with_schema(ToolSchema::object(
-                [("text".to_string(), string_property("Text to synthesize"))].into(),
-                vec!["text".to_string()],
-            ))
-            .with_tags(vec!["tts".to_string(), "integration".to_string()]),
-        Tool::new("tts_speak_stream", "Stream speech synthesis to file")
-            .with_schema(ToolSchema::object(
-                [
-                    ("text".to_string(), string_property("Text to synthesize")),
-                    (
-                        "output_path".to_string(),
-                        string_property("Output file path within workspace"),
-                    ),
-                ]
-                .into(),
-                vec!["text".to_string(), "output_path".to_string()],
-            ))
-            .with_tags(vec!["tts".to_string(), "integration".to_string()]),
-        Tool::new("image_generate", "Generate an image from a prompt")
-            .with_schema(ToolSchema::object(
-                [
-                    ("prompt".to_string(), string_property("Image prompt")),
-                    (
-                        "width".to_string(),
-                        number_property("Image width", serde_json::json!(1024)),
-                    ),
-                    (
-                        "height".to_string(),
-                        number_property("Image height", serde_json::json!(1024)),
-                    ),
-                ]
-                .into(),
-                vec!["prompt".to_string()],
-            ))
-            .with_tags(vec!["image".to_string(), "integration".to_string()]),
-        Tool::new("image_analyze", "Analyze an image from URL using vision AI")
-            .with_schema(ToolSchema::object(
-                [
-                    (
-                        "image_url".to_string(),
-                        string_property("URL of the image to analyze"),
-                    ),
-                    (
-                        "prompt".to_string(),
-                        string_property("Question or prompt about the image"),
-                    ),
-                ]
-                .into(),
-                vec!["image_url".to_string(), "prompt".to_string()],
-            ))
-            .with_tags(vec!["image".to_string(), "integration".to_string()]),
-        Tool::new(
-            "image_analyze_file",
-            "Analyze a local image file using vision AI",
-        )
-        .with_schema(ToolSchema::object(
-            [
-                (
-                    "path".to_string(),
-                    string_property("Path to image file within workspace"),
-                ),
-                (
-                    "prompt".to_string(),
-                    string_property("Question or prompt about the image"),
-                ),
-            ]
-            .into(),
-            vec!["path".to_string(), "prompt".to_string()],
-        ))
-        .with_tags(vec!["image".to_string(), "integration".to_string()]),
-        Tool::new("qr_encode", "Generate a QR code")
-            .with_schema(ToolSchema::object(
-                [
-                    ("data".to_string(), string_property("Data to encode")),
-                    (
-                        "format".to_string(),
-                        string_property("png, svg, or terminal"),
-                    ),
-                ]
-                .into(),
-                vec!["data".to_string()],
-            ))
-            .with_tags(vec!["qr".to_string(), "integration".to_string()]),
-        Tool::new("qr_encode_url", "Generate a QR code from a URL")
-            .with_schema(ToolSchema::object(
-                [
-                    ("url".to_string(), string_property("URL to encode")),
-                    (
-                        "format".to_string(),
-                        string_property("png, svg, or terminal"),
-                    ),
-                ]
-                .into(),
-                vec!["url".to_string()],
-            ))
-            .with_tags(vec!["qr".to_string(), "integration".to_string()]),
-        Tool::new("url_shorten", "Shorten a URL")
-            .with_schema(ToolSchema::object(
-                [("url".to_string(), string_property("URL to shorten"))].into(),
-                vec!["url".to_string()],
-            ))
-            .with_tags(vec!["url".to_string(), "integration".to_string()]),
-        Tool::new("url_expand", "Expand a shortened URL")
-            .with_schema(ToolSchema::object(
-                [("url".to_string(), string_property("Shortened URL"))].into(),
-                vec!["url".to_string()],
-            ))
-            .with_tags(vec!["url".to_string(), "integration".to_string()]),
-        Tool::new("message", "Send a message to the user")
-            .with_schema(ToolSchema::object(
-                [(
-                    "text".to_string(),
-                    PropertySchema {
-                        prop_type: "string".to_string(),
-                        description: Some("Message text".to_string()),
-                        default: None,
-                        enum_values: None,
-                    },
-                )]
-                .into(),
-                vec!["text".to_string()],
-            ))
-            .with_tags(vec!["communication".to_string()]),
-    ]);
+        .with_tags(vec!["communication".to_string()])]);
     tools
 }
