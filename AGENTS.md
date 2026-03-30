@@ -49,6 +49,14 @@ The `borgclaw-core` crate contains all business logic; binaries are thin wrapper
 
 ## Build Commands
 
+Prefer the repo wrappers for manual Cargo work so temporary files stay under `.local/cache/tmp` and oversized incremental caches get trimmed automatically:
+
+```bash
+./scripts/with-build-env.sh cargo <subcommand> ...
+./scripts/clean-build-cache.sh         # trim incremental + stale temp scratch
+./scripts/clean-build-cache.sh --all   # full cargo clean
+```
+
 ```bash
 # Build entire workspace
 cargo build

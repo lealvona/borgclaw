@@ -46,7 +46,7 @@ This will:
 Run the interactive onboarding wizard:
 
 ```bash
-cargo run --bin borgclaw -- init
+./scripts/onboarding.sh
 ```
 
 You'll be prompted for:
@@ -80,14 +80,14 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 
 ```bash
 ./scripts/repl.sh
-# Or: cargo run --bin borgclaw -- repl
+# Or: ./scripts/with-build-env.sh cargo run --bin borgclaw -- repl
 ```
 
 ### Gateway Mode (WebSocket)
 
 ```bash
 ./scripts/gateway.sh
-# Or: cargo run --bin borgclaw-gateway
+# Or: ./scripts/with-build-env.sh cargo run --bin borgclaw-gateway
 ```
 
 Gateway endpoint: `ws://localhost:3000/ws`
@@ -134,6 +134,11 @@ Expected output:
 - **Ubuntu/Debian**: `sudo apt install build-essential`
 - **macOS**: `xcode-select --install`
 - **Windows**: Install Visual Studio Build Tools
+
+### Build artifacts consume too much disk
+- Run `./scripts/clean-build-cache.sh` to trim incremental caches and stale temp scratch
+- Run `./scripts/clean-build-cache.sh --all` for a full `cargo clean`
+- Prefer `./scripts/with-build-env.sh cargo ...` for manual Cargo commands so temp files stay in the repo cache instead of spilling into `/tmp`
 
 ### "Permission denied" on scripts
 ```bash

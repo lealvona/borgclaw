@@ -55,7 +55,7 @@ cd borgclaw
 .\scripts\bootstrap.ps1   # Windows
 
 # Initialize your drone
-cargo run --bin borgclaw -- init
+./scripts/onboarding.sh
 
 # Establish connection
 ./scripts/repl.sh
@@ -219,12 +219,17 @@ start http://localhost:3000  # Windows
 ### Collective Diagnostics
 ```bash
 ./scripts/doctor.sh                        # Verify all faces
-cargo run --bin borgclaw -- self-test      # Exit 0 on pass
-cargo run --bin borgclaw -- runtime        # Show collective status
+./scripts/with-build-env.sh cargo test --workspace              # Run the workspace suite with bounded temp usage
+./scripts/with-build-env.sh cargo run --bin borgclaw -- self-test    # Exit 0 on pass
+./scripts/with-build-env.sh cargo run --bin borgclaw -- runtime      # Show collective status
+./scripts/clean-build-cache.sh                                   # Trim incremental + stale temp scratch
+./scripts/clean-build-cache.sh --all                             # Full cargo clean when you need a reset
 borgclaw providers list                    # Show configured provider profiles
 borgclaw processes list                    # Inspect persisted background command processes
 ./scripts/install-docker-sandbox.sh        # Build the optional base + remote Docker sandbox images
 ```
+
+Use the `with-build-env` wrappers for manual Cargo commands. They keep temporary files under `.local/cache/tmp`, reuse the shared `target/` tree, and trim oversized incremental caches before they consume the machine.
 
 ### Command Processes
 ```bash

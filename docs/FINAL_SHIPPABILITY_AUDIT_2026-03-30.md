@@ -6,9 +6,9 @@ This document closes the March 2026 implementation train that repaired BorgClaw'
 
 The final audit re-ran the strict workspace checks:
 
-- `cargo fmt --all`
-- `TMPDIR=/home/lvona/src/borgclaw/.tmp cargo test --workspace -- --test-threads=1`
-- `TMPDIR=/home/lvona/src/borgclaw/.tmp cargo clippy --workspace --all-targets -- -D warnings`
+- `./scripts/with-build-env.sh cargo fmt --all`
+- `./scripts/with-build-env.sh cargo test --workspace -- --test-threads=1`
+- `./scripts/with-build-env.sh cargo clippy --workspace --all-targets -- -D warnings`
 
 Result:
 

@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+source "$ROOT_DIR/scripts/lib/build-env.sh"
+borgclaw_prepare_build_env
 
 echo "🚀 Starting BorgClaw Gateway..."
 echo ""

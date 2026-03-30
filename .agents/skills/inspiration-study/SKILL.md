@@ -83,7 +83,9 @@ git add docs/
 export GIT_EDITOR=true && git commit -m "[TICKET-<number>] Update inspiration analysis"
 
 # 4. Run checks
-cargo test && cargo fmt --check && cargo clippy -- -D warnings
+./scripts/with-build-env.sh cargo test --workspace
+./scripts/with-build-env.sh cargo fmt --check
+./scripts/with-build-env.sh cargo clippy --workspace --all-targets -- -D warnings
 
 # 5. Push and create PR
 git push -u origin TICKET-<number>-study-upstream

@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+source "$ROOT_DIR/scripts/lib/build-env.sh"
+borgclaw_prepare_build_env
 
 show_help() {
     cat << EOF
@@ -145,9 +147,9 @@ echo ""
 echo "[borgclaw] Running configuration wizard..."
 
 # Use release binary if available (built by bootstrap), otherwise use cargo run
-if [ -f "target/release/borgclaw" ]; then
+if [ -f "$CARGO_TARGET_DIR/release/borgclaw" ]; then
     echo "[borgclaw] Using release binary (from bootstrap)"
-    BORGCLAW_BIN="target/release/borgclaw"
+    BORGCLAW_BIN="$CARGO_TARGET_DIR/release/borgclaw"
 else
     echo "[borgclaw] Building and running debug binary..."
     BORGCLAW_BIN="cargo run --bin borgclaw --"

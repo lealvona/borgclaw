@@ -9,6 +9,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+source "$ROOT_DIR/scripts/lib/build-env.sh"
+borgclaw_prepare_build_env
 
 # Colors
 RED='\033[0;31m'
@@ -23,9 +25,9 @@ error() { echo -e "${RED}[borgclaw]${NC} $*"; }
 info() { echo -e "${BLUE}[borgclaw]${NC} $*"; }
 
 # Check if borgclaw binary exists
-BORGCLAW="${ROOT_DIR}/target/release/borgclaw"
+BORGCLAW="$(borgclaw_target_dir)/release/borgclaw"
 if [ ! -f "$BORGCLAW" ]; then
-    BORGCLAW="${ROOT_DIR}/target/debug/borgclaw"
+    BORGCLAW="$(borgclaw_target_dir)/debug/borgclaw"
     if [ ! -f "$BORGCLAW" ]; then
         error "BorgClaw binary not found. Please run ./scripts/bootstrap.sh first"
         exit 1

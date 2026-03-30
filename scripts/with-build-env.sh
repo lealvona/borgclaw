@@ -6,4 +6,9 @@ cd "$ROOT_DIR"
 source "$ROOT_DIR/scripts/lib/build-env.sh"
 borgclaw_prepare_build_env
 
-cargo run --bin borgclaw -- repl
+if [[ $# -eq 0 ]]; then
+    echo "Usage: ./scripts/with-build-env.sh <command> [args...]"
+    exit 1
+fi
+
+exec "$@"
