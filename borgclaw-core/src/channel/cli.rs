@@ -58,8 +58,12 @@ impl Channel for CliChannel {
     async fn send(&self, message: OutboundMessage) -> Result<(), ChannelError> {
         let text = match message.content {
             MessagePayload::Text(s) => s,
-            MessagePayload::Markdown(s) => s,
-            MessagePayload::Html(s) => s,
+            MessagePayload::Markdown(s) => {
+                // For CLI, render markdown simply by stripping formatting characters
+                // that would clutter terminal output
+                render_markdown_simple(&s)
+            }
+            MessagePayload::Html(s) => strip_html_tags(&s),
             MessagePayload::Media { url, .. } => url,
             MessagePayload::File { name, .. } => name,
         };
@@ -97,6 +101,66 @@ pub fn create_cli_message(content: String, sender_id: &str) -> InboundMessage {
         timestamp: Utc::now(),
         raw: serde_json::json!({ "source": "cli" }),
     }
+}
+
+/// Simple markdown rendering for terminal output
+/// Strips markdown formatting characters that would clutter CLI output
+fn render_markdown_simple(md: &str) -> String {
+    let mut result = md.to_string();
+    
+    // Headers: replace with bold/underline style
+    for i in (1..=6).rev() {
+        let hashes = "#".repeat(i);
+        result = result.replace(&format!("{} ", hashes), &format!("\n{} ", hashes));
+    }
+    
+    // Bold: keep the text, remove **
+    result = result.replace("**", "");
+    
+    // Italic: keep the text, remove * (but not bullet points)
+    // This is a simplification - proper parsing would track context
+    
+    // Code blocks: keep content, fence markers become indentation indicators
+    result = result.replace("```\n", "\n");
+    result = result.replace("```", "");
+    result = result.replace("`", "");
+    
+    // Links: extract just the text part [text](url) -> text
+    // Process links iteratively
+    loop {
+        if let Some(start) = result.find('[') {
+            if let Some(end_bracket) = result[start..].find("](") {
+                let bracket_end = start + end_bracket;
+                if let Some(end_paren) = result[bracket_end..].find(')') {
+                    let link_text = result[start + 1..bracket_end].to_string();
+                    let full_len = end_bracket + end_paren + 1;
+                    result.replace_range(start..start + full_len, &link_text);
+                    continue; // Continue to process more links
+                }
+            }
+        }
+        break;
+    }
+    
+    result
+}
+
+/// Strip HTML tags from text
+fn strip_html_tags(html: &str) -> String {
+    let mut result = String::with_capacity(html.len());
+    let mut in_tag = false;
+    
+    for ch in html.chars() {
+        if ch == '<' {
+            in_tag = true;
+        } else if ch == '>' {
+            in_tag = false;
+        } else if !in_tag {
+            result.push(ch);
+        }
+    }
+    
+    result
 }
 
 #[cfg(test)]
