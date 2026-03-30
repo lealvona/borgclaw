@@ -206,11 +206,58 @@ fn canonical_or_current(path: &Path) -> PathBuf {
 
 pub fn parse_tool_command(input: &str, tools: &[Tool]) -> Option<ToolCall> {
     let trimmed = input.trim();
-    if !trimmed.starts_with('/') {
+    
+    // Check for XML-wrapped tool calls (e.g., <minimax:tool_call>...</minimax:tool_call>)
+    let content = if let Some(start) = trimmed.find("<tool_call>") {
+        let start_idx = start + "<tool_call>".len();
+        if let Some(end) = trimmed.find("</tool_call>") {
+            &trimmed[start_idx..end]
+        } else {
+            &trimmed[start_idx..]
+        }
+    } else if let Some(start) = trimmed.find("<minimax:tool_call>") {
+        let start_idx = start + "<minimax:tool_call>".len();
+        if let Some(end) = trimmed.find("</minimax:tool_call>") {
+            &trimmed[start_idx..end]
+        } else {
+            &trimmed[start_idx..]
+        }
+    } else {
+        trimmed
+    };
+    
+    // Strip leading dash and whitespace (common in XML-wrapped format)
+    let content = content.trim().trim_start_matches('-').trim();
+    
+    // Try alternate format: /{"tool": "name", "params": {...}}
+    if content.starts_with("/{") {
+        let json_str = &content[1..]; // Remove leading /
+        if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(json_str) {
+            if let Some(tool_name) = json_val.get("tool").and_then(|v| v.as_str()) {
+                if tools.iter().any(|tool| tool.name == tool_name) {
+                    // Extract params
+                    let arguments = if let Some(params) = json_val.get("params") {
+                        if let Some(obj) = params.as_object() {
+                            obj.iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect::<HashMap<String, serde_json::Value>>()
+                        } else {
+                            HashMap::new()
+                        }
+                    } else {
+                        HashMap::new()
+                    };
+                    return Some(ToolCall::new(tool_name, arguments));
+                }
+            }
+        }
+    }
+    
+    if !content.starts_with('/') {
         return None;
     }
 
-    let body = &trimmed[1..];
+    let body = &content[1..];
     let (tool_name, args_str) = match body.split_once(' ') {
         Some((name, rest)) => (name, rest.trim()),
         None => (body, ""),
@@ -720,6 +767,56 @@ mod tests {
     fn rejects_unknown_tool_command() {
         let tools = builtin_tools();
         assert!(parse_tool_command("/unknown {}", &tools).is_none());
+    }
+
+    #[test]
+    fn parses_xml_wrapped_tool_command() {
+        let tools = builtin_tools();
+        let input = r#"<minimax:tool_call>
+- /message {"text":"hello"}
+</minimax:tool_call>"#;
+        let call = parse_tool_command(input, &tools).unwrap();
+        assert_eq!(call.name, "message");
+        assert_eq!(call.arguments["text"], "hello");
+    }
+
+    #[test]
+    fn parses_generic_xml_wrapped_tool_command() {
+        let tools = builtin_tools();
+        let input = r#"<tool_call>
+- /read_file {"path": "README.md"}
+</tool_call>"#;
+        let call = parse_tool_command(input, &tools).unwrap();
+        assert_eq!(call.name, "read_file");
+        assert_eq!(call.arguments["path"], "README.md");
+    }
+
+    #[test]
+    fn parses_plain_tool_command() {
+        let tools = builtin_tools();
+        let call = parse_tool_command(r#"/execute_command {"command":"ls -la"}"#, &tools).unwrap();
+        assert_eq!(call.name, "execute_command");
+        assert_eq!(call.arguments["command"], "ls -la");
+    }
+
+    #[test]
+    fn parses_alternate_json_tool_format() {
+        let tools = builtin_tools();
+        let input = r#"/{"tool": "read_file", "params": {"path": "README.md"}}"#;
+        let call = parse_tool_command(input, &tools).unwrap();
+        assert_eq!(call.name, "read_file");
+        assert_eq!(call.arguments["path"], "README.md");
+    }
+
+    #[test]
+    fn parses_alternate_json_in_xml_wrapper() {
+        let tools = builtin_tools();
+        let input = r#"<minimax:tool_call>
+- /{"tool": "list_directory", "params": {"path": "."}}
+</minimax:tool_call>"#;
+        let call = parse_tool_command(input, &tools).unwrap();
+        assert_eq!(call.name, "list_directory");
+        assert_eq!(call.arguments["path"], ".");
     }
 
     #[test]
