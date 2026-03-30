@@ -3,6 +3,8 @@ $ErrorActionPreference = "Stop"
 
 $ROOT_DIR = Split-Path -Parent $PSScriptRoot
 Set-Location $ROOT_DIR
+. (Join-Path $ROOT_DIR "scripts\lib\build-env.ps1")
+Initialize-BorgClawBuildEnv
 
 Write-Host "[borgclaw] System Doctor" -ForegroundColor Cyan
 Write-Host "========================"
@@ -96,6 +98,7 @@ if (Test-Path "$CONFIG_DIR\.secrets_key") {
 
 Write-Host ""
 Write-Host "=== Build Status ===" -ForegroundColor White
+Show-BorgClawBuildEnv
 cargo check --quiet 2>$null
 if ($LASTEXITCODE -eq 0) {
     Write-Host "✓ Code compiles successfully" -ForegroundColor Green
@@ -136,6 +139,7 @@ if (Get-Command "ollama" -ErrorAction SilentlyContinue) {
 } else {
     Write-Host "○ Ollama embeddings runtime: not installed (run .\scripts\install-ollama.ps1)" -ForegroundColor Yellow
 }
+Write-Host "✓ Build cache cleanup helper: .\scripts\clean-build-cache.ps1" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "=== Available Commands ===" -ForegroundColor White

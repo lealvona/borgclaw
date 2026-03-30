@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+source "$ROOT_DIR/scripts/lib/build-env.sh"
+borgclaw_prepare_build_env
 
 echo ""
 echo "╔═══════════════════════════════════════════════════════════════╗"
@@ -63,24 +65,12 @@ check_command bw || true
 check_command op || true
 
 echo ""
-echo "[borgclaw] Checking for previous builds..."
-if [ -d "target" ]; then
-    echo ""
-    echo "WARNING: Found existing target/ directory with previous build artifacts."
-    echo "         This can cause issues with stale dependencies."
-    echo ""
-    read -p "Delete target/ directory and all build artifacts? [y/N] " -n 1 -r
-    echo ""
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        echo "  Removing target/ directory..."
-        rm -rf target
-        echo "  ✓ Clean complete"
-    else
-        echo "  Skipping cleanup (may use stale artifacts)"
-    fi
-else
-    echo "  ✓ No previous builds found"
+borgclaw_print_build_env
+if [ -d "$CARGO_TARGET_DIR" ]; then
+    echo "  current target size: $(du -sh "$CARGO_TARGET_DIR" 2>/dev/null | awk '{print $1}')"
 fi
+echo "  clean incremental cache: ./scripts/clean-build-cache.sh"
+echo "  full cargo clean:        ./scripts/clean-build-cache.sh --all"
 
 echo ""
 echo "[borgclaw] Building workspace..."
@@ -171,9 +161,9 @@ else
 fi
 
 # Check for provider API key
-if command -v ./target/release/borgclaw &> /dev/null || command -v ./target/debug/borgclaw &> /dev/null; then
-    BORGCLAW_BIN="./target/release/borgclaw"
-    [ ! -f "$BORGCLAW_BIN" ] && BORGCLAW_BIN="./target/debug/borgclaw"
+if command -v "$CARGO_TARGET_DIR/release/borgclaw" &> /dev/null || command -v "$CARGO_TARGET_DIR/debug/borgclaw" &> /dev/null; then
+    BORGCLAW_BIN="$CARGO_TARGET_DIR/release/borgclaw"
+    [ ! -f "$BORGCLAW_BIN" ] && BORGCLAW_BIN="$CARGO_TARGET_DIR/debug/borgclaw"
     
     # Check if any provider key is configured
     if ! $BORGCLAW_BIN secrets list 2>/dev/null | grep -q "_API_KEY"; then

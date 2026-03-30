@@ -1,5 +1,6 @@
 target/
 .local/
+.tmp/
 .borgclaw/
 .codex/
 docs/2026-03-09-plan.md

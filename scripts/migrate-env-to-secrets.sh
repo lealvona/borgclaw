@@ -5,6 +5,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+source "$ROOT_DIR/scripts/lib/build-env.sh"
+borgclaw_prepare_build_env
 
 # Colors
 RED='\033[0;31m'
@@ -60,15 +62,16 @@ echo ""
 
 # Check if BorgClaw binary exists
 BORGCLAW_BIN=""
-if [ -f "target/release/borgclaw" ]; then
-    BORGCLAW_BIN="target/release/borgclaw"
-elif [ -f "target/debug/borgclaw" ]; then
-    BORGCLAW_BIN="target/debug/borgclaw"
+TARGET_DIR="$(borgclaw_target_dir)"
+if [ -f "$TARGET_DIR/release/borgclaw" ]; then
+    BORGCLAW_BIN="$TARGET_DIR/release/borgclaw"
+elif [ -f "$TARGET_DIR/debug/borgclaw" ]; then
+    BORGCLAW_BIN="$TARGET_DIR/debug/borgclaw"
 elif command -v borgclaw &> /dev/null; then
     BORGCLAW_BIN="borgclaw"
 else
     echo -e "${RED}✗ BorgClaw binary not found${NC}"
-    echo "Please build first: cargo build --release"
+    echo "Please build first: ./scripts/with-build-env.sh cargo build --release"
     exit 1
 fi
 

@@ -3,6 +3,8 @@ $ErrorActionPreference = "Stop"
 
 $ROOT_DIR = Split-Path -Parent $PSScriptRoot
 Set-Location $ROOT_DIR
+. (Join-Path $ROOT_DIR "scripts\lib\build-env.ps1")
+Initialize-BorgClawBuildEnv
 
 function Show-Help {
     Write-Host @"

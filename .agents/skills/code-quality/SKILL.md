@@ -22,7 +22,7 @@ Before creating any PR, verify:
 - [ ] **Tests Added**: Unit tests for all new functions/methods
 - [ ] **Integration Tests**: For end-to-end workflows
 - [ ] **Documentation Updated**: README, docs/*.md, inline comments
-- [ ] **All Tests Pass**: `cargo test --workspace` succeeds
+- [ ] **All Tests Pass**: `./scripts/with-build-env.sh cargo test --workspace` succeeds
 - [ ] **Code Compiles**: No warnings (except pre-existing ones)
 - [ ] **Feature Complete**: Not stubbed or placeholder code
 
@@ -69,7 +69,7 @@ Update these files as needed:
 ```bash
 # 1. Implement feature
 # 2. Add tests
-cargo test --workspace
+./scripts/with-build-env.sh cargo test --workspace
 
 # 3. Update documentation
 # 4. Verify checklist
