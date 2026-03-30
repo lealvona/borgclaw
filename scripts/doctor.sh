@@ -64,7 +64,7 @@ check_command git "Git version control" true || ERRORS=$((ERRORS + 1))
 echo ""
 echo "=== Optional Tools ==="
 check_command node "Node.js (for Playwright)"
-check_command docker "Docker (for pgvector runtime)"
+check_command docker "Docker (for pgvector runtime and command sandbox)"
 check_command psql "PostgreSQL client"
 check_command ollama "Ollama (embeddings runtime)"
 check_command signal-cli "Signal CLI (for Signal channel)"
@@ -118,8 +118,14 @@ fi
 
 if command -v docker >/dev/null 2>&1; then
     echo -e "\033[0;32m✓\033[0m pgvector runtime installer available (run ./scripts/install-pgvector.sh)"
+    if docker image inspect borgclaw-sandbox:base >/dev/null 2>&1; then
+        echo -e "\033[0;32m✓\033[0m Docker sandbox image: borgclaw-sandbox:base"
+    else
+        echo -e "\033[0;33m○\033[0m Docker sandbox image: not built (run ./scripts/install-docker-sandbox.sh)"
+    fi
 else
     echo -e "\033[0;33m○\033[0m pgvector runtime not installable via helper script until Docker is available"
+    echo -e "\033[0;33m○\033[0m Docker command sandbox not installable via helper script until Docker is available"
 fi
 
 if command -v ollama >/dev/null 2>&1; then

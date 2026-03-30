@@ -4,7 +4,7 @@ This document tracks BorgClaw against the current README and `docs/` contract.
 
 It is additive status only. It does not narrow the documented feature set.
 
-Last reviewed: March 29, 2026, with code verification against the current CLI/runtime surfaces.
+Last reviewed: March 30, 2026, with code verification against the current CLI/runtime surfaces.
 
 Audit note:
 
@@ -25,6 +25,7 @@ Audit note:
 | Scheduler | `complete` | Execution loop, timeout/concurrency policy, retries/dead-letter behavior, persisted job state, bounded run history, restart-recovery coverage, catch-up/recovery semantics, and full operator CRUD (list, show, create, delete, pause, resume) are all landed. |
 | Sub-agent coordinator | `complete` | Spawn/status/result flow, concurrency limits, cancellation precedence, memory policy enforcement, parent-context inheritance, persisted task snapshots, retry/dead-letter behavior, workspace policy enforcement, and audit logging are all landed. |
 | Security config contract | `complete` | Documented TOML shape parses and core enforcement exists. |
+| Docker command sandbox | `complete` | Typed `security.docker` config, shared command routing, diagnostics, and installer helpers are landed. |
 | Secret storage + vault | `complete` | Encrypted secrets, vault clients (Bitwarden, 1Password), CLI commands (list, set, delete, check), and onboarding/auth UX are complete. |
 | Skill registry lifecycle | `complete` | Local directory install, local `.tar.gz` install, GitHub-backed listing, archive-backed GitHub repo/registry installs, remote archive install-by-URL, packaging, publishing, inspection, version compatibility, and direct manifest installs with explicit `files:` support, adjacent `SKILL.files.json` sidecar discovery, or manifest-directory discovery are implemented. |
 | MCP client | `complete` | Documented transports (Stdio, SSE, WebSocket) and client API are aligned. |
@@ -56,6 +57,7 @@ Audit note:
 - ✅ Prompt injection defense with pattern detection
 - ✅ Secret leak detection and redaction
 - ✅ Audit logging for sub-agents and heartbeat
+- ✅ Optional Docker command sandbox with typed image/network/mount policy
 - ✅ Encrypted secrets (ChaCha20-Poly1305)
 - ✅ Vault integration (Bitwarden primary, 1Password secondary)
 

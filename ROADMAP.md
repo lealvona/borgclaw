@@ -8,8 +8,8 @@ Status note as of March 29, 2026:
 - Phase 1 is complete.
 - Phase 2 is complete.
 - Phase 3 is complete.
-- Phase 4 is mostly complete. The remaining gap is that arbitrary non-GitHub direct `SKILL.md` URLs are still manifest-only.
-- Phase 5 is mostly complete. The main audited remaining gap is repo-wide lint/doc hardening rather than missing core product-contract features.
+- Phase 4 is complete against the current documented contract.
+- Phase 5 is complete for the current product contract, with ongoing lint/doc maintenance remaining as normal follow-up work.
 - See `docs/IMPLEMENTATION_AUDIT_2026-03-29.md` for the evidence-backed issue list and concrete fix steps.
 
 ## Phase 1: Core Runtime
@@ -70,7 +70,7 @@ Recent landed work in this phase:
 - Shared runtime browser happy-path coverage now exercises a configured local bridge for `browser_get_url` and `browser_eval_js`, instead of relying only on browser-client unit tests.
 - Shared runtime coverage now includes local happy-path tests for QR URL encoding and URL shortening via a configured YOURLS-compatible provider.
 - Archive-backed install now works for local `.tar.gz` packages, remote archive URLs, GitHub repo installs, GitHub-backed registry installs, and direct GitHub raw `SKILL.md` URLs.
-- The remaining gap in this phase is that arbitrary non-GitHub direct `SKILL.md` URLs still lack a portable asset-discovery contract, so those installs remain manifest-only.
+- Direct `SKILL.md` installs now support explicit `files:` entries, adjacent `SKILL.files.json`, and best-effort directory-listing discovery when the source exposes one.
 
 ## Phase 5: Hardening and UX
 
@@ -78,6 +78,7 @@ Recent landed work in this phase:
 - Finish secret storage and vault integration.
 - Expand onboarding, `status`, and `doctor` to reflect provider, channel, memory, and integration state.
 - Add focused unit and integration coverage for each completed phase.
+- Add an optional Docker command sandbox with typed config, diagnostics, and installer support.
 
 Recent landed work in this phase:
 - Plugin and MCP invocation now use the same approval flow as command execution in supervised mode, instead of bypassing approval semantics entirely.
@@ -94,6 +95,7 @@ Recent landed work in this phase:
 - The shared router now rejects explicitly disabled channels instead of treating `enabled = false` as informational only, tightening routing correctness against the documented channel contract.
 - The gateway now also rejects WebSocket upgrades when the channel is explicitly disabled, aligning transport entry with the same channel-enable contract.
 - Webhook rate limiting now returns `Retry-After` metadata on `429` responses, improving transport-facing retry semantics instead of leaving operators to guess the backoff window.
-- The next remaining gaps in this phase are repo-wide lint hardening, deeper end-to-end security coverage across deferred/background execution paths, and continued docs-as-contract maintenance.
+- Optional Docker sandboxing is now implemented for `execute_command` with a typed `security.docker` contract, shared routing, diagnostics, and installer helpers.
+- Ongoing maintenance still includes repo-wide lint hardening and continued docs-as-contract upkeep.
 - CLI now provides backup export, import, and verify workflows over persisted scheduler, heartbeat, and sub-agent state.
 - `self-test` now treats persisted dead-lettered scheduler, heartbeat, and sub-agent state as explicit operator-facing failures instead of leaving them only to manual inspection.

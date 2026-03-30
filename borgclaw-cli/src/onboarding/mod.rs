@@ -743,6 +743,7 @@ fn configure_security(
     );
     if quick {
         config.security.wasm_sandbox = true;
+        config.security.docker.enabled = false;
         return Ok(());
     }
     config.security.wasm_sandbox = Confirm::with_theme(theme)
@@ -750,6 +751,21 @@ fn configure_security(
         .default(config.security.wasm_sandbox)
         .interact()
         .map_err(|e| e.to_string())?;
+
+    config.security.docker.enabled = Confirm::with_theme(theme)
+        .with_prompt("Enable optional Docker sandbox for execute_command?")
+        .default(config.security.docker.enabled)
+        .interact()
+        .map_err(|e| e.to_string())?;
+
+    if config.security.docker.enabled {
+        let image: String = Input::with_theme(theme)
+            .with_prompt("Docker sandbox image")
+            .default(config.security.docker.image.clone())
+            .interact_text()
+            .map_err(|e| e.to_string())?;
+        config.security.docker.image = image;
+    }
 
     if config.security.secrets_encryption {
         let key_path = borgclaw_core::security::secrets_key_path(&config.security.secrets_path);
@@ -1382,6 +1398,14 @@ fn print_summary(config: &AppConfig) {
         config.security.wasm_max_instances
     );
     println!(
+        "{} {} (image={}, network={:?}, mount={:?})",
+        paint(INFO, "Docker sandbox:"),
+        config.security.docker.enabled,
+        config.security.docker.image,
+        config.security.docker.network,
+        config.security.docker.workspace_mount
+    );
+    println!(
         "{} {:?}",
         paint(INFO, "Registry:"),
         config.skills.registry_url
@@ -1420,6 +1444,7 @@ fn apply_component_action(
                     config.channels.remove(&chapter);
                 }
                 ("sandbox", "wasm") => config.security.wasm_sandbox = false,
+                ("sandbox", "docker") => config.security.docker.enabled = false,
                 ("memory", "sqlite") => {
                     config.memory.backend = MemoryBackend::Memory;
                     config.memory.hybrid_search = false;
@@ -1469,6 +1494,9 @@ fn apply_component_action(
                 }
                 ("sandbox", "wasm") => {
                     config.security.wasm_sandbox = true;
+                }
+                ("sandbox", "docker") => {
+                    config.security.docker.enabled = true;
                 }
                 ("memory", "sqlite") => {
                     config.memory.backend = MemoryBackend::Sqlite;
@@ -1554,7 +1582,7 @@ async fn reconfigure_section(
             "Channels",
             "Communication interfaces (Telegram, Signal, WebSocket, Webhook)",
         ),
-        ("Security", "WASM sandbox, secrets, encryption settings"),
+        ("Security", "WASM sandbox, optional Docker sandbox, secrets"),
         (
             "Memory",
             "SQLite settings, session management, context windows",

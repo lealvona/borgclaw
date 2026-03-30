@@ -15,10 +15,14 @@ pub use vault::{
 };
 pub use wasm::WasmSandbox;
 
-use super::config::{ApprovalMode, InjectionAction, LeakAction, SecurityConfig};
+use super::config::{
+    ApprovalMode, DockerNetworkPolicy, DockerSandboxConfig, DockerWorkspaceMount, InjectionAction,
+    LeakAction, SecurityConfig, WorkspacePolicyConfig,
+};
 use chrono::{Duration, Utc};
 use regex::Regex;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -572,6 +576,28 @@ impl SecurityLayer {
         &self.config.approval_mode
     }
 
+    pub fn docker_config(&self) -> &DockerSandboxConfig {
+        &self.config.docker
+    }
+
+    pub fn docker_enabled_for_tool(&self, tool_name: &str) -> bool {
+        self.config.docker.enabled
+            && self
+                .config
+                .docker
+                .allowed_tools
+                .iter()
+                .any(|name| name == tool_name)
+    }
+
+    pub fn effective_command_execution_mode(&self, tool_name: &str) -> CommandExecutionMode {
+        if self.docker_enabled_for_tool(tool_name) {
+            CommandExecutionMode::Docker
+        } else {
+            CommandExecutionMode::Host
+        }
+    }
+
     pub async fn request_approval(&self, tool_name: &str) -> String {
         let token = uuid::Uuid::new_v4().to_string();
         let pending = PendingApproval {
@@ -734,6 +760,48 @@ impl SecurityLayer {
             ApprovalMode::Autonomous => false,
         }
     }
+
+    pub async fn execute_command(
+        &self,
+        tool_name: &str,
+        command: &str,
+        workspace_root: &Path,
+        workspace_policy: &WorkspacePolicyConfig,
+        timeout_secs: u64,
+    ) -> Result<CommandExecutionResult, SecurityError> {
+        match self.check_command(command) {
+            CommandCheck::Allowed => {}
+            CommandCheck::Blocked(pattern) => {
+                return Err(SecurityError::ExecutionError(format!(
+                    "blocked command by policy: {}",
+                    pattern
+                )));
+            }
+        }
+
+        let timeout_secs = timeout_secs
+            .max(1)
+            .min(self.config.docker.timeout_seconds.max(1));
+        if self.effective_command_execution_mode(tool_name) == CommandExecutionMode::Docker {
+            execute_docker_command(
+                &self.config.docker,
+                command,
+                workspace_root,
+                workspace_policy,
+                timeout_secs,
+                docker_runtime_env(self).await,
+            )
+            .await
+        } else {
+            execute_host_command(
+                command,
+                workspace_root,
+                timeout_secs,
+                self.secret_env().await,
+            )
+            .await
+        }
+    }
 }
 
 impl Default for SecurityLayer {
@@ -871,6 +939,20 @@ pub enum CommandCheck {
     Blocked(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandExecutionMode {
+    Host,
+    Docker,
+}
+
+#[derive(Debug, Clone)]
+pub struct CommandExecutionResult {
+    pub output: String,
+    pub success: bool,
+    pub mode: CommandExecutionMode,
+    pub image: Option<String>,
+}
+
 /// Pairing status
 #[derive(Debug, Clone)]
 pub enum PairingStatus {
@@ -905,6 +987,242 @@ pub enum SecurityError {
     InjectionDetected,
     #[error("Blocked command")]
     BlockedCommand,
+    #[error("Execution error: {0}")]
+    ExecutionError(String),
+}
+
+async fn execute_host_command(
+    command: &str,
+    workspace_root: &Path,
+    timeout_secs: u64,
+    secret_env: HashMap<String, String>,
+) -> Result<CommandExecutionResult, SecurityError> {
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.arg("-lc")
+        .arg(command)
+        .current_dir(workspace_root)
+        .envs(secret_env)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs.max(1)),
+        cmd.output(),
+    )
+    .await
+    .map_err(|_| SecurityError::ExecutionError("command timed out".to_string()))?
+    .map_err(|err| SecurityError::ExecutionError(err.to_string()))?;
+
+    Ok(CommandExecutionResult {
+        output: combine_command_output(&output),
+        success: output.status.success(),
+        mode: CommandExecutionMode::Host,
+        image: None,
+    })
+}
+
+async fn execute_docker_command(
+    config: &DockerSandboxConfig,
+    command: &str,
+    workspace_root: &Path,
+    workspace_policy: &WorkspacePolicyConfig,
+    timeout_secs: u64,
+    envs: HashMap<String, String>,
+) -> Result<CommandExecutionResult, SecurityError> {
+    let invocation =
+        build_docker_invocation(config, workspace_root, workspace_policy, command, envs)?;
+    let mut cmd = tokio::process::Command::new("docker");
+    cmd.args(&invocation.args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs.max(1)),
+        cmd.output(),
+    )
+    .await
+    .map_err(|_| SecurityError::ExecutionError("command timed out".to_string()))?
+    .map_err(|err| SecurityError::ExecutionError(err.to_string()))?;
+
+    Ok(CommandExecutionResult {
+        output: combine_command_output(&output),
+        success: output.status.success(),
+        mode: CommandExecutionMode::Docker,
+        image: Some(config.image.clone()),
+    })
+}
+
+#[derive(Debug, Clone)]
+struct DockerInvocation {
+    args: Vec<String>,
+}
+
+fn build_docker_invocation(
+    config: &DockerSandboxConfig,
+    workspace_root: &Path,
+    workspace_policy: &WorkspacePolicyConfig,
+    command: &str,
+    envs: HashMap<String, String>,
+) -> Result<DockerInvocation, SecurityError> {
+    if config.image.trim().is_empty() {
+        return Err(SecurityError::ExecutionError(
+            "security.docker.image must not be empty".to_string(),
+        ));
+    }
+
+    let mut args = vec!["run".to_string(), "--rm".to_string()];
+
+    if config.read_only_rootfs {
+        args.push("--read-only".to_string());
+    }
+    if config.tmpfs {
+        args.push("--tmpfs".to_string());
+        args.push("/tmp:rw,noexec,nosuid,nodev".to_string());
+    }
+
+    args.push("--network".to_string());
+    args.push(match config.network {
+        DockerNetworkPolicy::None => "none".to_string(),
+        DockerNetworkPolicy::Bridge => "bridge".to_string(),
+    });
+
+    args.push("--memory".to_string());
+    args.push(format!("{}m", config.memory_limit_mb.max(1)));
+
+    if let Some(cpu_limit) = &config.cpu_limit {
+        if !cpu_limit.trim().is_empty() {
+            args.push("--cpus".to_string());
+            args.push(cpu_limit.clone());
+        }
+    }
+
+    for root in collect_docker_mount_roots(config, workspace_root, workspace_policy)? {
+        let mode = match config.workspace_mount {
+            DockerWorkspaceMount::ReadOnly => "ro",
+            DockerWorkspaceMount::ReadWrite => "rw",
+            DockerWorkspaceMount::Off => continue,
+        };
+        args.push("-v".to_string());
+        args.push(format!("{}:{}:{}", root.display(), root.display(), mode));
+    }
+
+    let workdir = match config.workspace_mount {
+        DockerWorkspaceMount::Off => PathBuf::from("/tmp"),
+        DockerWorkspaceMount::ReadOnly | DockerWorkspaceMount::ReadWrite => {
+            normalize_mount_path(workspace_root)
+        }
+    };
+    args.push("--workdir".to_string());
+    args.push(workdir.display().to_string());
+
+    let mut env_keys = envs.keys().cloned().collect::<Vec<_>>();
+    env_keys.sort();
+    for key in env_keys {
+        if let Some(value) = envs.get(&key) {
+            args.push("-e".to_string());
+            args.push(format!("{key}={value}"));
+        }
+    }
+
+    args.push(config.image.clone());
+    args.push("sh".to_string());
+    args.push("-lc".to_string());
+    args.push(command.to_string());
+
+    Ok(DockerInvocation { args })
+}
+
+fn collect_docker_mount_roots(
+    config: &DockerSandboxConfig,
+    workspace_root: &Path,
+    workspace_policy: &WorkspacePolicyConfig,
+) -> Result<Vec<PathBuf>, SecurityError> {
+    let mut roots = Vec::new();
+    if config.workspace_mount != DockerWorkspaceMount::Off {
+        roots.push(normalize_mount_path(workspace_root));
+    }
+
+    for root in &config.allowed_roots {
+        let normalized = normalize_mount_path(root);
+        if !path_allowed_by_workspace_policy(&normalized, workspace_root, workspace_policy) {
+            return Err(SecurityError::ExecutionError(format!(
+                "docker allowed root is outside workspace policy: {}",
+                normalized.display()
+            )));
+        }
+        if !roots.iter().any(|existing| existing == &normalized) {
+            roots.push(normalized);
+        }
+    }
+
+    Ok(roots)
+}
+
+fn normalize_mount_path(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(path)
+        }
+    })
+}
+
+fn path_allowed_by_workspace_policy(
+    path: &Path,
+    workspace_root: &Path,
+    workspace_policy: &WorkspacePolicyConfig,
+) -> bool {
+    let workspace_root = normalize_mount_path(workspace_root);
+    let candidate = normalize_mount_path(path);
+    let mut allowed_roots = vec![workspace_root.clone()];
+
+    if !workspace_policy.workspace_only {
+        for root in &workspace_policy.allowed_roots {
+            allowed_roots.push(normalize_mount_path(root));
+        }
+    }
+
+    if !allowed_roots.iter().any(|root| candidate.starts_with(root)) {
+        return false;
+    }
+
+    for forbidden in &workspace_policy.forbidden_paths {
+        let forbidden = if forbidden.is_absolute() {
+            normalize_mount_path(forbidden)
+        } else {
+            workspace_root.join(forbidden)
+        };
+        if candidate.starts_with(forbidden) {
+            return false;
+        }
+    }
+
+    true
+}
+
+async fn docker_runtime_env(security: &SecurityLayer) -> HashMap<String, String> {
+    let mut env = security.secret_env().await;
+    for key in &security.config.docker.extra_env_allowlist {
+        if let Ok(value) = std::env::var(key) {
+            env.insert(key.clone(), value);
+        }
+    }
+    env
+}
+
+fn combine_command_output(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if stderr.is_empty() {
+        stdout
+    } else if stdout.is_empty() {
+        stderr
+    } else {
+        format!("{}\n{}", stdout, stderr)
+    }
 }
 
 #[cfg(test)]
@@ -992,6 +1310,90 @@ mod tests {
             security.check_command("git status"),
             CommandCheck::Allowed
         ));
+    }
+
+    #[test]
+    fn docker_execution_mode_is_reported_for_execute_command() {
+        let security = SecurityLayer::with_config(SecurityConfig {
+            docker: crate::config::DockerSandboxConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+        assert_eq!(
+            security.effective_command_execution_mode("execute_command"),
+            CommandExecutionMode::Docker
+        );
+        assert_eq!(
+            security.effective_command_execution_mode("read_file"),
+            CommandExecutionMode::Host
+        );
+    }
+
+    #[test]
+    fn build_docker_invocation_uses_explicit_runtime_args() {
+        let workspace = std::env::temp_dir().join(format!(
+            "borgclaw_docker_invocation_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let config = crate::config::DockerSandboxConfig {
+            enabled: true,
+            image: "borgclaw-sandbox:base".to_string(),
+            network: crate::config::DockerNetworkPolicy::None,
+            workspace_mount: crate::config::DockerWorkspaceMount::ReadOnly,
+            ..Default::default()
+        };
+        let policy = WorkspacePolicyConfig::default();
+        let invocation = build_docker_invocation(
+            &config,
+            &workspace,
+            &policy,
+            "printf hello",
+            HashMap::from([("PATH".to_string(), "/usr/bin".to_string())]),
+        )
+        .unwrap();
+
+        assert_eq!(invocation.args[0], "run");
+        assert!(invocation.args.contains(&"--read-only".to_string()));
+        assert!(invocation.args.contains(&"--network".to_string()));
+        assert!(invocation
+            .args
+            .iter()
+            .any(|arg| arg == &format!("{}:{}:ro", workspace.display(), workspace.display())));
+        assert_eq!(
+            invocation.args.last().map(String::as_str),
+            Some("printf hello")
+        );
+
+        std::fs::remove_dir_all(&workspace).unwrap();
+    }
+
+    #[test]
+    fn docker_mount_roots_reject_paths_outside_workspace_policy() {
+        let workspace =
+            std::env::temp_dir().join(format!("borgclaw_docker_mounts_{}", uuid::Uuid::new_v4()));
+        let outside =
+            std::env::temp_dir().join(format!("borgclaw_docker_outside_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        let config = crate::config::DockerSandboxConfig {
+            enabled: true,
+            allowed_roots: vec![outside.clone()],
+            ..Default::default()
+        };
+        let policy = WorkspacePolicyConfig::default();
+        let error = collect_docker_mount_roots(&config, &workspace, &policy).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("docker allowed root is outside workspace policy"));
+
+        std::fs::remove_dir_all(&workspace).unwrap();
+        std::fs::remove_dir_all(&outside).unwrap();
     }
 
     #[test]

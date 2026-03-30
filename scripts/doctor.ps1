@@ -65,7 +65,7 @@ if (-not (Test-Tool "git" "Git version control" $true)) { $errors++ }
 Write-Host ""
 Write-Host "=== Optional Tools ===" -ForegroundColor White
 Test-Tool "node" "Node.js (for Playwright)" | Out-Null
-Test-Tool "docker" "Docker (for pgvector runtime)" | Out-Null
+Test-Tool "docker" "Docker (for pgvector runtime and command sandbox)" | Out-Null
 Test-Tool "psql" "PostgreSQL client" | Out-Null
 Test-Tool "ollama" "Ollama (embeddings runtime)" | Out-Null
 Test-Tool "signal-cli" "Signal CLI (for Signal channel)" | Out-Null
@@ -120,8 +120,15 @@ if (Test-Path ".local\tools\whisper.cpp") {
 
 if (Get-Command "docker" -ErrorAction SilentlyContinue) {
     Write-Host "✓ pgvector runtime installer available (run .\scripts\install-pgvector.ps1)" -ForegroundColor Green
+    docker image inspect borgclaw-sandbox:base *> $null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "✓ Docker sandbox image: borgclaw-sandbox:base" -ForegroundColor Green
+    } else {
+        Write-Host "○ Docker sandbox image: not built (run .\scripts\install-docker-sandbox.ps1)" -ForegroundColor Yellow
+    }
 } else {
     Write-Host "○ pgvector runtime not installable via helper script until Docker is available" -ForegroundColor Yellow
+    Write-Host "○ Docker command sandbox not installable via helper script until Docker is available" -ForegroundColor Yellow
 }
 
 if (Get-Command "ollama" -ErrorAction SilentlyContinue) {

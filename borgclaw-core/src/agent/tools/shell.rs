@@ -2,7 +2,6 @@ use super::{
     get_required_string, get_u64, require_tool_approval, truncate_output, PropertySchema, Tool,
     ToolResult, ToolRuntime, ToolSchema,
 };
-use crate::security::CommandCheck;
 use std::collections::HashMap;
 
 pub fn register(tools: &mut Vec<Tool>) {
@@ -59,50 +58,49 @@ pub async fn execute_command(
         return result;
     }
 
-    match runtime.security.check_command(&command) {
-        CommandCheck::Blocked(pattern) => {
+    let execution = match runtime
+        .security
+        .execute_command(
+            "execute_command",
+            &command,
+            &runtime.workspace_root,
+            &runtime.workspace_policy,
+            timeout_secs,
+        )
+        .await
+    {
+        Ok(result) => result,
+        Err(err) => {
             let actor = runtime
                 .invocation
                 .as_ref()
                 .map(|i| i.sender.id.clone())
                 .unwrap_or_else(|| "system".to_string());
+            let err_string = match err {
+                crate::security::SecurityError::ExecutionError(msg) => msg,
+                other => other.to_string(),
+            };
+            let blocked = err_string.contains("blocked command by policy");
+            let event_type = if blocked {
+                crate::security::AuditEventType::CommandBlocked
+            } else {
+                crate::security::AuditEventType::CommandExecution
+            };
             runtime
                 .audit
-                .log_command(&actor, &command, true, false)
+                .log(
+                    crate::security::AuditEntry::new(
+                        event_type,
+                        &actor,
+                        &command,
+                        if blocked { "blocked" } else { "failed" },
+                    )
+                    .with_success(false)
+                    .with_metadata("reason", err_string.clone()),
+                )
                 .await;
-            return ToolResult::err(format!("blocked command by policy: {}", pattern));
+            return ToolResult::err(err_string);
         }
-        CommandCheck::Allowed => {}
-    }
-
-    let mut cmd = tokio::process::Command::new("sh");
-    let secret_env = runtime.security.secret_env().await;
-    cmd.arg("-lc")
-        .arg(&command)
-        .current_dir(&runtime.workspace_root)
-        .envs(secret_env)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
-    let output = match tokio::time::timeout(
-        std::time::Duration::from_secs(timeout_secs),
-        cmd.output(),
-    )
-    .await
-    {
-        Ok(Ok(output)) => output,
-        Ok(Err(err)) => return ToolResult::err(err.to_string()),
-        Err(_) => return ToolResult::err("command timed out"),
-    };
-
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let combined = if stderr.is_empty() {
-        stdout
-    } else if stdout.is_empty() {
-        stderr
-    } else {
-        format!("{}\n{}", stdout, stderr)
     };
 
     let actor = runtime
@@ -110,15 +108,46 @@ pub async fn execute_command(
         .as_ref()
         .map(|i| i.sender.id.clone())
         .unwrap_or_else(|| "system".to_string());
-    let success = output.status.success();
-    runtime
-        .audit
-        .log_command(&actor, &command, false, success)
-        .await;
-
-    if success {
-        ToolResult::ok(truncate_output(&combined))
+    let audit_entry = crate::security::AuditEntry::new(
+        crate::security::AuditEventType::CommandExecution,
+        &actor,
+        &command,
+        if execution.success {
+            "executed"
+        } else {
+            "failed"
+        },
+    )
+    .with_success(execution.success)
+    .with_metadata(
+        "execution_mode",
+        match execution.mode {
+            crate::security::CommandExecutionMode::Host => "host",
+            crate::security::CommandExecutionMode::Docker => "docker",
+        },
+    );
+    let audit_entry = if let Some(image) = &execution.image {
+        audit_entry.with_metadata("docker_image", image)
     } else {
-        ToolResult::err(truncate_output(&combined))
+        audit_entry
+    };
+    runtime.audit.log(audit_entry).await;
+
+    if execution.success {
+        ToolResult::ok(truncate_output(&execution.output)).with_metadata(
+            "execution_mode",
+            match execution.mode {
+                crate::security::CommandExecutionMode::Host => "host",
+                crate::security::CommandExecutionMode::Docker => "docker",
+            },
+        )
+    } else {
+        ToolResult::err(truncate_output(&execution.output)).with_metadata(
+            "execution_mode",
+            match execution.mode {
+                crate::security::CommandExecutionMode::Host => "host",
+                crate::security::CommandExecutionMode::Docker => "docker",
+            },
+        )
     }
 }

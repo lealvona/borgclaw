@@ -108,17 +108,23 @@ workspace = ".project/workspace"
 
 [security]
 wasm_sandbox = true           # Enable WASM sandboxing
-docker_sandbox = true         # Enable Docker isolation
 command_blocklist = true      # Block dangerous commands
 secrets_encryption = true     # Encrypt stored secrets
 
+[security.docker]
+enabled = false               # Optional Docker sandbox for execute_command
+image = "borgclaw-sandbox:base"
+network = "none"
+workspace_mount = "ro"
+
 [memory]
+backend = "sqlite"
 database_path = ".project/memory"
 hybrid_search = true
 
 [channels.telegram]
 enabled = true
-bot_token = "${TELEGRAM_BOT_TOKEN}"
+token = "${TELEGRAM_BOT_TOKEN}"
 
 [channels.webhook]
 enabled = true

@@ -1173,9 +1173,9 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                         <div class="form-group">
                             <label>Approval Mode</label>
                             <select id="cfg-approval-mode" class="form-control">
-                                <option value="manual">Manual (ask for approval)</option>
-                                <option value="auto">Auto (execute automatically)</option>
-                                <option value="confirm">Confirm (show before execute)</option>
+                                <option value="readonly">ReadOnly</option>
+                                <option value="supervised">Supervised</option>
+                                <option value="autonomous">Autonomous</option>
                             </select>
                         </div>
                         <div class="form-group">
@@ -1199,6 +1199,35 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                         <div class="form-group">
                             <label>Command Blocklist (comma-separated)</label>
                             <input type="text" id="cfg-blocklist" class="form-control" placeholder="rm, del, format">
+                        </div>
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="cfg-docker-sandbox">
+                                Docker Sandbox For Commands
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label>Docker Image</label>
+                            <input type="text" id="cfg-docker-image" class="form-control" placeholder="borgclaw-sandbox:base">
+                        </div>
+                        <div class="form-group">
+                            <label>Docker Network</label>
+                            <select id="cfg-docker-network" class="form-control">
+                                <option value="none">none</option>
+                                <option value="bridge">bridge</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Workspace Mount</label>
+                            <select id="cfg-docker-workspace-mount" class="form-control">
+                                <option value="ro">ro</option>
+                                <option value="rw">rw</option>
+                                <option value="off">off</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Docker Timeout (seconds)</label>
+                            <input type="number" id="cfg-docker-timeout" class="form-control" placeholder="120">
                         </div>
                     </div>
                 </div>
@@ -1737,13 +1766,16 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
             
             // Security tab
             if (config.security) {
-                document.getElementById('cfg-approval-mode').value = config.security.approval_mode || 'manual';
+                document.getElementById('cfg-approval-mode').value = config.security.approval_mode || 'autonomous';
                 document.getElementById('cfg-prompt-injection').checked = config.security.prompt_injection_defense !== false;
                 document.getElementById('cfg-secret-leak').checked = config.security.secret_leak_detection !== false;
                 document.getElementById('cfg-wasm-sandbox').checked = config.security.wasm_sandbox !== false;
-                if (config.security.command_blocklist) {
-                    document.getElementById('cfg-blocklist').value = config.security.command_blocklist.join(', ');
-                }
+                document.getElementById('cfg-blocklist').value = (config.security.extra_blocked || []).join(', ');
+                document.getElementById('cfg-docker-sandbox').checked = config.security.docker?.enabled === true;
+                document.getElementById('cfg-docker-image').value = config.security.docker?.image || 'borgclaw-sandbox:base';
+                document.getElementById('cfg-docker-network').value = config.security.docker?.network || 'none';
+                document.getElementById('cfg-docker-workspace-mount').value = config.security.docker?.workspace_mount || 'ro';
+                document.getElementById('cfg-docker-timeout').value = config.security.docker?.timeout_seconds || 120;
             }
             
             // Memory tab
@@ -1816,8 +1848,15 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
             
             const blocklistVal = document.getElementById('cfg-blocklist').value.trim();
             if (blocklistVal) {
-                updates.security.command_blocklist = blocklistVal.split(',').map(s => s.trim()).filter(s => s);
+                updates.security.extra_blocked = blocklistVal.split(',').map(s => s.trim()).filter(s => s);
             }
+            updates.security.docker = {
+                enabled: document.getElementById('cfg-docker-sandbox').checked,
+                image: document.getElementById('cfg-docker-image').value.trim(),
+                network: document.getElementById('cfg-docker-network').value,
+                workspace_mount: document.getElementById('cfg-docker-workspace-mount').value,
+                timeout_seconds: parseInt(document.getElementById('cfg-docker-timeout').value) || 120
+            };
             
             // Collect memory settings
             updates.memory.backend = document.getElementById('cfg-memory-backend').value;
@@ -2658,6 +2697,15 @@ async fn api_config(State(state): State<GatewayState>) -> impl IntoResponse {
             "secret_leak_detection": state.config.security.secret_leak_detection,
             "wasm_sandbox": state.config.security.wasm_sandbox,
             "command_blocklist": state.config.security.command_blocklist,
+            "extra_blocked": state.config.security.extra_blocked,
+            "docker": {
+                "enabled": state.config.security.docker.enabled,
+                "image": state.config.security.docker.image,
+                "network": state.config.security.docker.network,
+                "workspace_mount": state.config.security.docker.workspace_mount,
+                "timeout_seconds": state.config.security.docker.timeout_seconds,
+                "allowed_tools": state.config.security.docker.allowed_tools,
+            },
         },
         "skills": {
             "github_configured": !state.config.skills.github.token.is_empty(),
@@ -2713,6 +2761,17 @@ struct SecurityConfigUpdate {
     prompt_injection_defense: Option<bool>,
     secret_leak_detection: Option<bool>,
     wasm_sandbox: Option<bool>,
+    extra_blocked: Option<Vec<String>>,
+    docker: Option<DockerConfigUpdate>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct DockerConfigUpdate {
+    enabled: Option<bool>,
+    image: Option<String>,
+    network: Option<String>,
+    workspace_mount: Option<String>,
+    timeout_seconds: Option<u64>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -2820,6 +2879,50 @@ async fn api_config_post(
         if let Some(wasm_sandbox) = security.wasm_sandbox {
             updated_config.security.wasm_sandbox = wasm_sandbox;
             changes_made.push(format!("security.wasm_sandbox = {}", wasm_sandbox));
+        }
+        if let Some(extra_blocked) = security.extra_blocked {
+            updated_config.security.extra_blocked = extra_blocked.clone();
+            changes_made.push(format!(
+                "security.extra_blocked = {} entries",
+                extra_blocked.len()
+            ));
+        }
+        if let Some(docker) = security.docker {
+            if let Some(enabled) = docker.enabled {
+                updated_config.security.docker.enabled = enabled;
+                changes_made.push(format!("security.docker.enabled = {}", enabled));
+            }
+            if let Some(image) = docker.image {
+                updated_config.security.docker.image = image.clone();
+                changes_made.push(format!("security.docker.image = {}", image));
+            }
+            if let Some(network) = docker.network {
+                updated_config.security.docker.network = match network.as_str() {
+                    "bridge" | "Bridge" => borgclaw_core::config::DockerNetworkPolicy::Bridge,
+                    _ => borgclaw_core::config::DockerNetworkPolicy::None,
+                };
+                changes_made.push(format!("security.docker.network = {}", network));
+            }
+            if let Some(workspace_mount) = docker.workspace_mount {
+                updated_config.security.docker.workspace_mount = match workspace_mount.as_str() {
+                    "rw" | "readwrite" | "ReadWrite" => {
+                        borgclaw_core::config::DockerWorkspaceMount::ReadWrite
+                    }
+                    "off" | "Off" => borgclaw_core::config::DockerWorkspaceMount::Off,
+                    _ => borgclaw_core::config::DockerWorkspaceMount::ReadOnly,
+                };
+                changes_made.push(format!(
+                    "security.docker.workspace_mount = {}",
+                    workspace_mount
+                ));
+            }
+            if let Some(timeout_seconds) = docker.timeout_seconds {
+                updated_config.security.docker.timeout_seconds = timeout_seconds;
+                changes_made.push(format!(
+                    "security.docker.timeout_seconds = {}",
+                    timeout_seconds
+                ));
+            }
         }
     }
 
@@ -3127,6 +3230,34 @@ async fn api_doctor(State(state): State<GatewayState>) -> impl IntoResponse {
         "name": "command_blocklist",
         "status": if blocklist_works { "ok" } else { "error" }
     }));
+
+    if state.config.security.docker.enabled {
+        let docker_available = std::process::Command::new("docker")
+            .arg("--version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+        checks.push(serde_json::json!({
+            "name": "docker_runtime",
+            "status": if docker_available { "ok" } else { "error" },
+            "message": if docker_available {
+                format!(
+                    "Docker sandbox enabled (image={}, network={:?}, mount={:?})",
+                    state.config.security.docker.image,
+                    state.config.security.docker.network,
+                    state.config.security.docker.workspace_mount
+                )
+            } else {
+                "Docker sandbox enabled but docker binary is unavailable".to_string()
+            }
+        }));
+    } else {
+        checks.push(serde_json::json!({
+            "name": "docker_runtime",
+            "status": "info",
+            "message": "Docker sandbox disabled"
+        }));
+    }
 
     // Skills path check
     if state.config.skills.skills_path.exists() {

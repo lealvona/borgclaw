@@ -88,7 +88,8 @@ The visual configuration editor lets you modify settings without editing `config
 - **Prompt Injection Defense** — Detect and block injection attempts
 - **Secret Leak Detection** — Scan outputs for exposed secrets
 - **WASM Sandbox** — Isolate plugin execution
-- **Command Blocklist** — Comma-separated list of blocked commands (e.g., `rm, del, format`)
+- **Command Blocklist** — Comma-separated extra blocked command patterns
+- **Docker Sandbox** — Optional containerized `execute_command` path with image, network, workspace-mount, and timeout controls
 
 **Memory Tab**
 - **Memory Backend** — Switch between SQLite, PostgreSQL, and in-memory storage
@@ -124,6 +125,8 @@ curl http://localhost:3000/api/config
 Response includes all configuration sections: agent, channels, memory, security, skills, mcp.
 
 The `memory` section includes backend-specific status fields such as `backend`, `database_path`, `connection_configured`, and `embedding_endpoint`.
+
+The `security` section includes Docker sandbox state under `security.docker`.
 
 **POST /api/config**
 Update configuration programmatically:
@@ -168,6 +171,7 @@ Run comprehensive health checks:
 - Workspace directory
 - Memory database
 - Security layer
+- Docker runtime when the Docker sandbox is enabled
 - Skills path
 - Scheduler state
 - Heartbeat state

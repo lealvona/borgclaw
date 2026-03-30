@@ -820,8 +820,8 @@ async fn status(config: AppConfig) {
         }
     );
     println!(
-        "Security: wasm_sandbox={}, approval={:?}",
-        config.security.wasm_sandbox, config.security.approval_mode
+        "Security: wasm_sandbox={}, docker_sandbox={}, approval={:?}",
+        config.security.wasm_sandbox, config.security.docker.enabled, config.security.approval_mode
     );
     println!("Security policy: {}", security_policy_status(&config));
     println!(
@@ -1139,6 +1139,23 @@ fn memory_backend_label(backend: MemoryBackend) -> &'static str {
         MemoryBackend::Sqlite => "sqlite",
         MemoryBackend::Postgres => "postgres",
         MemoryBackend::Memory => "memory",
+    }
+}
+
+fn docker_network_label(network: borgclaw_core::config::DockerNetworkPolicy) -> &'static str {
+    match network {
+        borgclaw_core::config::DockerNetworkPolicy::None => "none",
+        borgclaw_core::config::DockerNetworkPolicy::Bridge => "bridge",
+    }
+}
+
+fn docker_workspace_mount_label(
+    mount: borgclaw_core::config::DockerWorkspaceMount,
+) -> &'static str {
+    match mount {
+        borgclaw_core::config::DockerWorkspaceMount::ReadOnly => "ro",
+        borgclaw_core::config::DockerWorkspaceMount::ReadWrite => "rw",
+        borgclaw_core::config::DockerWorkspaceMount::Off => "off",
     }
 }
 
@@ -1709,7 +1726,7 @@ fn cli_path_available(binary: &std::path::Path) -> bool {
 
 fn security_policy_status(config: &AppConfig) -> String {
     format!(
-        "pairing={}({} digits/{}s), prompt_injection={}({:?}), leak_detection={}({:?}), blocklist={}+{}, allowlist={}, wasm_instances={}",
+        "pairing={}({} digits/{}s), prompt_injection={}({:?}), leak_detection={}({:?}), blocklist={}+{}, allowlist={}, wasm_instances={}, docker={}({}/{}, image={}, timeout={}s)",
         enabled_disabled(config.security.pairing.enabled),
         config.security.pairing.code_length,
         config.security.pairing.expiry_seconds,
@@ -1720,7 +1737,12 @@ fn security_policy_status(config: &AppConfig) -> String {
         enabled_disabled(config.security.command_blocklist),
         config.security.extra_blocked.len(),
         config.security.allowed_commands.len(),
-        config.security.wasm_max_instances
+        config.security.wasm_max_instances,
+        enabled_disabled(config.security.docker.enabled),
+        docker_network_label(config.security.docker.network),
+        docker_workspace_mount_label(config.security.docker.workspace_mount),
+        config.security.docker.image,
+        config.security.docker.timeout_seconds
     )
 }
 
@@ -1757,6 +1779,15 @@ fn security_doctor_lines(config: &AppConfig) -> Vec<String> {
             config.security.wasm_max_instances
         ),
         format!(
+            "{} Docker sandbox {} (image={}, network={}, mount={}, timeout={}s)",
+            marker(!config.security.docker.enabled || cli_path_available(&PathBuf::from("docker"))),
+            enabled_disabled(config.security.docker.enabled),
+            config.security.docker.image,
+            docker_network_label(config.security.docker.network),
+            docker_workspace_mount_label(config.security.docker.workspace_mount),
+            config.security.docker.timeout_seconds
+        ),
+        format!(
             "{} Command blocklist {} (extra_patterns={})",
             marker(config.security.command_blocklist),
             enabled_disabled(config.security.command_blocklist),
@@ -1788,6 +1819,30 @@ fn security_doctor_lines(config: &AppConfig) -> Vec<String> {
         marker(config.security.workspace.workspace_only),
         workspace_status
     ));
+
+    if config.security.docker.enabled {
+        lines.push(format!(
+            "{} Docker binary {}",
+            marker(cli_path_available(&PathBuf::from("docker"))),
+            if cli_path_available(&PathBuf::from("docker")) {
+                "available"
+            } else {
+                "missing"
+            }
+        ));
+        lines.push(format!(
+            "{} Docker allowed tools {}",
+            marker(
+                config
+                    .security
+                    .docker
+                    .allowed_tools
+                    .iter()
+                    .any(|name| name == "execute_command")
+            ),
+            config.security.docker.allowed_tools.join(", ")
+        ));
+    }
 
     lines
 }

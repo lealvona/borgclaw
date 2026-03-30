@@ -14,6 +14,25 @@ Use it for two things:
 1. Understand which upstream project is the best model for a given BorgClaw subsystem.
 2. Cross-check BorgClaw roadmap items, stubs, and rough edges against upstream implementations that already solved similar problems well.
 
+## Index
+
+Use this index when you need a fast path to the relevant inspiration area.
+
+### Sandbox Improvements
+
+- **Docker sandbox strategy**: [OpenClaw](#openclaw), [NanoClaw](#nanoclaw), and the [Docker appendix](#appendix-docker-sandbox-implementation-focus)
+- **WASM sandbox and unified execution pipeline**: [IronClaw](#ironclaw), [OpenClaw](#openclaw), and [Security ownership and policy depth](#security-ownership-and-policy-depth)
+- **Sandbox inheritance across subagent, heartbeat, and scheduled execution**: [NanoClaw](#nanoclaw), [PicoClaw](#picoclaw), and the [Docker appendix](#appendix-docker-sandbox-implementation-focus)
+- **Typed sandbox policy/config design**: [ZeroClaw](#zeroclaw) and the [Docker appendix](#appendix-docker-sandbox-implementation-focus)
+- **Implemented BorgClaw sandbox baseline**: [docs/security.md](security.md) for the current WASM contract, plus [Implementation Status](implementation-status.md) for what is actually complete
+
+### Other Major Areas
+
+- **Onboarding and control plane**: [OpenClaw](#openclaw)
+- **Core Rust subsystem boundaries**: [ZeroClaw](#zeroclaw)
+- **Background execution and retries**: [TinyClaw](#tinyclaw) and [PicoClaw](#picoclaw)
+- **Skills and tool lifecycle**: [OpenClaw](#openclaw), [IronClaw](#ironclaw), and [Skills and integration lifecycle](#skills-and-integration-lifecycle)
+
 ## Upstream Follow-Up: March 25, 2026
 
 Recent upstream movement:
@@ -118,11 +137,11 @@ The sources here are the public GitHub repositories cited by BorgClaw's own docu
 
 | Project | What It Does Well | Best BorgClaw Use |
 |---|---|---|
-| OpenClaw | Operational product surface, wizard UX, gateway/control plane, skills lifecycle | Onboarding, gateway UX, managed skills, transport consistency |
-| ZeroClaw | Trait-driven subsystem boundaries, auth profiles, runtime/security policy | Core Rust architecture, config shape, provider/channel/tool abstractions |
-| NanoClaw | Container-first isolation and always-on orchestration | Safe execution defaults for remote transports and scheduled jobs |
-| IronClaw | Security pipeline and unified tool registry model | SecurityLayer hardening, MCP/WASM/tool execution unification |
-| PicoClaw | Minimal but explicit runtime contracts, workspace boundary consistency, heartbeat/subagent story | Session/workspace layout, heartbeat semantics, subagent inheritance rules |
+| OpenClaw | Operational product surface, wizard UX, gateway/control plane, skills lifecycle, split sandbox images | Onboarding, gateway UX, managed skills, transport consistency, Docker sandbox structure |
+| ZeroClaw | Trait-driven subsystem boundaries, auth profiles, runtime/security policy | Core Rust architecture, config shape, provider/channel/tool abstractions, typed sandbox policy |
+| NanoClaw | Container-first isolation and always-on orchestration | Safe execution defaults for remote transports, scheduled jobs, and Docker inheritance rules |
+| IronClaw | Security pipeline and unified tool registry model | SecurityLayer hardening, MCP/WASM/tool execution unification, pipeline-owned sandboxing |
+| PicoClaw | Minimal but explicit runtime contracts, workspace boundary consistency, heartbeat/subagent story | Session/workspace layout, heartbeat semantics, subagent inheritance rules, sandbox inheritance |
 | TinyClaw | Explicit multi-agent queueing, retries, isolated workspaces | Background task execution, task status, dead-letter/retry design |
 
 ## OpenClaw
@@ -419,3 +438,149 @@ These upstream projects are inspiration, not templates.
 - Do not copy TinyClaw's multi-agent behavior until BorgClaw defines ordering, retries, cancellation, and workspace isolation as hard contracts.
 
 The right move is usually: borrow the contract, not the syntax.
+
+## Appendix: Docker Sandbox Implementation Focus
+
+This appendix narrows the upstream inspiration into an implementation guide for BorgClaw's still-unimplemented optional Docker sandbox.
+
+Status note:
+- BorgClaw currently ships WASM sandboxing as the implemented sandbox contract.
+- The older `docker_sandbox = true` snippet was cut because the repo did not have a real implementation behind it.
+- This appendix is intentionally design-focused. It does not mark Docker sandboxing as implemented.
+
+### What the upstreams imply
+
+OpenClaw contribution:
+- Split sandboxing by execution context instead of treating "sandbox" as one toggle.
+- Use distinct container images for general command execution versus browser automation.
+- Distinguish trusted main-session execution from more restricted non-main-session or delegated execution.
+
+NanoClaw contribution:
+- Treat container isolation as part of the runtime contract for remote transports and background work, not as an optional afterthought buried in docs.
+- Prefer deterministic local bootstrap and operational scripts so the isolation runtime is installable, inspectable, and reproducible.
+
+PicoClaw contribution:
+- The same workspace policy must apply to main agent, subagent, heartbeat, and scheduled execution paths.
+- Sandbox boundaries should inherit automatically instead of depending on each callsite to remember extra checks.
+
+ZeroClaw contribution:
+- The sandbox needs a typed policy object, not just a boolean.
+- Runtime policy should define mounts, command allowlists, network policy, and time/resource limits explicitly.
+
+IronClaw contribution:
+- Docker isolation should be one stage inside the security pipeline, not a replacement for approval, leak scanning, or workspace policy.
+- Tool dispatch semantics should stay unified whether execution happens on host or in a container.
+
+### Recommended BorgClaw Contract
+
+If BorgClaw revives Docker sandboxing, the contract should look like this:
+
+- Keep `wasm_sandbox` as the plugin sandbox.
+- Add a separate Docker execution policy for host-process tools, especially `execute_command` and any future shell-like runtime helpers.
+- Do not route all tools through Docker. Pure API clients, in-process memory operations, and normal provider calls should stay out of the container path.
+- Make scheduled jobs, heartbeat tasks, and subagent command execution inherit the same Docker policy automatically when they invoke command-like tools.
+- Keep local CLI ergonomics by allowing host execution when policy says so, but default remote/background command execution toward container isolation once the feature exists.
+
+### Recommended Config Shape
+
+Do not restore a bare `docker_sandbox = true` flag by itself. A typed config is the safer contract:
+
+```toml
+[security.docker]
+enabled = false
+image = "ghcr.io/lealvona/borgclaw-sandbox:base"
+network = "none"            # "none", "bridge"
+workspace_mount = "rw"      # "ro", "rw", "none"
+tmpfs = true
+memory_limit_mb = 512
+cpu_limit = 1.0
+timeout_seconds = 120
+allowed_tools = ["execute_command"]
+allowed_roots = [".borgclaw/workspace"]
+extra_env_allowlist = ["PATH", "HOME"]
+```
+
+Why this shape:
+- `enabled` alone is not enough; image and resource policy are part of the contract.
+- `allowed_tools` prevents silent expansion of Dockerized execution to unrelated tools.
+- `workspace_mount` and `allowed_roots` make filesystem exposure auditable.
+- `network` must be explicit because it changes the threat model materially.
+
+### Recommended Execution Scope
+
+Phase 1 scope:
+- `execute_command`
+- any future shell/PTy execution tool
+
+Phase 2 scope:
+- browser bridge helpers if BorgClaw later adopts a containerized browser image
+- selected MCP stdio servers only if they are explicitly marked container-safe
+
+Out of scope for the first implementation:
+- in-process memory backends
+- provider HTTP calls
+- regular GitHub/Google API wrappers
+- WASM plugins, which already have a separate sandbox contract
+
+### Filesystem and Process Model
+
+Recommended first implementation:
+- one ephemeral container per command execution
+- bind mount only the configured workspace roots
+- mount workspace read-write only when the workspace policy already allows writes
+- run with read-only root filesystem plus a tmpfs working area when practical
+- no Docker socket passthrough
+- no privileged mode
+- no host PID/network namespace sharing
+
+Why:
+- it fits BorgClaw's existing per-tool approval model
+- it avoids state leakage between unrelated tool invocations
+- it is easier to reason about in tests than a long-lived worker container
+
+### Security Pipeline Placement
+
+The Docker path should be:
+
+1. workspace/security policy validation
+2. approval check
+3. secret injection filtering
+4. Docker command construction
+5. container execution
+6. output leak scan and redaction
+7. audit logging
+
+This keeps Docker isolation subordinate to `SecurityLayer` rather than creating a parallel trust path.
+
+### Runtime Images
+
+Recommended image split:
+- base sandbox image for shell/command tools
+- browser sandbox image only if browser automation is later containerized
+
+The repo should eventually version and publish these explicitly, following the OpenClaw pattern of separate sandbox Dockerfiles instead of one catch-all image.
+
+### Minimum Implementation Checklist
+
+- add typed `security.docker` config parsing and validation
+- add a Docker execution adapter owned by `SecurityLayer` or the shared tool runtime
+- route `execute_command` through host or Docker based on policy
+- make subagent, scheduler, and heartbeat command execution reuse the same path
+- add `doctor` checks for Docker binary availability and configured image/runtime policy
+- add bootstrap/install scripts for required images
+- add tests for:
+  - policy parsing
+  - host vs Docker routing
+  - mount/path restriction enforcement
+  - approval behavior in supervised mode
+  - background execution inheritance
+
+### What BorgClaw should copy
+
+These are still unimplemented inspiration items and should remain tracked until code and tests exist:
+
+- OpenClaw: execution-context-specific sandbox modes with separate images
+- NanoClaw: containerized default for higher-risk remote/background command execution
+- PicoClaw: inherited sandbox/workspace restrictions across main agent, subagent, and heartbeat
+- ZeroClaw: typed Docker runtime policy object instead of a boolean switch
+- IronClaw: Docker execution embedded inside one security pipeline, not as a side system
