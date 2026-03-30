@@ -19,7 +19,7 @@ Audit note:
 | Provider-backed agent runtime | `complete` | Shared routed provider execution is landed. |
 | Shared channel routing | `complete` | CLI, gateway, webhook, and channel policy flow through the shared router. |
 | WebSocket gateway auth/events | `complete` | Auth, pairing, error, heartbeat, and control-plane events are implemented. |
-| SQLite memory + group isolation | `complete` | Metadata round-trip, isolation, recall, and compaction are implemented. |
+| Memory backends + group isolation | `complete` | SQLite, PostgreSQL, and in-memory backends share metadata round-trip, isolation, recall, and compaction-facing runtime integration. |
 | Solution memory | `complete` | Documented public structs and search helpers are aligned. |
 | Heartbeat engine | `complete` | Core engine, persistence, retries, enable/disable flow, operator visibility, and manual CLI trigger execution against persisted state are landed. |
 | Scheduler | `complete` | Execution loop, timeout/concurrency policy, retries/dead-letter behavior, persisted job state, bounded run history, restart-recovery coverage, catch-up/recovery semantics, and full operator CRUD (list, show, create, delete, pause, resume) are all landed. |
@@ -99,6 +99,7 @@ Audit note:
 - ✅ System prompt date/time injection
 - ✅ Session compaction with token counting
 - ✅ Hybrid search with HTTP embedding provider
+- ✅ Explicit memory backend selection with SQLite, PostgreSQL, and in-memory modes
 
 ## Temporary Limitations
 

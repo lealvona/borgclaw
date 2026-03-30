@@ -2539,13 +2539,23 @@ async fn api_health(State(state): State<GatewayState>) -> impl IntoResponse {
         serde_json::json!(if workspace_ok { "ok" } else { "error" }),
     );
 
-    let memory_db_ok = state
-        .config
-        .memory
-        .database_path
-        .parent()
-        .map(|p| p.exists())
-        .unwrap_or(true);
+    let memory_db_ok = match state.config.memory.effective_backend() {
+        borgclaw_core::config::MemoryBackend::Sqlite => state
+            .config
+            .memory
+            .database_path
+            .parent()
+            .map(|p| p.exists())
+            .unwrap_or(true),
+        borgclaw_core::config::MemoryBackend::Postgres => state
+            .config
+            .memory
+            .connection_string
+            .as_ref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false),
+        borgclaw_core::config::MemoryBackend::Memory => true,
+    };
     checks.insert(
         "memory_db".to_string(),
         serde_json::json!(if memory_db_ok { "ok" } else { "error" }),
@@ -2616,7 +2626,9 @@ async fn api_config(State(state): State<GatewayState>) -> impl IntoResponse {
         },
         "channels": state.config.channels,
         "memory": {
+            "backend": state.config.memory.effective_backend(),
             "database_path": state.config.memory.database_path,
+            "connection_configured": state.config.memory.connection_string.as_ref().map(|value| !value.trim().is_empty()).unwrap_or(false),
             "hybrid_search": state.config.memory.hybrid_search,
             "session_max_entries": state.config.memory.session_max_entries,
         },
@@ -2669,7 +2681,9 @@ struct AgentConfigUpdate {
 
 #[derive(Debug, serde::Deserialize)]
 struct MemoryConfigUpdate {
+    backend: Option<String>,
     hybrid_search: Option<bool>,
+    connection_string: Option<String>,
     session_max_entries: Option<usize>,
 }
 
@@ -2717,9 +2731,21 @@ async fn api_config_post(
 
     // Update memory config
     if let Some(memory) = body.memory {
+        if let Some(backend) = memory.backend {
+            updated_config.memory.backend = match backend.as_str() {
+                "postgres" | "Postgres" => borgclaw_core::config::MemoryBackend::Postgres,
+                "memory" | "Memory" => borgclaw_core::config::MemoryBackend::Memory,
+                _ => borgclaw_core::config::MemoryBackend::Sqlite,
+            };
+            changes_made.push(format!("memory.backend = {}", backend));
+        }
         if let Some(hybrid_search) = memory.hybrid_search {
             updated_config.memory.hybrid_search = hybrid_search;
             changes_made.push(format!("memory.hybrid_search = {}", hybrid_search));
+        }
+        if let Some(connection_string) = memory.connection_string {
+            updated_config.memory.connection_string = Some(connection_string);
+            changes_made.push("memory.connection_string = [redacted]".to_string());
         }
         if let Some(session_max_entries) = memory.session_max_entries {
             updated_config.memory.session_max_entries = session_max_entries;
@@ -3030,12 +3056,33 @@ async fn api_doctor(State(state): State<GatewayState>) -> impl IntoResponse {
         checks.push(serde_json::json!({"name": "workspace", "status": "error", "message": "Workspace directory does not exist"}));
     }
 
-    // Memory database check
-    if let Some(parent) = state.config.memory.database_path.parent() {
-        if parent.exists() || parent == std::path::Path::new("") {
-            checks.push(serde_json::json!({"name": "memory_db", "status": "ok"}));
-        } else {
-            checks.push(serde_json::json!({"name": "memory_db", "status": "error", "message": "Memory database parent directory missing"}));
+    // Memory backend check
+    match state.config.memory.effective_backend() {
+        borgclaw_core::config::MemoryBackend::Sqlite => {
+            if let Some(parent) = state.config.memory.database_path.parent() {
+                if parent.exists() || parent == std::path::Path::new("") {
+                    checks.push(serde_json::json!({"name": "memory_db", "status": "ok"}));
+                } else {
+                    checks.push(serde_json::json!({"name": "memory_db", "status": "error", "message": "Memory database parent directory missing"}));
+                }
+            }
+        }
+        borgclaw_core::config::MemoryBackend::Postgres => {
+            if state
+                .config
+                .memory
+                .connection_string
+                .as_ref()
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false)
+            {
+                checks.push(serde_json::json!({"name": "memory_db", "status": "ok", "message": "Postgres connection configured"}));
+            } else {
+                checks.push(serde_json::json!({"name": "memory_db", "status": "error", "message": "Postgres connection_string missing"}));
+            }
+        }
+        borgclaw_core::config::MemoryBackend::Memory => {
+            checks.push(serde_json::json!({"name": "memory_db", "status": "ok", "message": "In-memory backend configured"}));
         }
     }
 

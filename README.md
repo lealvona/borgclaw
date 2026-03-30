@@ -33,7 +33,7 @@ Every face absorbs a different capability. Together, they form something greater
 | Face | Dimension | What We Absorb |
 |:----:|:----------|:---------------|
 | ⬆️ **Top** | Channels | Telegram, Signal, Webhooks, CLI, WebSocket |
-| ⬇️ **Bottom** | Memory | Hybrid SQLite+FTS5, contexts, patterns |
+| ⬇️ **Bottom** | Memory | SQLite, PostgreSQL, in-memory, contexts, patterns |
 | ⬅️ **Left** | Skills | GitHub, Google, Browser, STT/TTS, Images |
 | ➡️ **Right** | Security | WASM sandbox, SSRF, vault, injection defense |
 | 🔲 **Front** | Providers | OpenAI, Anthropic, Google, Kimi, MiniMax, Z.ai, Ollama |
@@ -103,7 +103,8 @@ Every channel becomes an extension of the same mind:
 
 Shared consciousness across all interactions:
 
-- **Hybrid Search** — SQLite + FTS5 full-text search
+- **Backend Selection** — SQLite by default, with PostgreSQL and in-memory modes available
+- **Hybrid Search** — Full-text recall with optional embedding-assisted ranking
 - **Per-Group Isolation** — Separate contexts per collective node
 - **Session Auto-Compaction** — Configurable context window management
 - **Solution Patterns** — Knowledge propagation across the collective

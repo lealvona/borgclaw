@@ -1,19 +1,25 @@
 //! Memory module - hybrid vector + keyword search with per-group isolation
 
 mod heartbeat;
+mod in_memory;
+mod postgres;
 mod session;
 mod solution;
 mod storage;
 
 pub use heartbeat::{HeartbeatEngine, HeartbeatResult, HeartbeatTask};
+pub use in_memory::InMemoryMemory;
+pub use postgres::PostgresMemory;
 pub use session::{SessionCompactor, SessionMemory, SessionMessage};
 pub use solution::{Solution, SolutionMemory, SolutionPattern};
 pub use storage::SqliteMemory;
 
+use crate::config::{MemoryBackend, MemoryConfig};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Memory entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,6 +191,27 @@ pub struct NoOpEmbeddingProvider;
 impl EmbeddingProvider for NoOpEmbeddingProvider {
     async fn embed(&self, _text: &str) -> Result<Vec<f32>, MemoryError> {
         Ok(Vec::new())
+    }
+}
+
+pub async fn create_memory_backend(config: &MemoryConfig) -> Result<Arc<dyn Memory>, MemoryError> {
+    match config.effective_backend() {
+        MemoryBackend::Sqlite => {
+            let memory = Arc::new(SqliteMemory::new(config.database_path.clone()));
+            memory.init().await?;
+            Ok(memory)
+        }
+        MemoryBackend::Postgres => {
+            let connection_string = config.connection_string.clone().ok_or_else(|| {
+                MemoryError::StorageError(
+                    "memory.connection_string is required for postgres backend".to_string(),
+                )
+            })?;
+            let memory = Arc::new(PostgresMemory::new(connection_string));
+            memory.init().await?;
+            Ok(memory)
+        }
+        MemoryBackend::Memory => Ok(Arc::new(InMemoryMemory::new())),
     }
 }
 

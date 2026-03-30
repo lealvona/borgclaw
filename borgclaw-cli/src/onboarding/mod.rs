@@ -5,7 +5,7 @@ use crate::onboarding::colors::{
     banner, paint, HEADER, INFO, MANDATORY, OPTIONAL, PROMPT, SUCCESS, WARN,
 };
 use crate::onboarding::providers::{ProviderDef, ProviderRegistry};
-use borgclaw_core::config::{AppConfig, DmPolicy};
+use borgclaw_core::config::{AppConfig, DmPolicy, MemoryBackend};
 use borgclaw_core::security::SecurityLayer;
 use clap::Args;
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Password, Select};
@@ -778,7 +778,7 @@ fn configure_memory(
     }
     let choices = vec![
         "SQLite + FTS5 (default)",
-        "PostgreSQL + pgvector",
+        "PostgreSQL (native backend)",
         "In-memory only",
     ];
     let idx = Select::with_theme(theme)
@@ -789,8 +789,9 @@ fn configure_memory(
         .map_err(|e| e.to_string())?;
     match idx {
         1 => {
+            config.memory.backend = MemoryBackend::Postgres;
             config.memory.vector_provider = "postgres".to_string();
-            let _conn = build_postgres_connection(theme)?;
+            config.memory.connection_string = Some(build_postgres_connection(theme)?);
             config
                 .memory
                 .database_path
@@ -808,10 +809,14 @@ fn configure_memory(
         }
         2 => {
             config.memory.hybrid_search = false;
+            config.memory.backend = MemoryBackend::Memory;
             config.memory.vector_provider = "memory".to_string();
+            config.memory.connection_string = None;
         }
         _ => {
+            config.memory.backend = MemoryBackend::Sqlite;
             config.memory.vector_provider = "sqlite".to_string();
+            config.memory.connection_string = None;
         }
     }
     Ok(())
@@ -1412,8 +1417,20 @@ fn apply_component_action(
                     config.channels.remove(&chapter);
                 }
                 ("sandbox", "wasm") => config.security.wasm_sandbox = false,
-                ("memory", "sqlite") => config.memory.hybrid_search = false,
-                ("memory", "vector") => config.memory.vector_provider = "sqlite".to_string(),
+                ("memory", "sqlite") => {
+                    config.memory.backend = MemoryBackend::Memory;
+                    config.memory.hybrid_search = false;
+                    config.memory.vector_provider = "memory".to_string();
+                }
+                ("memory", "vector") => {
+                    config.memory.backend = MemoryBackend::Sqlite;
+                    config.memory.vector_provider = "sqlite".to_string();
+                }
+                ("memory", "postgres") => {
+                    config.memory.backend = MemoryBackend::Sqlite;
+                    config.memory.connection_string = None;
+                    config.memory.vector_provider = "sqlite".to_string();
+                }
                 ("provider", provider) if config.agent.provider == provider => {
                     config.agent.provider = AppConfig::default().agent.provider;
                     config.agent.model = AppConfig::default().agent.model;
@@ -1449,13 +1466,23 @@ fn apply_component_action(
                     config.security.wasm_sandbox = true;
                 }
                 ("memory", "sqlite") => {
+                    config.memory.backend = MemoryBackend::Sqlite;
                     config.memory.hybrid_search = true;
+                    config.memory.connection_string = None;
                     config.memory.vector_provider = "sqlite".to_string();
                 }
                 ("memory", "vector") => {
-                    config.memory.hybrid_search = true;
-                    if config.memory.vector_provider == "sqlite" {
-                        config.memory.vector_provider = "memory".to_string();
+                    config.memory.backend = MemoryBackend::Memory;
+                    config.memory.hybrid_search = false;
+                    config.memory.vector_provider = "memory".to_string();
+                    config.memory.connection_string = None;
+                }
+                ("memory", "postgres") => {
+                    config.memory.backend = MemoryBackend::Postgres;
+                    config.memory.vector_provider = "postgres".to_string();
+                    if config.memory.connection_string.is_none() {
+                        config.memory.connection_string =
+                            Some("postgres://postgres:@localhost:5432/borgclaw".to_string());
                     }
                 }
                 ("provider", provider) => {
@@ -2021,8 +2048,9 @@ mod tests {
         )
         .unwrap();
 
+        assert_eq!(config.memory.backend, MemoryBackend::Memory);
         assert_eq!(config.memory.vector_provider, "memory");
-        assert!(config.memory.hybrid_search);
+        assert!(!config.memory.hybrid_search);
     }
 
     #[test]
