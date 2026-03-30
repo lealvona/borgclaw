@@ -826,12 +826,169 @@ openai_compatible_provider!(
     "https://api.moonshot.cn/v1",
     None
 );
-openai_compatible_provider!(
-    MiniMaxProvider,
-    "MINIMAX_API_KEY",
-    "https://api.minimax.io/v1",
-    Some(false)
-);
+/// MiniMax provider with system message handling
+/// MiniMax API doesn't support "system" role, so we prepend system content to the first user message
+struct MiniMaxProvider {
+    api_key: String,
+    http: reqwest::Client,
+    base_url: String,
+}
+
+impl MiniMaxProvider {
+    async fn from_security(
+        agent: &AgentConfig,
+        config: &SecurityConfig,
+    ) -> Result<Self, ProviderError> {
+        let api_key = resolve_provider_secret(agent, config, "MINIMAX_API_KEY").await?;
+        let base_url = Self::resolve_base_url();
+        Ok(Self {
+            api_key,
+            http: reqwest::Client::new(),
+            base_url,
+        })
+    }
+
+    fn resolve_base_url() -> String {
+        if let Ok(custom_base) = std::env::var("MINIMAX_API_BASE") {
+            if !custom_base.is_empty() {
+                tracing::info!("Using custom API base from MINIMAX_API_BASE: {}", custom_base);
+                return custom_base.trim_end_matches('/').to_string();
+            }
+        }
+        "https://api.minimax.io/v1".to_string()
+    }
+
+    /// Convert messages for MiniMax API by handling system messages
+    /// System messages are prepended to the first user message
+    fn convert_messages(messages: &[ChatMessage]) -> Vec<ChatMessage> {
+        let mut system_content = Vec::new();
+        let mut converted = Vec::new();
+        let mut first_user = true;
+
+        for msg in messages {
+            match msg.role.as_str() {
+                "system" => {
+                    system_content.push(msg.content.clone());
+                }
+                "user" => {
+                    if first_user && !system_content.is_empty() {
+                        // Prepend system content to first user message
+                        let combined = format!(
+                            "{}",
+                            system_content.join("\n\n")
+                        );
+                        converted.push(ChatMessage {
+                            role: "user".to_string(),
+                            content: format!("{}\n\n{}", combined, msg.content),
+                        });
+                        first_user = false;
+                    } else {
+                        converted.push(msg.clone());
+                    }
+                }
+                _ => {
+                    converted.push(msg.clone());
+                }
+            }
+        }
+
+        // If we only had system messages (no user message), convert to a single user message
+        if converted.is_empty() && !system_content.is_empty() {
+            converted.push(ChatMessage {
+                role: "user".to_string(),
+                content: system_content.join("\n\n"),
+            });
+        }
+
+        converted
+    }
+
+    fn build_request_body(request: &ProviderRequest) -> serde_json::Value {
+        let converted_messages = Self::convert_messages(&request.messages);
+        
+        serde_json::json!({
+            "model": request.model,
+            "temperature": request.temperature,
+            "max_tokens": request.max_tokens,
+            "messages": converted_messages,
+            "reasoning_split": false,
+        })
+    }
+}
+
+#[async_trait]
+impl ChatProvider for MiniMaxProvider {
+    async fn complete(
+        &self,
+        request: &ProviderRequest,
+    ) -> Result<ProviderResponse, ProviderError> {
+        tracing::info!(
+            "MiniMaxProvider request: model={}, temperature={}, max_tokens={}",
+            request.model,
+            request.temperature,
+            request.max_tokens
+        );
+
+        #[derive(Deserialize)]
+        struct Response {
+            choices: Vec<Choice>,
+        }
+
+        #[derive(Deserialize)]
+        struct Choice {
+            message: ChoiceMessage,
+        }
+
+        #[derive(Deserialize)]
+        struct ChoiceMessage {
+            content: String,
+        }
+
+        let url = format!("{}/chat/completions", self.base_url);
+        let response = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.api_key)
+            .json(&Self::build_request_body(request))
+            .send()
+            .await
+            .map_err(|e| ProviderError::Request(e.to_string()))?;
+
+        if !response.status().is_success() {
+            if response.status().as_u16() == 429 {
+                let retry_after = response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(60);
+                return Err(ProviderError::RateLimited(retry_after));
+            }
+            let status = response.status();
+            let error_body = response.text().await.unwrap_or_default();
+            return Err(ProviderError::Request(format!(
+                "http {}: {}",
+                status, error_body
+            )));
+        }
+
+        let body: Response = response
+            .json()
+            .await
+            .map_err(|e| ProviderError::Parse(e.to_string()))?;
+
+        body.choices
+            .into_iter()
+            .next()
+            .map(|choice| {
+                ProviderResponse::from_text_with_think_blocks(
+                    choice.message.content,
+                    "MiniMaxProvider",
+                )
+            })
+            .ok_or_else(|| ProviderError::Parse("missing choice".to_string()))
+    }
+}
 openai_compatible_provider!(ZProvider, "Z_API_KEY", "https://api.z.ai/api/paas/v4", None);
 
 fn extract_think_blocks(text: &str) -> Option<String> {
@@ -950,7 +1107,7 @@ mod tests {
     }
 
     #[test]
-    fn minimax_request_body_preserves_multi_turn_reasoning_payloads() {
+    fn minimax_request_body_converts_system_messages() {
         let request = ProviderRequest {
             model: "MiniMax-M2.7".to_string(),
             temperature: 0.7,
@@ -972,11 +1129,46 @@ mod tests {
         };
 
         let body = MiniMaxProvider::build_request_body(&request);
-        assert_eq!(body["reasoning_split"], serde_json::json!(false));
+        
+        // Assistant message preserved first (comes before user in original)
+        assert_eq!(body["messages"][0]["role"], "assistant");
         assert_eq!(
-            body["messages"][1]["content"],
+            body["messages"][0]["content"],
             "<think>reasoning</think>Hello"
         );
+        // System message should be prepended to first user message
+        assert_eq!(body["messages"][1]["role"], "user");
+        assert_eq!(
+            body["messages"][1]["content"],
+            "You are helpful.\n\nSecond turn"
+        );
+        // reasoning_split should be false for MiniMax
+        assert_eq!(body["reasoning_split"], serde_json::json!(false));
+    }
+
+    #[test]
+    fn minimax_convert_messages_handles_multiple_system() {
+        let messages = vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: "System 1".to_string(),
+            },
+            ChatMessage {
+                role: "system".to_string(),
+                content: "System 2".to_string(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: "User message".to_string(),
+            },
+        ];
+
+        let converted = MiniMaxProvider::convert_messages(&messages);
+        
+        // Should have one message: system content prepended to user message
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0].role, "user");
+        assert_eq!(converted[0].content, "System 1\n\nSystem 2\n\nUser message");
     }
 
     #[test]
