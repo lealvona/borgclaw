@@ -5,8 +5,11 @@ use crate::onboarding::colors::{
     banner, paint, HEADER, INFO, MANDATORY, OPTIONAL, PROMPT, SUCCESS, WARN,
 };
 use crate::onboarding::providers::{ProviderDef, ProviderRegistry};
-use borgclaw_core::config::{AppConfig, DmPolicy, MemoryBackend};
-use borgclaw_core::security::{ProviderProfile, SecurityLayer};
+use borgclaw_core::config::{
+    AppConfig, DmPolicy, IdentityFormat, MemoryAccessScopeConfig, MemoryBackend,
+    MemorySensitivityConfig,
+};
+use borgclaw_core::security::{process_state_path, ProviderProfile, SecurityLayer};
 use clap::Args;
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Password, Select};
 use serde_json::Value;
@@ -343,6 +346,7 @@ pub async fn run_init(
 
     configure_provider_and_model(&mut config, &registry, &theme, &mut env_updates, args.quick)
         .await?;
+    configure_identity(&mut config, &theme, args.quick)?;
     configure_channels(&mut config, &theme, args.quick, &mut env_updates).await?;
     configure_security(&mut config, &theme, args.quick)?;
     configure_memory(&mut config, &theme, args.quick)?;
@@ -731,6 +735,69 @@ async fn configure_channels(
     Ok(())
 }
 
+fn configure_identity(
+    config: &mut AppConfig,
+    theme: &ColorfulTheme,
+    quick: bool,
+) -> Result<(), String> {
+    println!("{}", paint(OPTIONAL, "[OPTIONAL] Identity document"));
+    println!(
+        "{}",
+        paint(
+            INFO,
+            "Identity documents let you keep a reusable soul/persona file separate from the model/provider selection."
+        )
+    );
+    if quick {
+        return Ok(());
+    }
+
+    let use_identity = Confirm::with_theme(theme)
+        .with_prompt("Configure a soul/identity document now?")
+        .default(config.agent.soul_path.is_some())
+        .interact()
+        .map_err(|e| e.to_string())?;
+    if !use_identity {
+        config.agent.soul_path = None;
+        config.agent.identity_format = IdentityFormat::Auto;
+        return Ok(());
+    }
+
+    let soul_path: String = Input::with_theme(theme)
+        .with_prompt("Identity file path")
+        .default(
+            config
+                .agent
+                .soul_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| ".borgclaw/identity.md".to_string()),
+        )
+        .interact_text()
+        .map_err(|e| e.to_string())?;
+    config.agent.soul_path = Some(PathBuf::from(soul_path));
+
+    let formats = vec!["auto", "markdown", "aieos"];
+    let default_idx = match config.agent.identity_format {
+        IdentityFormat::Markdown => 1,
+        IdentityFormat::Aieos => 2,
+        IdentityFormat::Auto => 0,
+    };
+    let idx = Select::with_theme(theme)
+        .with_prompt("Identity document format")
+        .items(&formats)
+        .default(default_idx)
+        .interact()
+        .map_err(|e| e.to_string())?;
+    config.agent.identity_format = match idx {
+        1 => IdentityFormat::Markdown,
+        2 => IdentityFormat::Aieos,
+        _ => IdentityFormat::Auto,
+    };
+
+    Ok(())
+}
+
 fn configure_security(
     config: &mut AppConfig,
     theme: &ColorfulTheme,
@@ -841,7 +908,111 @@ fn configure_memory(
             config.memory.connection_string = None;
         }
     }
+
+    config.memory.external.enabled = Confirm::with_theme(theme)
+        .with_prompt("Enable additive external memory adapter?")
+        .default(config.memory.external.enabled)
+        .interact()
+        .map_err(|e| e.to_string())?;
+    if config.memory.external.enabled {
+        let endpoint: String = Input::with_theme(theme)
+            .with_prompt("External memory endpoint")
+            .default(
+                config
+                    .memory
+                    .external
+                    .endpoint
+                    .clone()
+                    .unwrap_or_else(|| "http://127.0.0.1:8081".to_string()),
+            )
+            .interact_text()
+            .map_err(|e| e.to_string())?;
+        config.memory.external.endpoint = Some(endpoint);
+        config.memory.external.mirror_writes = Confirm::with_theme(theme)
+            .with_prompt("Mirror local writes to the external adapter?")
+            .default(config.memory.external.mirror_writes)
+            .interact()
+            .map_err(|e| e.to_string())?;
+    } else {
+        config.memory.external.endpoint = None;
+    }
+
+    config.memory.privacy.enabled = Confirm::with_theme(theme)
+        .with_prompt("Enable sensitivity-aware memory privacy filtering?")
+        .default(config.memory.privacy.enabled)
+        .interact()
+        .map_err(|e| e.to_string())?;
+    if config.memory.privacy.enabled {
+        config.memory.privacy.default_sensitivity = prompt_memory_sensitivity(
+            theme,
+            "Default sensitivity for newly stored memories",
+            config.memory.privacy.default_sensitivity,
+        )?;
+        config.memory.privacy.subagent_scope = prompt_memory_scope(
+            theme,
+            "Maximum memory scope for sub-agents",
+            config.memory.privacy.subagent_scope,
+        )?;
+        config.memory.privacy.scheduler_scope = prompt_memory_scope(
+            theme,
+            "Maximum memory scope for scheduled work",
+            config.memory.privacy.scheduler_scope,
+        )?;
+        config.memory.privacy.heartbeat_scope = prompt_memory_scope(
+            theme,
+            "Maximum memory scope for heartbeat work",
+            config.memory.privacy.heartbeat_scope,
+        )?;
+    }
     Ok(())
+}
+
+fn prompt_memory_sensitivity(
+    theme: &ColorfulTheme,
+    prompt: &str,
+    current: MemorySensitivityConfig,
+) -> Result<MemorySensitivityConfig, String> {
+    let choices = vec!["public", "workspace", "private"];
+    let default_idx = match current {
+        MemorySensitivityConfig::Public => 0,
+        MemorySensitivityConfig::Workspace => 1,
+        MemorySensitivityConfig::Private => 2,
+    };
+    let idx = Select::with_theme(theme)
+        .with_prompt(prompt)
+        .items(&choices)
+        .default(default_idx)
+        .interact()
+        .map_err(|e| e.to_string())?;
+    Ok(match idx {
+        0 => MemorySensitivityConfig::Public,
+        2 => MemorySensitivityConfig::Private,
+        _ => MemorySensitivityConfig::Workspace,
+    })
+}
+
+fn prompt_memory_scope(
+    theme: &ColorfulTheme,
+    prompt: &str,
+    current: MemoryAccessScopeConfig,
+) -> Result<MemoryAccessScopeConfig, String> {
+    let choices = vec!["public", "workspace", "private"];
+    let default_idx = match current {
+        MemoryAccessScopeConfig::Public => 0,
+        MemoryAccessScopeConfig::Workspace => 1,
+        MemoryAccessScopeConfig::Private => 2,
+    };
+    let idx = Select::with_theme(theme)
+        .with_prompt(prompt)
+        .items(&choices)
+        .default(default_idx)
+        .interact()
+        .map_err(|e| e.to_string())?;
+    Ok(match idx {
+        0 => MemoryAccessScopeConfig::Public,
+        2 => MemoryAccessScopeConfig::Private,
+        _ => MemoryAccessScopeConfig::Workspace,
+    })
 }
 
 fn configure_skills_registry(
@@ -1393,7 +1564,65 @@ fn print_summary(config: &AppConfig) {
     banner("ONBOARDING SUMMARY");
     println!("{} {}", paint(INFO, "Provider:"), config.agent.provider);
     println!("{} {}", paint(INFO, "Model:"), config.agent.model);
+    println!(
+        "{} {}",
+        paint(INFO, "Provider profile:"),
+        config
+            .agent
+            .provider_profile
+            .as_deref()
+            .unwrap_or("not selected")
+    );
+    println!(
+        "{} {:?}",
+        paint(INFO, "Identity format:"),
+        config.agent.identity_format
+    );
+    println!(
+        "{} {}",
+        paint(INFO, "Soul path:"),
+        config
+            .agent
+            .soul_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "not configured".to_string())
+    );
     println!("{} {:?}", paint(INFO, "Workspace:"), config.agent.workspace);
+    println!(
+        "{} {}",
+        paint(INFO, "Process state path:"),
+        process_state_path(&config.agent.workspace).display()
+    );
+    println!(
+        "{} {:?} (external={}, privacy={})",
+        paint(INFO, "Memory backend:"),
+        config.memory.effective_backend(),
+        config.memory.external.enabled,
+        config.memory.privacy.enabled
+    );
+    if config.memory.external.enabled {
+        println!(
+            "{} {}",
+            paint(INFO, "External memory endpoint:"),
+            config
+                .memory
+                .external
+                .endpoint
+                .as_deref()
+                .unwrap_or("missing")
+        );
+    }
+    if config.memory.privacy.enabled {
+        println!(
+            "{} default={:?}, subagent={:?}, scheduler={:?}, heartbeat={:?}",
+            paint(INFO, "Memory privacy:"),
+            config.memory.privacy.default_sensitivity,
+            config.memory.privacy.subagent_scope,
+            config.memory.privacy.scheduler_scope,
+            config.memory.privacy.heartbeat_scope
+        );
+    }
     println!(
         "{} {} (max_instances={})",
         paint(INFO, "WASM sandbox:"),
@@ -1412,6 +1641,13 @@ fn print_summary(config: &AppConfig) {
         "{} {:?}",
         paint(INFO, "Registry:"),
         config.skills.registry_url
+    );
+    println!(
+        "{} managed={}, workspace={}, auto_load={}",
+        paint(INFO, "Skill paths:"),
+        config.skills.skills_path.display(),
+        config.agent.workspace.join("skills").display(),
+        config.skills.auto_load
     );
     println!("{}", paint(SUCCESS, "Channels:"));
     for (name, channel) in &config.channels {

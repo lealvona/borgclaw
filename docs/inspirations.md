@@ -162,7 +162,7 @@ Good examples:
   Source: [OpenClaw README gateway/control-plane notes](https://github.com/openclaw/openclaw#readme)
 - The repo layout shows deliberate runtime segregation for sandboxing with `Dockerfile.sandbox`, `Dockerfile.sandbox-browser`, and `Dockerfile.sandbox-common`. That is stronger than a single toggle-based sandbox story.  
   Source: [OpenClaw repository root](https://github.com/openclaw/openclaw)
-- OpenClaw documents a managed skills platform with bundled, managed, and workspace skills plus install gating and UI. BorgClaw now has explicit bundled/managed/workspace tier precedence, requirement-gated skill readiness, and operator-facing `skills list/search/info/status` flows, but gateway/onboarding surfaces still need to reflect that richer lifecycle consistently.  
+- OpenClaw documents a managed skills platform with bundled, managed, and workspace skills plus install gating and UI. BorgClaw now has explicit bundled/managed/workspace tier precedence, requirement-gated skill readiness, operator-facing `skills list/search/info/status` flows, and matching onboarding/gateway visibility for the richer lifecycle contract.  
   Source: [OpenClaw README skills platform notes](https://github.com/openclaw/openclaw#readme)
 - OpenClaw's security model explicitly distinguishes main-session host execution from non-main session sandbox execution, with allowlists and denylisted capabilities. That is the right level of specificity for channel and group safety.  
   Source: [OpenClaw README security model](https://github.com/openclaw/openclaw#readme)
