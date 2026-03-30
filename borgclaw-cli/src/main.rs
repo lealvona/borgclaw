@@ -139,6 +139,12 @@ enum SecretAction {
     Check { key: String },
     /// Rotate the service authentication token
     RotateToken,
+    /// Initialize secret store with password protection (future feature)
+    Init,
+    /// Unlock secret store for session (future feature)
+    Unlock,
+    /// Lock secret store (future feature)
+    Lock,
 }
 
 #[derive(Subcommand)]
@@ -2086,6 +2092,51 @@ async fn secrets(config: AppConfig, action: SecretAction) {
                     println!("✗ Failed to rotate service token: {}", e);
                 }
             }
+        }
+        SecretAction::Init => {
+            println!("Secret store initialization with password protection");
+            println!("==================================================");
+            println!();
+            println!("This feature will be available in a future release.");
+            println!();
+            println!("Current behavior:");
+            println!("- Secret store uses file-based encryption keys (.key files)");
+            println!("- Keys are automatically generated on first use");
+            println!();
+            println!("Future password protection will include:");
+            println!("- PBKDF2 key derivation from your password");
+            println!("- Salt storage with encrypted data");
+            println!("- Session-based unlock/lock");
+            println!();
+            println!("For now, the secret store is ready to use with automatic key generation.");
+        }
+        SecretAction::Unlock => {
+            println!("Unlocking secret store...");
+            println!();
+            println!("This feature will be available in a future release.");
+            println!();
+            println!("Current behavior:");
+            println!("- Secret store is automatically accessible when the encryption key file exists");
+            println!("- No interactive unlock required");
+            println!();
+            println!("Store location: {}", config.security.secrets_path.display());
+            if config.security.secrets_encryption {
+                println!("Encryption: enabled");
+            } else {
+                println!("Encryption: disabled (enable in config)");
+            }
+        }
+        SecretAction::Lock => {
+            println!("Locking secret store...");
+            println!();
+            println!("This feature will be available in a future release.");
+            println!();
+            println!("Current behavior:");
+            println!("- Secret store remains accessible while the key file exists");
+            println!("- To effectively 'lock', remove the key file:");
+            println!("  rm {}", config.security.secrets_path.with_extension("enc.key").display());
+            println!();
+            println!("Warning: Without the key file, secrets cannot be decrypted!");
         }
     }
 }
