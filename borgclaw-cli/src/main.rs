@@ -1333,6 +1333,27 @@ fn docker_workspace_mount_label(
     }
 }
 
+fn docker_context_summary(context: &borgclaw_core::config::DockerContextOverrideConfig) -> String {
+    let mut fields = Vec::new();
+    if let Some(image) = &context.image {
+        fields.push(format!("image={image}"));
+    }
+    if let Some(network) = context.network {
+        fields.push(format!("network={}", docker_network_label(network)));
+    }
+    if let Some(mount) = context.workspace_mount {
+        fields.push(format!("mount={}", docker_workspace_mount_label(mount)));
+    }
+    if let Some(timeout_seconds) = context.timeout_seconds {
+        fields.push(format!("timeout={}s", timeout_seconds));
+    }
+    if fields.is_empty() {
+        "inherit".to_string()
+    } else {
+        fields.join(",")
+    }
+}
+
 fn report_memory_status(config: &AppConfig) {
     match config.memory.effective_backend() {
         MemoryBackend::Sqlite => {
@@ -1960,7 +1981,7 @@ fn cli_path_available(binary: &std::path::Path) -> bool {
 
 fn security_policy_status(config: &AppConfig) -> String {
     format!(
-        "pairing={}({} digits/{}s), prompt_injection={}({:?}), leak_detection={}({:?}), blocklist={}+{}, allowlist={}, wasm_instances={}, docker={}({}/{}, image={}, timeout={}s)",
+        "pairing={}({} digits/{}s), prompt_injection={}({:?}), leak_detection={}({:?}), blocklist={}+{}, allowlist={}, wasm_instances={}, docker={}({}/{}, image={}, timeout={}s, local={}, remote={}, background={})",
         enabled_disabled(config.security.pairing.enabled),
         config.security.pairing.code_length,
         config.security.pairing.expiry_seconds,
@@ -1976,7 +1997,10 @@ fn security_policy_status(config: &AppConfig) -> String {
         docker_network_label(config.security.docker.network),
         docker_workspace_mount_label(config.security.docker.workspace_mount),
         config.security.docker.image,
-        config.security.docker.timeout_seconds
+        config.security.docker.timeout_seconds,
+        docker_context_summary(&config.security.docker.contexts.local),
+        docker_context_summary(&config.security.docker.contexts.remote),
+        docker_context_summary(&config.security.docker.contexts.background)
     )
 }
 
@@ -2075,6 +2099,12 @@ fn security_doctor_lines(config: &AppConfig) -> Vec<String> {
                     .any(|name| name == "execute_command")
             ),
             config.security.docker.allowed_tools.join(", ")
+        ));
+        lines.push(format!(
+            "• Docker context policies local={} remote={} background={}",
+            docker_context_summary(&config.security.docker.contexts.local),
+            docker_context_summary(&config.security.docker.contexts.remote),
+            docker_context_summary(&config.security.docker.contexts.background)
         ));
     }
 

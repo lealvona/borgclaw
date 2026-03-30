@@ -223,7 +223,7 @@ cargo run --bin borgclaw -- self-test      # Exit 0 on pass
 cargo run --bin borgclaw -- runtime        # Show collective status
 borgclaw providers list                    # Show configured provider profiles
 borgclaw processes list                    # Inspect persisted background command processes
-./scripts/install-docker-sandbox.sh        # Build the optional Docker sandbox image
+./scripts/install-docker-sandbox.sh        # Build the optional base + remote Docker sandbox images
 ```
 
 ### Command Processes

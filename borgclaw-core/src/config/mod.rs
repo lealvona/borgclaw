@@ -117,6 +117,35 @@ impl AppConfig {
             } else if self.security.docker.memory_limit_mb == 0 {
                 error.security =
                     Some("security.docker.memory_limit_mb must be greater than 0".to_string());
+            } else {
+                for (label, context) in [
+                    ("local", &self.security.docker.contexts.local),
+                    ("remote", &self.security.docker.contexts.remote),
+                    ("background", &self.security.docker.contexts.background),
+                ] {
+                    if context
+                        .image
+                        .as_deref()
+                        .is_some_and(|value| value.trim().is_empty())
+                    {
+                        error.security = Some(format!(
+                            "security.docker.contexts.{label}.image must not be empty"
+                        ));
+                        break;
+                    }
+                    if context.timeout_seconds == Some(0) {
+                        error.security = Some(format!(
+                            "security.docker.contexts.{label}.timeout_seconds must be greater than 0"
+                        ));
+                        break;
+                    }
+                    if context.memory_limit_mb == Some(0) {
+                        error.security = Some(format!(
+                            "security.docker.contexts.{label}.memory_limit_mb must be greater than 0"
+                        ));
+                        break;
+                    }
+                }
             }
         }
 
@@ -375,6 +404,7 @@ pub struct DockerSandboxConfig {
     pub allowed_tools: Vec<String>,
     pub allowed_roots: Vec<PathBuf>,
     pub extra_env_allowlist: Vec<String>,
+    pub contexts: DockerContextPoliciesConfig,
 }
 
 impl Default for DockerSandboxConfig {
@@ -392,8 +422,58 @@ impl Default for DockerSandboxConfig {
             allowed_tools: vec!["execute_command".to_string()],
             allowed_roots: Vec::new(),
             extra_env_allowlist: vec!["PATH".to_string(), "HOME".to_string()],
+            contexts: DockerContextPoliciesConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DockerContextPoliciesConfig {
+    pub local: DockerContextOverrideConfig,
+    pub remote: DockerContextOverrideConfig,
+    pub background: DockerContextOverrideConfig,
+}
+
+impl Default for DockerContextPoliciesConfig {
+    fn default() -> Self {
+        Self {
+            local: DockerContextOverrideConfig::default(),
+            remote: DockerContextOverrideConfig {
+                network: Some(DockerNetworkPolicy::None),
+                workspace_mount: Some(DockerWorkspaceMount::ReadOnly),
+                read_only_rootfs: Some(true),
+                tmpfs: Some(true),
+                memory_limit_mb: Some(256),
+                cpu_limit: Some("0.5".to_string()),
+                timeout_seconds: Some(90),
+                ..Default::default()
+            },
+            background: DockerContextOverrideConfig {
+                network: Some(DockerNetworkPolicy::None),
+                workspace_mount: Some(DockerWorkspaceMount::ReadOnly),
+                read_only_rootfs: Some(true),
+                tmpfs: Some(true),
+                memory_limit_mb: Some(256),
+                cpu_limit: Some("0.5".to_string()),
+                timeout_seconds: Some(90),
+                ..Default::default()
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DockerContextOverrideConfig {
+    pub image: Option<String>,
+    pub network: Option<DockerNetworkPolicy>,
+    pub workspace_mount: Option<DockerWorkspaceMount>,
+    pub read_only_rootfs: Option<bool>,
+    pub tmpfs: Option<bool>,
+    pub memory_limit_mb: Option<u32>,
+    pub cpu_limit: Option<String>,
+    pub timeout_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -1177,6 +1257,13 @@ mod tests {
             allowed_tools = ["execute_command"]
             allowed_roots = ["/tmp"]
             extra_env_allowlist = ["PATH", "HOME", "LANG"]
+
+            [security.docker.contexts.remote]
+            image = "borgclaw-sandbox:remote"
+            timeout_seconds = 45
+
+            [security.docker.contexts.background]
+            timeout_seconds = 30
             "#,
         )
         .unwrap();
@@ -1206,6 +1293,18 @@ mod tests {
         assert_eq!(
             config.security.docker.extra_env_allowlist,
             vec!["PATH", "HOME", "LANG"]
+        );
+        assert_eq!(
+            config.security.docker.contexts.remote.image.as_deref(),
+            Some("borgclaw-sandbox:remote")
+        );
+        assert_eq!(
+            config.security.docker.contexts.remote.timeout_seconds,
+            Some(45)
+        );
+        assert_eq!(
+            config.security.docker.contexts.background.timeout_seconds,
+            Some(30)
         );
     }
 
