@@ -10,7 +10,8 @@ Status note:
 - PR 3 (`MiniMax Multi-Turn Stability Fix`) is landed.
 - PR 4 (`Identity Formats + Transcript Artifacts`) is landed.
 - PR 5 (`Memory Query Extensions + External Adapter`) is landed.
-- PR 6 (`Workspace-Layered Memory Privacy`) is the active tranche.
+- PR 6 (`Workspace-Layered Memory Privacy`) is landed.
+- PR 7 (`PTY + Background Command Runtime`) is the active tranche.
 
 ## Scope Notes
 
@@ -30,8 +31,8 @@ These items remain useful upstream references, but they are not part of BorgClaw
 | 3 | MiniMax Multi-Turn Stability Fix | complete | Keep MiniMax chat history valid after the first turn and add regression coverage for the chat turn pipeline |
 | 4 | Identity Formats + Transcript Artifacts | complete | Support markdown and structured identities, plus richer internal provider artifacts |
 | 5 | Memory Query Extensions + External Adapter | complete | Add `since`/`until`, richer memory APIs, and an optional OpenMemory-style adapter |
-| 6 | Workspace-Layered Memory Privacy | in progress | Add sensitivity-aware memory access policy across execution contexts |
-| 7 | PTY + Background Command Runtime | pending | Extend `execute_command` with PTY/background execution and persisted process state |
+| 6 | Workspace-Layered Memory Privacy | complete | Add sensitivity-aware memory access policy across execution contexts |
+| 7 | PTY + Background Command Runtime | in progress | Extend `execute_command` with PTY/background execution and persisted process state |
 | 8 | Docker Sandbox Hardening | pending | Add split sandbox modes and stricter defaults for remote/background execution |
 | 9 | Skills Lifecycle Completion | pending | Add skill gating, richer discovery/status, and explicit source tiers |
 | 10 | Gateway + Onboarding Control Plane | pending | Expose all new runtime contracts in onboarding, status, doctor, and gateway surfaces |

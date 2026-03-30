@@ -13,7 +13,10 @@ use borgclaw_core::{
         },
     },
     scheduler::{Job, JobStatus, JobTrigger},
-    security::{ProviderProfile, SecurityLayer},
+    security::{
+        cancel_process_record, load_process_records, process_state_path, CommandProcessStatus,
+        ProviderProfile, SecurityLayer,
+    },
     skills::SkillsRegistry,
 };
 use clap::{Parser, Subcommand};
@@ -104,6 +107,11 @@ enum Commands {
     Subagent {
         #[command(subcommand)]
         action: SubagentAction,
+    },
+    /// Inspect persisted background command processes
+    Processes {
+        #[command(subcommand)]
+        action: ProcessAction,
     },
     /// Manage encrypted secrets
     Secrets {
@@ -300,6 +308,16 @@ enum SubagentAction {
     Cancel { id: String },
 }
 
+#[derive(Subcommand)]
+enum ProcessAction {
+    /// List persisted background command processes
+    List,
+    /// Show persisted details for one background process
+    Show { id: String },
+    /// Cancel a running background process
+    Cancel { id: String },
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -411,6 +429,7 @@ async fn main() {
         Commands::Backup { action } => backup(config, action),
         Commands::Heartbeat { action } => heartbeat(config, action).await,
         Commands::Subagent { action } => subagent(config, action),
+        Commands::Processes { action } => processes(config, action),
         Commands::Secrets { action } => secrets(config, action).await,
         Commands::Runtime => runtime(config).await,
         Commands::Providers { action } => providers_action(&config_path, &mut config, action).await,
@@ -1605,6 +1624,54 @@ fn subagent(config: AppConfig, action: SubagentAction) {
     }
 }
 
+fn processes(config: AppConfig, action: ProcessAction) {
+    let path = process_state_path(&config.agent.workspace);
+    match action {
+        ProcessAction::List => {
+            println!("Background command processes");
+            println!("============================");
+            match process_list_lines(&path) {
+                Ok(lines) if lines.is_empty() => {
+                    println!(
+                        "No background command processes found in {}",
+                        path.display()
+                    )
+                }
+                Ok(lines) => {
+                    for line in lines {
+                        println!("  - {}", line);
+                    }
+                }
+                Err(err) => println!("Could not read {}: {}", path.display(), err),
+            }
+        }
+        ProcessAction::Show { id } => {
+            println!("Background process details");
+            println!("==========================");
+            match process_detail_lines(&path, &id) {
+                Ok(lines) if lines.is_empty() => {
+                    println!("No background process '{}' found in {}", id, path.display())
+                }
+                Ok(lines) => {
+                    for line in lines {
+                        println!("{}", line);
+                    }
+                }
+                Err(err) => println!("Could not read {}: {}", path.display(), err),
+            }
+        }
+        ProcessAction::Cancel { id } => {
+            println!("Cancelling background process");
+            println!("============================");
+            match cancel_process_record(&path, &id) {
+                Ok(true) => println!("Cancelled background process '{}'", id),
+                Ok(false) => println!("No running background process '{}' found", id),
+                Err(err) => println!("Failed to cancel background process: {}", err),
+            }
+        }
+    }
+}
+
 async fn secrets(config: AppConfig, action: SecretAction) {
     let store = borgclaw_core::security::SecretStore::with_config(
         borgclaw_core::security::SecretStoreConfig {
@@ -1681,6 +1748,18 @@ async fn runtime(config: AppConfig) {
     println!("\nSub-agents: {}", subagent_path.display());
     match subagent_list_lines(&subagent_path) {
         Ok(lines) if lines.is_empty() => println!("  No sub-agent tasks"),
+        Ok(lines) => {
+            for line in lines {
+                println!("  - {}", line);
+            }
+        }
+        Err(_) => println!("  (not available)"),
+    }
+
+    let process_path = process_state_path(&config.agent.workspace);
+    println!("\nProcesses: {}", process_path.display());
+    match process_list_lines(&process_path) {
+        Ok(lines) if lines.is_empty() => println!("  No background command processes"),
         Ok(lines) => {
             for line in lines {
                 println!("  - {}", line);
@@ -2283,9 +2362,10 @@ fn background_state_status(workspace: &std::path::Path) -> String {
     let scheduler = background_state_summary(&workspace.join("scheduler.json"));
     let heartbeat = background_state_summary(&workspace.join("heartbeat.json"));
     let subagents = background_state_summary(&workspace.join("subagents.json"));
+    let processes = background_state_summary(&process_state_path(workspace));
     format!(
-        "scheduler={}, heartbeat={}, subagents={}",
-        scheduler, heartbeat, subagents
+        "scheduler={}, heartbeat={}, subagents={}, processes={}",
+        scheduler, heartbeat, subagents, processes
     )
 }
 
@@ -2294,6 +2374,7 @@ fn background_state_doctor_lines(workspace: &std::path::Path) -> Vec<String> {
         background_state_doctor_line("Scheduler", &workspace.join("scheduler.json")),
         background_state_doctor_line("Heartbeat", &workspace.join("heartbeat.json")),
         background_state_doctor_line("Sub-agent", &workspace.join("subagents.json")),
+        background_state_doctor_line("Process", &process_state_path(workspace)),
     ]
 }
 
@@ -2324,6 +2405,7 @@ fn background_state_failure_lines(workspace: &std::path::Path) -> Vec<String> {
         ("scheduler", workspace.join("scheduler.json")),
         ("heartbeat", workspace.join("heartbeat.json")),
         ("sub-agent", workspace.join("subagents.json")),
+        ("process", process_state_path(workspace)),
     ] {
         if let Some((tasks, dead)) = background_state_counts(&path) {
             if dead > 0 {
@@ -3219,6 +3301,99 @@ fn cancel_subagent_task(path: &std::path::Path, id: &str) -> Result<bool, String
     std::fs::write(path, serialized).map_err(|e| e.to_string())?;
 
     Ok(true)
+}
+
+fn process_list_lines(path: &std::path::Path) -> Result<Vec<String>, String> {
+    let mut records = load_process_records(path).map_err(|err| err.to_string())?;
+    let mut processes = records
+        .drain()
+        .map(|(_, record)| record)
+        .collect::<Vec<_>>();
+    processes.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+
+    let mut lines = Vec::new();
+    for record in processes {
+        let finished_at = record
+            .finished_at
+            .map(|value| value.to_rfc3339())
+            .unwrap_or_else(|| "running".to_string());
+        lines.push(format!(
+            "{} [{}] pid={} pty={} finished={}",
+            record.id,
+            process_status_label(&record.status),
+            record
+                .pid
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            record.pty,
+            finished_at
+        ));
+    }
+
+    Ok(lines)
+}
+
+fn process_detail_lines(path: &std::path::Path, id: &str) -> Result<Vec<String>, String> {
+    let Some(record) =
+        borgclaw_core::security::get_process_record(path, id).map_err(|err| err.to_string())?
+    else {
+        return Ok(Vec::new());
+    };
+
+    let mut lines = vec![format!("id: {}", record.id)];
+    lines.push(format!("status: {}", process_status_label(&record.status)));
+    lines.push(format!("command: {}", record.command));
+    lines.push(format!(
+        "pid: {}",
+        record
+            .pid
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    ));
+    lines.push(format!("started_at: {}", record.started_at.to_rfc3339()));
+    lines.push(format!(
+        "finished_at: {}",
+        record
+            .finished_at
+            .map(|value| value.to_rfc3339())
+            .unwrap_or_else(|| "running".to_string())
+    ));
+    lines.push(format!(
+        "execution_mode: {}",
+        match record.execution_mode {
+            borgclaw_core::security::CommandExecutionMode::Host => "host",
+            borgclaw_core::security::CommandExecutionMode::Docker => "docker",
+        }
+    ));
+    lines.push(format!("pty: {}", record.pty));
+    lines.push(format!("timeout_secs: {}", record.timeout_secs));
+    if let Some(yield_ms) = record.yield_ms {
+        lines.push(format!("yield_ms: {}", yield_ms));
+    }
+    if let Some(exit_code) = record.exit_code {
+        lines.push(format!("exit_code: {}", exit_code));
+    }
+    if let Some(image) = record.image {
+        lines.push(format!("docker_image: {}", image));
+    }
+    if !record.output.is_empty() {
+        lines.push("output:".to_string());
+        for line in record.output.lines() {
+            lines.push(format!("  {}", line));
+        }
+    }
+
+    Ok(lines)
+}
+
+fn process_status_label(status: &CommandProcessStatus) -> &'static str {
+    match status {
+        CommandProcessStatus::Running => "running",
+        CommandProcessStatus::Succeeded => "succeeded",
+        CommandProcessStatus::Failed => "failed",
+        CommandProcessStatus::Cancelled => "cancelled",
+        CommandProcessStatus::TimedOut => "timed_out",
+    }
 }
 
 fn mcp_transport_label(server: &borgclaw_core::config::McpServerConfig) -> &'static str {
@@ -5416,7 +5591,7 @@ mod tests {
         let line = background_state_status(&workspace);
         assert_eq!(
             line,
-            "scheduler=3 tasks (dead-lettered=1), heartbeat=2 tasks (dead-lettered=1), subagents=1 task (dead-lettered=0)"
+            "scheduler=3 tasks (dead-lettered=1), heartbeat=2 tasks (dead-lettered=1), subagents=1 task (dead-lettered=0), processes=not created"
         );
     }
 
@@ -5445,6 +5620,9 @@ mod tests {
         assert!(lines
             .iter()
             .any(|line| line.contains("• Sub-agent state not created yet")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("• Process state not created yet")));
     }
 
     #[test]
@@ -5477,6 +5655,53 @@ mod tests {
         assert!(failures
             .iter()
             .any(|line| line == "heartbeat state has 1 dead-lettered of 1 persisted task"));
+    }
+
+    #[test]
+    fn process_list_and_detail_lines_report_persisted_background_processes() {
+        let workspace = std::env::temp_dir().join(format!(
+            "borgclaw_cli_process_state_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace).unwrap();
+        let state_path = process_state_path(&workspace);
+        std::fs::write(
+            &state_path,
+            r#"{
+              "proc-1": {
+                "id": "proc-1",
+                "command": "printf hello",
+                "pid": 123,
+                "started_at": "2026-03-30T12:00:00Z",
+                "finished_at": "2026-03-30T12:00:01Z",
+                "status": "succeeded",
+                "exit_code": 0,
+                "output": "hello",
+                "pty": false,
+                "timeout_secs": 60,
+                "yield_ms": 250,
+                "execution_mode": "host",
+                "image": null
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let list_lines = process_list_lines(&state_path).unwrap();
+        assert!(list_lines
+            .iter()
+            .any(|line| line.contains("proc-1 [succeeded] pid=123")));
+
+        let detail_lines = process_detail_lines(&state_path, "proc-1").unwrap();
+        assert!(detail_lines.iter().any(|line| line == "status: succeeded"));
+        assert!(detail_lines
+            .iter()
+            .any(|line| line == "command: printf hello"));
+        assert!(detail_lines
+            .iter()
+            .any(|line| line == "execution_mode: host"));
+
+        std::fs::remove_dir_all(&workspace).unwrap();
     }
 
     #[test]

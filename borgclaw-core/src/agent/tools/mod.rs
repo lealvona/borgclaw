@@ -1369,6 +1369,60 @@ file_write = ["/etc"]
     }
 
     #[tokio::test]
+    async fn execute_command_background_returns_process_metadata() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_background_tool_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &HeartbeatConfig::default(),
+            &SchedulerConfig::default(),
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let result = execute_tool(
+            &ToolCall::new(
+                "execute_command",
+                HashMap::from([
+                    (
+                        "command".to_string(),
+                        serde_json::json!("printf bg-tool-ok"),
+                    ),
+                    ("background".to_string(), serde_json::json!(true)),
+                    ("yield_ms".to_string(), serde_json::json!(500)),
+                ]),
+            ),
+            &runtime,
+        )
+        .await;
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(result.success);
+        assert!(result.metadata.contains_key("process_id"));
+        assert_eq!(
+            result.metadata.get("background").map(String::as_str),
+            Some("true")
+        );
+    }
+
+    #[tokio::test]
     async fn execute_tool_redacts_detected_secret_leaks() {
         let root =
             std::env::temp_dir().join(format!("borgclaw_redact_test_{}", uuid::Uuid::new_v4()));
