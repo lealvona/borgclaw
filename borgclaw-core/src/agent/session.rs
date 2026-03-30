@@ -38,6 +38,9 @@ pub struct Message {
     pub timestamp: DateTime<Utc>,
     /// Tool calls
     pub tool_calls: Vec<crate::agent::ToolCall>,
+    /// Structured provider transcript artifacts preserved alongside visible content
+    #[serde(default)]
+    pub artifacts: TranscriptArtifacts,
 }
 
 impl Message {
@@ -48,6 +51,7 @@ impl Message {
             content: content.into(),
             timestamp: Utc::now(),
             tool_calls: Vec::new(),
+            artifacts: TranscriptArtifacts::default(),
         }
     }
 
@@ -58,6 +62,7 @@ impl Message {
             content: content.into(),
             timestamp: Utc::now(),
             tool_calls: Vec::new(),
+            artifacts: TranscriptArtifacts::default(),
         }
     }
 
@@ -68,11 +73,17 @@ impl Message {
             content: content.into(),
             timestamp: Utc::now(),
             tool_calls: Vec::new(),
+            artifacts: TranscriptArtifacts::default(),
         }
     }
 
     pub fn with_tool_call(mut self, tool_call: crate::agent::ToolCall) -> Self {
         self.tool_calls.push(tool_call);
+        self
+    }
+
+    pub fn with_artifacts(mut self, artifacts: TranscriptArtifacts) -> Self {
+        self.artifacts = artifacts;
         self
     }
 
@@ -88,6 +99,13 @@ pub enum MessageRole {
     User,
     Assistant,
     System,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct TranscriptArtifacts {
+    pub reasoning: Option<String>,
+    pub provider_metadata: std::collections::HashMap<String, String>,
 }
 
 /// Conversation session
@@ -375,6 +393,7 @@ mod tests {
         assert_eq!(msg.role, MessageRole::Assistant);
         assert_eq!(msg.content, "I'm here to help.");
         assert!(msg.tool_calls.is_empty());
+        assert!(msg.artifacts.reasoning.is_none());
     }
 
     #[test]
@@ -396,6 +415,26 @@ mod tests {
 
         assert_eq!(msg.tool_calls.len(), 1);
         assert_eq!(msg.tool_calls[0].name, "test_tool");
+    }
+
+    #[test]
+    fn message_with_artifacts_preserves_reasoning_metadata() {
+        let mut provider_metadata = std::collections::HashMap::new();
+        provider_metadata.insert("provider".to_string(), "minimax".to_string());
+
+        let msg = Message::assistant("Visible").with_artifacts(TranscriptArtifacts {
+            reasoning: Some("Hidden chain".to_string()),
+            provider_metadata,
+        });
+
+        assert_eq!(msg.artifacts.reasoning.as_deref(), Some("Hidden chain"));
+        assert_eq!(
+            msg.artifacts
+                .provider_metadata
+                .get("provider")
+                .map(String::as_str),
+            Some("minimax")
+        );
     }
 
     #[test]

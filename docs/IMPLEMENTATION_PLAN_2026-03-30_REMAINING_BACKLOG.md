@@ -7,7 +7,8 @@ It assumes the merged baseline through the Docker sandbox tranche and turns the 
 Status note:
 - PR 1 (`Backlog Contract Repair`) is landed.
 - PR 2 (`Provider Profile Registry`) is landed.
-- The next required tranche is a provider-turn hotfix for MiniMax multi-turn chat stability before identity/transcript expansion continues.
+- PR 3 (`MiniMax Multi-Turn Stability Fix`) is landed.
+- PR 4 (`Identity Formats + Transcript Artifacts`) is the active tranche.
 
 ## Scope Notes
 
@@ -24,8 +25,8 @@ These items remain useful upstream references, but they are not part of BorgClaw
 |---|---|---|---|
 | 1 | Backlog Contract Repair | complete | Align docs, status tracking, and follow-up ownership with the intended backlog |
 | 2 | Provider Profile Registry | complete | Add encrypted named provider profiles and runtime profile selection |
-| 3 | MiniMax Multi-Turn Stability Fix | pending | Keep MiniMax chat history valid after the first turn and add regression coverage for the chat turn pipeline |
-| 4 | Identity Formats + Transcript Artifacts | pending | Support markdown and structured identities, plus richer internal provider artifacts |
+| 3 | MiniMax Multi-Turn Stability Fix | complete | Keep MiniMax chat history valid after the first turn and add regression coverage for the chat turn pipeline |
+| 4 | Identity Formats + Transcript Artifacts | in progress | Support markdown and structured identities, plus richer internal provider artifacts |
 | 5 | Memory Query Extensions + External Adapter | pending | Add `since`/`until`, richer memory APIs, and an optional OpenMemory-style adapter |
 | 6 | Workspace-Layered Memory Privacy | pending | Add sensitivity-aware memory access policy across execution contexts |
 | 7 | PTY + Background Command Runtime | pending | Extend `execute_command` with PTY/background execution and persisted process state |
