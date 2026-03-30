@@ -2,6 +2,16 @@
 
 BorgClaw skills are modular capabilities that extend agent functionality.
 
+## Lifecycle Tiers
+
+BorgClaw resolves discovered `SKILL.md` skills from three explicit tiers:
+
+- `bundled`: repository-shipped skills discovered from `./skills`
+- `managed`: operator-installed skills stored in `skills.skills_path`
+- `workspace`: task- or repo-local skills stored in `<agent.workspace>/skills`
+
+Precedence is `workspace` > `managed` > `bundled`. When the same skill id exists in multiple tiers, the higher-precedence copy becomes the effective skill and lower-precedence copies are reported as shadowed in `borgclaw skills status`.
+
 ## Version Compatibility
 
 Skill manifests can declare `min_version` to require a minimum BorgClaw release before the skill is considered loadable.
@@ -44,6 +54,34 @@ This keeps direct manifest installs portable while still allowing a best-effort 
 ```json
 ["prompts/system.txt", "assets/checklist.md"]
 ```
+
+## Requirement Gates
+
+Skill manifests can declare runtime requirements that BorgClaw evaluates before treating a discovered skill as ready:
+
+```yaml
+name: release-auditor
+version: 1.2.0
+binaries:
+  - curl
+env:
+  - GITHUB_TOKEN=GitHub API token
+config:
+  - skills.github.token=Configured GitHub skill token
+```
+
+Supported gate types:
+
+- `binaries`: executables that must be available on `PATH` or as explicit filesystem paths
+- `env`: environment or encrypted secret keys that must be present
+- `config`: dotted config keys that must resolve to non-empty or enabled values
+
+Use the operator surfaces to inspect gates:
+
+- `borgclaw skills list`
+- `borgclaw skills search <query>`
+- `borgclaw skills info <id>`
+- `borgclaw skills status`
 
 ## Available Skills
 

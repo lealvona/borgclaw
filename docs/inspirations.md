@@ -12,7 +12,7 @@ Status note:
 Current BorgClaw disposition of major inspiration items:
 - Implemented and verified in the runtime: provider-backed shared routing, structured gateway auth/events, scheduler/heartbeat/sub-agent persistence and recovery, typed workspace policy, unified approval flow for foreground/background tool execution, explicit memory backend selection with PostgreSQL + pgvector, tool-level retry, system prompt date/time injection, archive-backed skill installs, and the typed optional Docker command sandbox.
 - Implemented and still worth iterating on: the Docker sandbox now covers `execute_command` through typed `security.docker` policy plus local/remote/background context overrides. Separate base and remote images are shipped, though operators can still choose whether to use image overrides in their config.
-- Not yet implemented but explicitly tracked here: structured fallback deliverables for failed/stuck jobs, per-channel proxy settings, and broader managed skills lifecycle.
+- Not yet implemented but explicitly tracked here: structured fallback deliverables for failed/stuck jobs and per-channel proxy settings.
 - Explicitly declined for BorgClaw: AWS Bedrock provider support, Composio integration, and Slack approval UI/buttons.
 
 Use it for two things:
@@ -162,7 +162,7 @@ Good examples:
   Source: [OpenClaw README gateway/control-plane notes](https://github.com/openclaw/openclaw#readme)
 - The repo layout shows deliberate runtime segregation for sandboxing with `Dockerfile.sandbox`, `Dockerfile.sandbox-browser`, and `Dockerfile.sandbox-common`. That is stronger than a single toggle-based sandbox story.  
   Source: [OpenClaw repository root](https://github.com/openclaw/openclaw)
-- OpenClaw documents a managed skills platform with bundled, managed, and workspace skills plus install gating and UI. BorgClaw now supports local `SKILL.md` installs and installed-skill listing, but it still does not have a broader managed registry lifecycle.  
+- OpenClaw documents a managed skills platform with bundled, managed, and workspace skills plus install gating and UI. BorgClaw now has explicit bundled/managed/workspace tier precedence, requirement-gated skill readiness, and operator-facing `skills list/search/info/status` flows, but gateway/onboarding surfaces still need to reflect that richer lifecycle consistently.  
   Source: [OpenClaw README skills platform notes](https://github.com/openclaw/openclaw#readme)
 - OpenClaw's security model explicitly distinguishes main-session host execution from non-main session sandbox execution, with allowlists and denylisted capabilities. That is the right level of specificity for channel and group safety.  
   Source: [OpenClaw README security model](https://github.com/openclaw/openclaw#readme)

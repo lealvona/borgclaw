@@ -88,6 +88,9 @@ Audit note:
 - ✅ Remote archive install-by-URL
 - ✅ GitHub-backed remote installs now extract companion files instead of persisting only `SKILL.md`
 - ✅ Direct `SKILL.md` installs can fetch companion files via manifest `files:`, adjacent `SKILL.files.json`, or manifest-directory discovery when listings are available
+- ✅ Bundled, managed, and workspace skill tiers are resolved explicitly with operator-visible precedence
+- ✅ Skill requirement gates now evaluate binaries, env/secrets, and dotted config prerequisites
+- ✅ Operator discovery surfaces now include `borgclaw skills list`, `search`, `info`, and `status`
 - ✅ GitHub runtime happy-path coverage
 - ✅ Google runtime happy-path coverage (Gmail, Drive, Calendar)
 - ✅ Browser runtime happy-path coverage (Playwright/CDP)
@@ -108,7 +111,7 @@ Audit note:
 
 ## Temporary Limitations
 
-- Inspiration backlog still open by design: structured fallback deliverables for failed/stuck jobs, per-channel proxy settings, and broader managed skills lifecycle.
+- Inspiration backlog still open by design: structured fallback deliverables for failed/stuck jobs and per-channel proxy settings.
 - Explicitly declined and not planned: AWS Bedrock provider support, Composio integration, and Slack approval UI/buttons.
 - The repo treats the remaining items as tracked follow-up features, not as implemented functionality. See [inspirations.md](inspirations.md) and [IMPLEMENTATION_PLAN_2026-03-30_REMAINING_BACKLOG](IMPLEMENTATION_PLAN_2026-03-30_REMAINING_BACKLOG.md) for the execution backlog.
 
