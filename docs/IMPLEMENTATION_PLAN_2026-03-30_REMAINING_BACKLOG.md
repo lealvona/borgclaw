@@ -17,6 +17,7 @@ Status note:
 - PR 10 (`Gateway + Onboarding Control Plane`) is landed.
 - PR 11 (`Structured Fallback Deliverables`) is landed.
 - PR 12 (`Per-Channel Proxy Settings`) is landed.
+- PR 13 (`Final Audit + Smell Cleanup`) is landed.
 
 ## Scope Notes
 
@@ -43,7 +44,7 @@ These items remain useful upstream references, but they are not part of BorgClaw
 | 10 | Gateway + Onboarding Control Plane | complete | Expose all new runtime contracts in onboarding, status, doctor, and gateway surfaces |
 | 11 | Structured Fallback Deliverables | complete | Persist and surface structured fallback guidance for failed or stuck background work |
 | 12 | Per-Channel Proxy Settings | complete | Add explicit proxy wiring, validation, and operator visibility for outbound channel traffic |
-| 13 | Final Audit + Smell Cleanup | pending | Resolve cross-cutting cleanup, fill test gaps, and close the intended backlog |
+| 13 | Final Audit + Smell Cleanup | complete | Re-run strict verification, close the intended backlog, and record final shippability state |
 
 ## PR 1: Backlog Contract Repair
 
@@ -194,6 +195,9 @@ Required changes:
 Acceptance:
 - The intended backlog is empty.
 - Remaining non-goals are documented as declined rather than left ambiguous.
+
+Status:
+- Complete. See [FINAL_SHIPPABILITY_AUDIT_2026-03-30](FINAL_SHIPPABILITY_AUDIT_2026-03-30.md).
 
 ## Verification Standard For Every PR
 

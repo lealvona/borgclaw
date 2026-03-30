@@ -111,9 +111,10 @@ Audit note:
 
 ## Temporary Limitations
 
-- No intended inspiration-derived runtime features remain open; the remaining work is the final audit/cleanup tranche.
+- No intended inspiration-derived runtime features remain open.
 - Explicitly declined and not planned: AWS Bedrock provider support, Composio integration, and Slack approval UI/buttons.
-- The repo treats the remaining items as tracked follow-up features, not as implemented functionality. See [inspirations.md](inspirations.md) and [IMPLEMENTATION_PLAN_2026-03-30_REMAINING_BACKLOG](IMPLEMENTATION_PLAN_2026-03-30_REMAINING_BACKLOG.md) for the execution backlog.
+- Residual release risk: `sqlx-postgres v0.7.4` still emits a Rust future-incompatibility warning for a future toolchain bump.
+- Final verification record: [FINAL_SHIPPABILITY_AUDIT_2026-03-30](FINAL_SHIPPABILITY_AUDIT_2026-03-30.md).
 
 ## Historical Note
 
