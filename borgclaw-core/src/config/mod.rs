@@ -516,6 +516,8 @@ pub struct MemoryConfig {
     pub session_keep_important: bool,
     /// Optional external OpenMemory-style adapter
     pub external: ExternalMemoryConfig,
+    /// Memory privacy policy
+    pub privacy: MemoryPrivacyConfig,
 }
 
 impl Default for MemoryConfig {
@@ -532,6 +534,7 @@ impl Default for MemoryConfig {
             session_keep_recent: 20,
             session_keep_important: true,
             external: ExternalMemoryConfig::default(),
+            privacy: MemoryPrivacyConfig::default(),
         }
     }
 }
@@ -581,6 +584,50 @@ impl Default for ExternalMemoryConfig {
             timeout_seconds: 15,
         }
     }
+}
+
+/// Memory privacy policy configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MemoryPrivacyConfig {
+    /// Enable sensitivity-aware recall filtering
+    pub enabled: bool,
+    /// Default sensitivity applied to newly stored memories
+    pub default_sensitivity: MemorySensitivityConfig,
+    /// Maximum readable scope for sub-agents
+    pub subagent_scope: MemoryAccessScopeConfig,
+    /// Maximum readable scope for scheduler-triggered work
+    pub scheduler_scope: MemoryAccessScopeConfig,
+    /// Maximum readable scope for heartbeat-triggered work
+    pub heartbeat_scope: MemoryAccessScopeConfig,
+}
+
+impl Default for MemoryPrivacyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            default_sensitivity: MemorySensitivityConfig::Workspace,
+            subagent_scope: MemoryAccessScopeConfig::Workspace,
+            scheduler_scope: MemoryAccessScopeConfig::Workspace,
+            heartbeat_scope: MemoryAccessScopeConfig::Workspace,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MemorySensitivityConfig {
+    Public,
+    Workspace,
+    Private,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryAccessScopeConfig {
+    Public,
+    Workspace,
+    Private,
 }
 
 /// Heartbeat configuration
@@ -1291,6 +1338,35 @@ mod tests {
         );
         assert!(!config.memory.external.mirror_writes);
         assert_eq!(config.memory.external.timeout_seconds, 30);
+    }
+
+    #[test]
+    fn memory_config_parses_privacy_policy_contract() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [memory.privacy]
+            enabled = true
+            default_sensitivity = "private"
+            subagent_scope = "workspace"
+            scheduler_scope = "public"
+            heartbeat_scope = "workspace"
+            "#,
+        )
+        .unwrap();
+
+        assert!(config.memory.privacy.enabled);
+        assert_eq!(
+            config.memory.privacy.default_sensitivity,
+            MemorySensitivityConfig::Private
+        );
+        assert_eq!(
+            config.memory.privacy.subagent_scope,
+            MemoryAccessScopeConfig::Workspace
+        );
+        assert_eq!(
+            config.memory.privacy.scheduler_scope,
+            MemoryAccessScopeConfig::Public
+        );
     }
 
     #[test]

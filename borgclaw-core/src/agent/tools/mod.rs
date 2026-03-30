@@ -30,6 +30,7 @@ use tokio::sync::Mutex;
 pub struct ToolRuntime {
     pub workspace_root: PathBuf,
     pub workspace_policy: crate::config::WorkspacePolicyConfig,
+    pub memory_config: crate::config::MemoryConfig,
     pub memory: Arc<dyn Memory>,
     pub heartbeat: Arc<HeartbeatEngine>,
     pub scheduler: Arc<Mutex<Scheduler>>,
@@ -83,6 +84,7 @@ impl ToolRuntime {
         let runtime = Self {
             workspace_root,
             workspace_policy: security_config.workspace.clone(),
+            memory_config: memory_config.clone(),
             memory,
             heartbeat,
             scheduler: Arc::new(Mutex::new(
@@ -699,7 +701,7 @@ mod tests {
     };
     use crate::constants::DEFAULT_TOOL_VERSION;
     use crate::mcp::transport::McpTransportConfig;
-    use crate::memory::{MemoryQuery, SqliteMemory};
+    use crate::memory::{new_entry, MemoryQuery, MemorySensitivity, SqliteMemory};
     use crate::scheduler::{JobStatus, JobTrigger, SchedulerTrait};
     fn write_fixture(path: &std::path::Path, body: impl AsRef<[u8]>) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1528,6 +1530,7 @@ file_write = ["/etc"]
         let runtime = ToolRuntime {
             workspace_root: PathBuf::from("."),
             workspace_policy: crate::config::WorkspacePolicyConfig::default(),
+            memory_config: crate::config::MemoryConfig::default(),
             memory: Arc::new(SqliteMemory::new(
                 std::env::temp_dir().join("borgclaw_mcp_unknown_memory"),
             )),
@@ -1555,6 +1558,7 @@ file_write = ["/etc"]
         let runtime = ToolRuntime {
             workspace_root: PathBuf::from("."),
             workspace_policy: crate::config::WorkspacePolicyConfig::default(),
+            memory_config: crate::config::MemoryConfig::default(),
             memory: Arc::new(SqliteMemory::new(
                 std::env::temp_dir().join("borgclaw_mcp_transport_memory"),
             )),
@@ -1588,6 +1592,7 @@ file_write = ["/etc"]
         let runtime = ToolRuntime {
             workspace_root: PathBuf::from("."),
             workspace_policy: crate::config::WorkspacePolicyConfig::default(),
+            memory_config: crate::config::MemoryConfig::default(),
             memory: Arc::new(SqliteMemory::new(
                 std::env::temp_dir().join("borgclaw_mcp_blocked_memory"),
             )),
@@ -1622,6 +1627,7 @@ file_write = ["/etc"]
         let runtime = ToolRuntime {
             workspace_root: PathBuf::from("."),
             workspace_policy: crate::config::WorkspacePolicyConfig::default(),
+            memory_config: crate::config::MemoryConfig::default(),
             memory: Arc::new(SqliteMemory::new(
                 std::env::temp_dir().join("borgclaw_mcp_allowlist_memory"),
             )),
@@ -1669,6 +1675,7 @@ file_write = ["/etc"]
         let runtime = ToolRuntime {
             workspace_root: PathBuf::from("."),
             workspace_policy: crate::config::WorkspacePolicyConfig::default(),
+            memory_config: crate::config::MemoryConfig::default(),
             memory: Arc::new(SqliteMemory::new(root.join("memory"))),
             heartbeat: Arc::new(HeartbeatEngine::new()),
             scheduler: Arc::new(Mutex::new(Scheduler::new())),
@@ -2083,6 +2090,186 @@ file_write = ["/etc"]
         assert!(recall.output.contains("groupkey: group value"));
         assert!(global.is_empty());
         assert_eq!(grouped.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn subagent_memory_recall_hides_private_entries() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_memory_privacy_subagent_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &HeartbeatConfig::default(),
+            &SchedulerConfig::default(),
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap()
+        .with_context(&AgentContext {
+            session_id: SessionId("subagent-session".to_string()),
+            message: "recall".to_string(),
+            sender: SenderInfo {
+                id: "subagent-1".to_string(),
+                name: Some("SubAgent".to_string()),
+                channel: "subagent".to_string(),
+            },
+            metadata: HashMap::new(),
+        });
+
+        let mut private_entry = new_entry("deploy", "private deploy secret");
+        private_entry.set_sensitivity(MemorySensitivity::Private);
+        runtime.memory.store(private_entry).await.unwrap();
+
+        let workspace_entry = new_entry("deploy", "workspace deploy note");
+        runtime.memory.store(workspace_entry).await.unwrap();
+
+        let recall = execute_tool(
+            &ToolCall::new(
+                "memory_recall",
+                HashMap::from([("query".to_string(), serde_json::json!("deploy"))]),
+            ),
+            &runtime,
+        )
+        .await;
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(recall.success);
+        assert!(recall.output.contains("workspace deploy note"));
+        assert!(!recall.output.contains("private deploy secret"));
+    }
+
+    #[tokio::test]
+    async fn scheduler_memory_recall_hides_private_entries() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_memory_privacy_scheduler_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &HeartbeatConfig::default(),
+            &SchedulerConfig::default(),
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let mut private_entry = new_entry("deploy", "private scheduler secret");
+        private_entry.set_sensitivity(MemorySensitivity::Private);
+        runtime.memory.store(private_entry).await.unwrap();
+
+        let workspace_entry = new_entry("deploy", "workspace scheduler note");
+        runtime.memory.store(workspace_entry).await.unwrap();
+
+        let job = crate::scheduler::new_job(
+            "scheduled recall".to_string(),
+            crate::scheduler::JobTrigger::OneShot(chrono::Utc::now()),
+            "memory_recall".to_string(),
+        );
+        let scheduled_runtime = runtime.with_scheduled_job_context(&job);
+        let recall = execute_tool(
+            &ToolCall::new(
+                "memory_recall",
+                HashMap::from([("query".to_string(), serde_json::json!("deploy"))]),
+            ),
+            &scheduled_runtime,
+        )
+        .await;
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(recall.success);
+        assert!(recall.output.contains("workspace scheduler note"));
+        assert!(!recall.output.contains("private scheduler secret"));
+    }
+
+    #[tokio::test]
+    async fn heartbeat_memory_recall_hides_private_entries() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_memory_privacy_heartbeat_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let runtime = ToolRuntime::from_config(
+            &AgentConfig {
+                workspace: root.clone(),
+                ..Default::default()
+            },
+            &MemoryConfig {
+                database_path: root.join("memory"),
+                ..Default::default()
+            },
+            &HeartbeatConfig::default(),
+            &SchedulerConfig::default(),
+            &crate::config::SkillsConfig {
+                skills_path: root.join("skills"),
+                ..Default::default()
+            },
+            &crate::config::McpConfig::default(),
+            &SecurityConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let mut private_entry = new_entry("deploy", "private heartbeat secret");
+        private_entry.set_sensitivity(MemorySensitivity::Private);
+        runtime.memory.store(private_entry).await.unwrap();
+
+        let workspace_entry = new_entry("deploy", "workspace heartbeat note");
+        runtime.memory.store(workspace_entry).await.unwrap();
+
+        let mut heartbeat_runtime = runtime.clone();
+        heartbeat_runtime.invocation = Some(Arc::new(ToolInvocationContext {
+            session_id: SessionId("heartbeat-session".to_string()),
+            sender: SenderInfo {
+                id: "heartbeat-1".to_string(),
+                name: Some("Heartbeat".to_string()),
+                channel: "scheduler".to_string(),
+            },
+            metadata: HashMap::from([("heartbeat_task_id".to_string(), "task-1".to_string())]),
+        }));
+
+        let recall = execute_tool(
+            &ToolCall::new(
+                "memory_recall",
+                HashMap::from([("query".to_string(), serde_json::json!("deploy"))]),
+            ),
+            &heartbeat_runtime,
+        )
+        .await;
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(recall.success);
+        assert!(recall.output.contains("workspace heartbeat note"));
+        assert!(!recall.output.contains("private heartbeat secret"));
     }
 
     #[tokio::test]

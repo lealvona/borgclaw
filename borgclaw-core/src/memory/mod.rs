@@ -16,7 +16,9 @@ pub use session::{SessionCompactor, SessionMemory, SessionMessage};
 pub use solution::{Solution, SolutionMemory, SolutionPattern};
 pub use storage::SqliteMemory;
 
-use crate::config::{MemoryBackend, MemoryConfig};
+use crate::config::{
+    MemoryAccessScopeConfig, MemoryBackend, MemoryConfig, MemorySensitivityConfig,
+};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -46,6 +48,74 @@ pub struct MemoryEntry {
     pub group_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MemorySensitivity {
+    Public,
+    Workspace,
+    Private,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MemoryAccessScope {
+    Public,
+    Workspace,
+    #[default]
+    Private,
+}
+
+impl From<MemorySensitivityConfig> for MemorySensitivity {
+    fn from(value: MemorySensitivityConfig) -> Self {
+        match value {
+            MemorySensitivityConfig::Public => Self::Public,
+            MemorySensitivityConfig::Workspace => Self::Workspace,
+            MemorySensitivityConfig::Private => Self::Private,
+        }
+    }
+}
+
+impl From<MemoryAccessScopeConfig> for MemoryAccessScope {
+    fn from(value: MemoryAccessScopeConfig) -> Self {
+        match value {
+            MemoryAccessScopeConfig::Public => Self::Public,
+            MemoryAccessScopeConfig::Workspace => Self::Workspace,
+            MemoryAccessScopeConfig::Private => Self::Private,
+        }
+    }
+}
+
+impl MemoryEntry {
+    pub fn sensitivity(&self) -> MemorySensitivity {
+        match self.metadata.get("sensitivity").map(String::as_str) {
+            Some("public") => MemorySensitivity::Public,
+            Some("private") => MemorySensitivity::Private,
+            _ => MemorySensitivity::Workspace,
+        }
+    }
+
+    pub fn set_sensitivity(&mut self, sensitivity: MemorySensitivity) {
+        self.metadata.insert(
+            "sensitivity".to_string(),
+            match sensitivity {
+                MemorySensitivity::Public => "public",
+                MemorySensitivity::Workspace => "workspace",
+                MemorySensitivity::Private => "private",
+            }
+            .to_string(),
+        );
+    }
+}
+
+impl MemoryAccessScope {
+    pub fn allows(self, sensitivity: MemorySensitivity) -> bool {
+        match self {
+            Self::Public => matches!(sensitivity, MemorySensitivity::Public),
+            Self::Workspace => !matches!(sensitivity, MemorySensitivity::Private),
+            Self::Private => true,
+        }
+    }
+}
+
 /// Memory query
 #[derive(Debug, Clone)]
 pub struct MemoryQuery {
@@ -61,6 +131,8 @@ pub struct MemoryQuery {
     pub since: Option<DateTime<Utc>>,
     /// Filter to entries created at or before this instant
     pub until: Option<DateTime<Utc>>,
+    /// Maximum readable sensitivity for this recall
+    pub access_scope: MemoryAccessScope,
 }
 
 impl Default for MemoryQuery {
@@ -72,6 +144,7 @@ impl Default for MemoryQuery {
             group_id: None,
             since: None,
             until: None,
+            access_scope: MemoryAccessScope::Private,
         }
     }
 }
@@ -93,6 +166,9 @@ impl MemoryQuery {
             return false;
         }
         if self.until.is_some_and(|until| entry.created_at > until) {
+            return false;
+        }
+        if !self.access_scope.allows(entry.sensitivity()) {
             return false;
         }
         true
@@ -281,7 +357,7 @@ fn hybrid_search_runtime_enabled(config: &MemoryConfig) -> bool {
 /// Create a new memory entry
 pub fn new_entry(key: impl Into<String>, content: impl Into<String>) -> MemoryEntry {
     let now = Utc::now();
-    MemoryEntry {
+    let mut entry = MemoryEntry {
         id: uuid::Uuid::new_v4().to_string(),
         key: key.into(),
         content: content.into(),
@@ -291,7 +367,9 @@ pub fn new_entry(key: impl Into<String>, content: impl Into<String>) -> MemoryEn
         access_count: 0,
         importance: 0.5,
         group_id: None,
-    }
+    };
+    entry.set_sensitivity(MemorySensitivity::Workspace);
+    entry
 }
 
 /// Create a new memory entry for a group
@@ -359,6 +437,7 @@ mod tests {
             group_id: Some("custom-group".to_string()),
             since: None,
             until: None,
+            access_scope: MemoryAccessScope::Workspace,
         };
 
         assert_eq!(query.query, "custom");
@@ -373,10 +452,14 @@ mod tests {
 
         assert_eq!(entry.key, "test-key");
         assert_eq!(entry.content, "test content");
-        assert!(entry.metadata.is_empty());
+        assert_eq!(
+            entry.metadata.get("sensitivity").map(String::as_str),
+            Some("workspace")
+        );
         assert_eq!(entry.access_count, 0);
         assert_eq!(entry.importance, 0.5);
         assert!(entry.group_id.is_none());
+        assert_eq!(entry.sensitivity(), MemorySensitivity::Workspace);
         // ID should be a valid UUID
         assert!(!entry.id.is_empty());
         // Timestamps should be set and equal (fresh entry)
@@ -390,7 +473,10 @@ mod tests {
         assert_eq!(entry.key, "grouped-key");
         assert_eq!(entry.content, "grouped content");
         assert_eq!(entry.group_id, Some("my-group".to_string()));
-        assert!(entry.metadata.is_empty());
+        assert_eq!(
+            entry.metadata.get("sensitivity").map(String::as_str),
+            Some("workspace")
+        );
         assert_eq!(entry.access_count, 0);
     }
 
@@ -406,6 +492,19 @@ mod tests {
     }
 
     #[test]
+    fn workspace_scope_does_not_allow_private_entries() {
+        let mut entry = new_entry("topic", "secret");
+        entry.set_sensitivity(MemorySensitivity::Private);
+
+        let query = MemoryQuery {
+            access_scope: MemoryAccessScope::Workspace,
+            ..Default::default()
+        };
+
+        assert!(!query.matches_entry(&entry));
+    }
+
+    #[test]
     fn memory_entry_with_metadata() {
         let mut entry = new_entry("meta-key", "meta content");
         entry
@@ -415,7 +514,7 @@ mod tests {
             .metadata
             .insert("priority".to_string(), "high".to_string());
 
-        assert_eq!(entry.metadata.len(), 2);
+        assert_eq!(entry.metadata.len(), 3);
         assert_eq!(entry.metadata.get("source"), Some(&"test".to_string()));
         assert_eq!(entry.metadata.get("priority"), Some(&"high".to_string()));
     }
