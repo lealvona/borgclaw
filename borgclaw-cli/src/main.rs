@@ -145,6 +145,12 @@ enum SecretAction {
     Unlock,
     /// Lock secret store (future feature)
     Lock,
+    /// Migrate secrets from .env file to encrypted store
+    Migrate {
+        /// Path to .env file (defaults to ./.env)
+        #[arg(short, long)]
+        env_file: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2137,6 +2143,104 @@ async fn secrets(config: AppConfig, action: SecretAction) {
             println!("  rm {}", config.security.secrets_path.with_extension("enc.key").display());
             println!();
             println!("Warning: Without the key file, secrets cannot be decrypted!");
+        }
+        SecretAction::Migrate { env_file } => {
+            let env_path = env_file.unwrap_or_else(|| PathBuf::from(".env"));
+            println!("Migrating secrets from {}", env_path.display());
+            println!("========================================={}", "=".repeat(env_path.display().to_string().len()));
+            println!();
+
+            if !env_path.exists() {
+                println!("✗ .env file not found at {}", env_path.display());
+                println!();
+                println!("To specify a different path:");
+                println!("  borgclaw secrets migrate --env-file /path/to/.env");
+                return;
+            }
+
+            let content = match tokio::fs::read_to_string(&env_path).await {
+                Ok(c) => c,
+                Err(e) => {
+                    println!("✗ Failed to read .env file: {}", e);
+                    return;
+                }
+            };
+
+            let mut migrated = 0;
+            let mut failed = 0;
+            let mut secrets_found = Vec::new();
+
+            for line in content.lines() {
+                let line = line.trim();
+                // Skip comments and empty lines
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+
+                // Look for KEY=value patterns that look like secrets
+                if let Some(pos) = line.find('=') {
+                    let key = &line[..pos];
+                    let value = &line[pos + 1..];
+                    
+                    // Check if this looks like a secret key
+                    let is_secret = key.contains("API_KEY") 
+                        || key.contains("TOKEN") 
+                        || key.contains("SECRET")
+                        || key.contains("PASSWORD")
+                        || key.contains("KEY");
+
+                    if is_secret && !value.is_empty() {
+                        secrets_found.push((key.to_string(), value.to_string()));
+                    }
+                }
+            }
+
+            if secrets_found.is_empty() {
+                println!("No secrets found in .env file");
+                println!();
+                println!("Secrets are detected by keywords: API_KEY, TOKEN, SECRET, PASSWORD, KEY");
+                return;
+            }
+
+            println!("Found {} potential secret(s):", secrets_found.len());
+            for (key, _) in &secrets_found {
+                println!("  - {}", key);
+            }
+            println!();
+
+            // Migrate each secret
+            for (key, value) in secrets_found {
+                // Remove quotes if present
+                let clean_value = value
+                    .trim_start_matches('"')
+                    .trim_end_matches('"')
+                    .trim_start_matches('\'')
+                    .trim_end_matches('\'');
+
+                match store.store(&key, clean_value).await {
+                    Ok(()) => {
+                        println!("✓ Migrated: {}", key);
+                        migrated += 1;
+                    }
+                    Err(e) => {
+                        println!("✗ Failed to migrate {}: {}", key, e);
+                        failed += 1;
+                    }
+                }
+            }
+
+            println!();
+            println!("Migration complete:");
+            println!("  ✓ Migrated: {}", migrated);
+            if failed > 0 {
+                println!("  ✗ Failed: {}", failed);
+            }
+            println!();
+            println!("You can now delete the secrets from your .env file:");
+            println!("  # Remove these lines from {}", env_path.display());
+            println!();
+            println!("Note: The original .env file was not modified.");
+            println!("      Please review and delete secrets manually after verification.");
         }
     }
 }
