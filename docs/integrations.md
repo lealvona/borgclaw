@@ -182,31 +182,46 @@ Execute the skill against the user's request.
 
 ### Creating a Channel
 
-Implement the `Channel` trait:
+Implement the current `Channel` trait:
 
 ```rust
-use borgclaw_core::channel::*;
+use async_trait::async_trait;
+use borgclaw_core::channel::{
+    Channel, ChannelConfig, ChannelError, ChannelStatus, ChannelType, InboundMessage,
+    OutboundMessage,
+};
+use tokio::sync::mpsc;
 
-pub struct MyChannel {
-    config: MyConfig,
-    sender: Option<ChannelSender>,
-}
+pub struct MyChannel;
 
 #[async_trait]
 impl Channel for MyChannel {
-    async fn start(&mut self, sender: ChannelSender) -> Result<(), ChannelError> {
-        self.sender = Some(sender);
-        // Start listening for messages
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::new("my-channel")
+    }
+
+    async fn init(&mut self, _config: &ChannelConfig) -> Result<(), ChannelError> {
         Ok(())
     }
-    
+
+    async fn start_receiving(
+        &self,
+        sender: mpsc::Sender<InboundMessage>,
+    ) -> Result<(), ChannelError> {
+        let _ = sender;
+        Ok(())
+    }
+
     async fn send(&self, msg: OutboundMessage) -> Result<(), ChannelError> {
-        // Send message to channel
+        let _ = msg;
         Ok(())
     }
-    
-    async fn stop(&mut self) -> Result<(), ChannelError> {
-        self.sender = None;
+
+    async fn status(&self) -> ChannelStatus {
+        ChannelStatus::connected()
+    }
+
+    async fn shutdown(&self) -> Result<(), ChannelError> {
         Ok(())
     }
 }
@@ -214,40 +229,12 @@ impl Channel for MyChannel {
 
 ### Creating a Tool
 
-Implement the `Tool` trait:
+BorgClaw currently exposes tool definitions through built-in runtime registration and plugin-integrated execution paths rather than a public third-party `Tool` trait.
 
-```rust
-use borgclaw_core::agent::*;
-
-pub struct MyTool;
-
-impl Tool for MyTool {
-    fn name(&self) -> &str {
-        "my_tool"
-    }
-    
-    fn description(&self) -> &str {
-        "Does something useful"
-    }
-    
-    fn input_schema(&self) -> ToolSchema {
-        ToolSchema {
-            properties: vec![
-                ("input".to_string(), PropertyDef {
-                    property_type: "string".to_string(),
-                    description: Some("Input to process".to_string()),
-                    required: true,
-                }),
-            ],
-        }
-    }
-    
-    async fn execute(&self, input: serde_json::Value) -> Result<ToolResult, ToolError> {
-        let input: String = serde_json::from_value(input)?;
-        Ok(ToolResult::success(format!("Result: {}", input)))
-    }
-}
-```
+For runtime integrations:
+- use MCP servers when the capability already exists out-of-process
+- use WASM plugins when the capability fits the plugin sandbox
+- extend the core runtime only when you are intentionally adding a first-party built-in tool
 
 ## Webhook Integrations
 
@@ -320,7 +307,9 @@ base_url = "http://localhost:11434/api"
 
 ```toml
 [memory]
+backend = "sqlite"
 database_path = ".local/data/memory.db"
+hybrid_search = true
 ```
 
 ### PostgreSQL
@@ -329,7 +318,21 @@ database_path = ".local/data/memory.db"
 [memory]
 backend = "postgres"
 connection_string = "postgres://user:pass@localhost/borgclaw"
+hybrid_search = true
 ```
+
+### In-Memory
+
+```toml
+[memory]
+backend = "memory"
+hybrid_search = false
+```
+
+Notes:
+- `sqlite` remains the default when `backend` is omitted.
+- `postgres` requires `memory.connection_string`.
+- `memory` is non-persistent and intended for ephemeral local runs or tests.
 
 ## Monitoring
 

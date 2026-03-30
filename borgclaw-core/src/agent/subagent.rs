@@ -4,7 +4,7 @@ use crate::agent::{builtin_tools, Agent, AgentContext, SenderInfo, SessionId, Si
 use crate::config::{
     AgentConfig, McpConfig, MemoryConfig, SchedulerConfig, SecurityConfig, SkillsConfig,
 };
-use crate::memory::{new_entry_for_group, Memory, SqliteMemory};
+use crate::memory::{create_memory_backend, new_entry_for_group};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -494,9 +494,7 @@ impl SubAgentCoordinator {
 
         let memory_entries_created = match task.memory_access {
             MemoryAccessType::ReadWrite => {
-                let memory = SqliteMemory::new(self.memory_config.database_path.clone());
-                memory
-                    .init()
+                let memory = create_memory_backend(&self.memory_config)
                     .await
                     .map_err(|e| SubAgentError::ExecutionFailed(e.to_string()))?;
                 memory
@@ -855,7 +853,7 @@ impl SubAgentBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::MemoryQuery;
+    use crate::memory::{Memory, MemoryQuery};
 
     #[test]
     fn subagent_memory_access_filters_memory_tools() {
@@ -1376,7 +1374,7 @@ mod tests {
             .await;
 
         let result = coordinator.execute(&task_id).await.unwrap();
-        let memory = SqliteMemory::new(memory_path);
+        let memory = crate::memory::SqliteMemory::new(memory_path);
         memory.init().await.unwrap();
         let recalled = memory
             .recall(&MemoryQuery {

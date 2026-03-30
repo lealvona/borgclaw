@@ -489,7 +489,7 @@ impl SqliteMemory {
     }
 }
 
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
     }
@@ -506,7 +506,7 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 }
 
 #[derive(sqlx::FromRow)]
-struct MemoryRow {
+pub(crate) struct MemoryRow {
     id: String,
     key: String,
     content: String,
@@ -519,7 +519,7 @@ struct MemoryRow {
 }
 
 impl MemoryRow {
-    fn into_memory_entry(self) -> MemoryEntry {
+    pub(crate) fn into_memory_entry(self) -> MemoryEntry {
         MemoryEntry {
             id: self.id,
             key: self.key,

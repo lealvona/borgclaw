@@ -78,11 +78,24 @@ impl AppConfig {
                 Some("heartbeat check_interval_seconds must be greater than 0".to_string());
         }
 
+        if matches!(self.memory.effective_backend(), MemoryBackend::Postgres)
+            && self
+                .memory
+                .connection_string
+                .as_deref()
+                .map_or(true, |value| value.trim().is_empty())
+        {
+            error.memory = Some(
+                "memory.connection_string is required when memory.backend = postgres".to_string(),
+            );
+        }
+
         if error.mcp_servers.is_empty()
             && error.soul_path.is_none()
             && error.workspace.is_none()
             && error.rate_limit.is_none()
             && error.heartbeat_interval.is_none()
+            && error.memory.is_none()
         {
             Ok(())
         } else {
@@ -375,9 +388,13 @@ impl Default for OnePasswordVaultConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MemoryConfig {
+    /// Storage backend
+    pub backend: MemoryBackend,
     /// SQLite database path
     #[serde(alias = "memory_path")]
     pub database_path: PathBuf,
+    /// PostgreSQL connection string for the postgres backend
+    pub connection_string: Option<String>,
     /// Enable hybrid search
     pub hybrid_search: bool,
     /// Vector store provider
@@ -396,7 +413,9 @@ pub struct MemoryConfig {
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
+            backend: MemoryBackend::Sqlite,
             database_path: PathBuf::from(".borgclaw/memory"),
+            connection_string: None,
             hybrid_search: true,
             vector_provider: "sqlite".to_string(),
             embedding_model: "sentence-transformers/all-MiniLM-L6-v2".to_string(),
@@ -405,6 +424,28 @@ impl Default for MemoryConfig {
             session_keep_important: true,
         }
     }
+}
+
+impl MemoryConfig {
+    pub fn effective_backend(&self) -> MemoryBackend {
+        if matches!(self.backend, MemoryBackend::Sqlite) {
+            match self.vector_provider.as_str() {
+                "postgres" => MemoryBackend::Postgres,
+                "memory" => MemoryBackend::Memory,
+                _ => MemoryBackend::Sqlite,
+            }
+        } else {
+            self.backend
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryBackend {
+    Sqlite,
+    Postgres,
+    Memory,
 }
 
 /// Heartbeat configuration
@@ -844,6 +885,7 @@ mod config_support {
         pub workspace: Option<String>,
         pub rate_limit: Option<String>,
         pub heartbeat_interval: Option<String>,
+        pub memory: Option<String>,
     }
 
     impl std::fmt::Display for ValidationError {
@@ -862,6 +904,9 @@ mod config_support {
                 errors.push(msg.clone());
             }
             if let Some(ref msg) = self.heartbeat_interval {
+                errors.push(msg.clone());
+            }
+            if let Some(ref msg) = self.memory {
                 errors.push(msg.clone());
             }
             write!(f, "{}", errors.join("; "))

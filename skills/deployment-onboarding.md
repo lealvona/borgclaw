@@ -103,18 +103,17 @@ workspace = ".borgclaw/workspace"
 
 [security]
 wasm_sandbox = true           # Enable WASM sandboxing
-docker_sandbox = true         # Enable Docker isolation
 command_blocklist = true      # Block dangerous commands
 secrets_encryption = true     # Encrypt stored secrets
 
 [memory]
+backend = "sqlite"
 database_path = ".borgclaw/memory"
 hybrid_search = true
-vector_provider = "sqlite"
 
 [channels.telegram]
 enabled = true
-bot_token = "${TELEGRAM_BOT_TOKEN}"
+token = "${TELEGRAM_BOT_TOKEN}"
 
 [channels.webhook]
 enabled = true

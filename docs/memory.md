@@ -1,6 +1,6 @@
 # Memory Systems
 
-BorgClaw provides a comprehensive memory system with hybrid search, session management, and solution patterns.
+BorgClaw provides a comprehensive memory system with selectable storage backends, hybrid search, session management, and solution patterns.
 
 ## Architecture
 
@@ -11,7 +11,9 @@ BorgClaw provides a comprehensive memory system with hybrid search, session mana
 │                                             │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐ │
 │  │ Storage  │  │ Session  │  │ Solution │ │
-│  │ (SQLite) │  │ (Compact)│  │(Patterns)│ │
+│  │(SQLite / │  │ (Compact)│  │(Patterns)│ │
+│  │Postgres /│  │          │  │          │ │
+│  │ In-Memory)│ │          │  │          │ │
 │  └──────────┘  └──────────┘  └──────────┘ │
 │                                             │
 │  ┌──────────┐  ┌──────────┐               │
@@ -22,23 +24,46 @@ BorgClaw provides a comprehensive memory system with hybrid search, session mana
 └─────────────────────────────────────────────┘
 ```
 
-## Storage (SQLite + FTS5)
+## Storage Backends
 
-### Features
+### Shared Features
 
-- **Full-text search** via SQLite FTS5
 - **Per-group isolation** - Separate memory per conversation
 - **Importance scoring** - Weighted recall
 - **Access tracking** - Frequency and recency
+- **Common `Memory` trait** - The runtime uses the same API across SQLite, PostgreSQL, and in-memory modes
+
+### SQLite
+
+- **Full-text search** via SQLite FTS5
+- **Local file-backed persistence**
+
+### PostgreSQL
+
+- **Persistent server-backed storage**
+- **Text recall plus embedding-assisted ranking when hybrid search is enabled**
+
+### In-Memory
+
+- **No persistence across restarts**
+- **Useful for tests and ephemeral local runs**
 
 ### Configuration
 
 ```toml
 [memory]
+backend = "sqlite"  # "sqlite", "postgres", or "memory"
 database_path = ".local/data/memory.db"
+connection_string = "postgres://user:pass@localhost/borgclaw"  # postgres only
 hybrid_search = true
 session_max_entries = 100
 ```
+
+Notes:
+- `backend = "sqlite"` is the default when omitted.
+- `database_path` is used by the SQLite backend.
+- `connection_string` is required by the PostgreSQL backend.
+- Older configs that only set `vector_provider` still load through compatibility mapping, but `backend` is now the primary contract.
 
 ### API
 

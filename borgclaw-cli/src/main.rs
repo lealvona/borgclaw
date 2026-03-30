@@ -5,7 +5,7 @@ mod onboarding;
 use crate::onboarding::{run_init, InitArgs, StartTarget};
 use borgclaw_core::{
     channel::{ChannelType, InboundMessage, MessagePayload, MessageRouter, Sender},
-    config::{load_config, save_config, AppConfig},
+    config::{load_config, save_config, AppConfig, MemoryBackend},
     mcp::{
         client::{McpClient, McpClientConfig},
         transport::{
@@ -833,7 +833,27 @@ async fn status(config: AppConfig) {
             .as_deref()
             .unwrap_or("disabled")
     );
-    println!("Memory database: {:?}", config.memory.database_path);
+    println!(
+        "Memory backend: {}",
+        memory_backend_label(config.memory.effective_backend())
+    );
+    match config.memory.effective_backend() {
+        MemoryBackend::Sqlite => println!("Memory database: {:?}", config.memory.database_path),
+        MemoryBackend::Postgres => println!(
+            "Memory connection: {}",
+            if config
+                .memory
+                .connection_string
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                "configured"
+            } else {
+                "missing"
+            }
+        ),
+        MemoryBackend::Memory => println!("Memory persistence: disabled (in-memory only)"),
+    }
     println!(
         "Session compaction: max_entries={}, keep_recent={}, keep_important={}",
         config.memory.session_max_entries,
@@ -920,17 +940,7 @@ async fn doctor(config: AppConfig) {
             println!("✗ Unknown provider '{}'", config.agent.provider)
         }
     }
-    if let Some(parent) = config.memory.database_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if config.memory.database_path.parent().is_some() || config.memory.database_path.is_absolute() {
-        println!("✓ Memory database path configured");
-    } else {
-        println!(
-            "✗ Memory database path unavailable: {:?}",
-            config.memory.database_path
-        );
-    }
+    report_memory_status(&config);
     if std::fs::create_dir_all(&config.skills.skills_path).is_ok()
         && config.skills.skills_path.exists()
     {
@@ -1109,6 +1119,52 @@ fn schedules(config: AppConfig, action: ScheduleAction) {
                 Ok(false) => println!("No dead-lettered task '{}' found", id),
                 Err(err) => println!("Failed to retry task: {}", err),
             }
+        }
+    }
+}
+
+fn memory_backend_label(backend: MemoryBackend) -> &'static str {
+    match backend {
+        MemoryBackend::Sqlite => "sqlite",
+        MemoryBackend::Postgres => "postgres",
+        MemoryBackend::Memory => "memory",
+    }
+}
+
+fn report_memory_status(config: &AppConfig) {
+    match config.memory.effective_backend() {
+        MemoryBackend::Sqlite => {
+            if let Some(parent) = config.memory.database_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if config.memory.database_path.parent().is_some()
+                || config.memory.database_path.is_absolute()
+            {
+                println!(
+                    "✓ Memory backend '{}' path configured",
+                    memory_backend_label(MemoryBackend::Sqlite)
+                );
+            } else {
+                println!(
+                    "✗ Memory database path unavailable: {:?}",
+                    config.memory.database_path
+                );
+            }
+        }
+        MemoryBackend::Postgres => {
+            if config
+                .memory
+                .connection_string
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                println!("✓ Memory backend 'postgres' connection configured");
+            } else {
+                println!("✗ Memory backend 'postgres' missing connection_string");
+            }
+        }
+        MemoryBackend::Memory => {
+            println!("✓ Memory backend 'memory' configured (non-persistent)");
         }
     }
 }
@@ -1473,13 +1529,28 @@ async fn self_test_failures(config: &AppConfig) -> Vec<String> {
         }
     }
 
-    if !(config.memory.database_path.parent().is_some()
-        || config.memory.database_path.is_absolute())
-    {
-        failures.push(format!(
-            "memory database path unavailable: {}",
-            config.memory.database_path.display()
-        ));
+    match config.memory.effective_backend() {
+        MemoryBackend::Sqlite => {
+            if !(config.memory.database_path.parent().is_some()
+                || config.memory.database_path.is_absolute())
+            {
+                failures.push(format!(
+                    "memory database path unavailable: {}",
+                    config.memory.database_path.display()
+                ));
+            }
+        }
+        MemoryBackend::Postgres => {
+            if config
+                .memory
+                .connection_string
+                .as_deref()
+                .map_or(true, |value| value.trim().is_empty())
+            {
+                failures.push("memory.connection_string missing for postgres backend".to_string());
+            }
+        }
+        MemoryBackend::Memory => {}
     }
 
     if !(std::fs::create_dir_all(&config.skills.skills_path).is_ok()

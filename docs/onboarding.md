@@ -56,7 +56,7 @@ cargo run --bin borgclaw -- init --component channel --chapter signal --action d
 Available components:
 - `channel` - telegram, signal, webhook, websocket
 - `sandbox` - wasm
-- `memory` - sqlite, vector
+- `memory` - sqlite, postgres, vector (`vector` is the legacy component chapter for the in-memory mode)
 - `provider` - openai, anthropic, google, ollama
 
 ## Provider Registry
@@ -151,7 +151,9 @@ wasm_sandbox = true
 prompt_injection_defense = true
 
 [memory]
+backend = "sqlite"
 hybrid_search = true
+database_path = ".borgclaw/memory.db"
 session_max_entries = 100
 
 [heartbeat]
@@ -185,4 +187,22 @@ View configured providers:
 
 ```bash
 cargo run --bin borgclaw -- init --list-providers
+```
+
+## Memory Backends
+
+Onboarding can configure three runtime memory modes:
+
+- `SQLite + FTS5 (default)` for local persistent storage
+- `PostgreSQL (native backend)` for server-backed persistence using `memory.connection_string`
+- `In-memory only` for non-persistent local or test runs
+
+Representative PostgreSQL config:
+
+```toml
+[memory]
+backend = "postgres"
+connection_string = "postgres://user:pass@localhost/borgclaw"
+hybrid_search = true
+session_max_entries = 100
 ```

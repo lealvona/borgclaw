@@ -91,7 +91,7 @@ The visual configuration editor lets you modify settings without editing `config
 - **Command Blocklist** — Comma-separated list of blocked commands (e.g., `rm, del, format`)
 
 **Memory Tab**
-- **Hybrid Search Enabled** — Use SQLite + FTS5 for semantic search
+- **Hybrid Search Enabled** — Enable embedding-assisted ranking for the selected memory backend
 - **Session Max Entries** — Maximum messages per session before compaction
 
 **Skills Tab**
@@ -120,6 +120,8 @@ curl http://localhost:3000/api/config
 ```
 
 Response includes all configuration sections: agent, channels, memory, security, skills, mcp.
+
+The `memory` section includes backend-specific status fields such as `backend`, `database_path`, and `connection_configured`.
 
 **POST /api/config**
 Update configuration programmatically:
@@ -238,14 +240,14 @@ Connection flow:
 4. Receive `pairing_code` event with 6-digit code
 5. Authenticate with `{"type": "auth", "pairing_code": "123456"}`
 6. Send messages with `{"type": "message", "content": "hello"}`
-7. Receive agent responses as `message` events
+7. Receive agent responses as `response` events
 
 Message types:
 - `welcome` — Sent on connection
 - `pairing_code` — 6-digit authentication code
 - `auth_required` — Prompt to authenticate
 - `authenticated` — Successful authentication
-- `message` — Chat message
+- `response` — Agent reply
 - `heartbeat` / `pong` — Keepalive
 - `error` — Error notification
 

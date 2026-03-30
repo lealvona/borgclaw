@@ -15,8 +15,7 @@ mod web;
 
 pub use types::*;
 
-use crate::memory::HeartbeatEngine;
-use crate::memory::SqliteMemory;
+use crate::memory::{create_memory_backend, HeartbeatEngine, Memory};
 use crate::scheduler::Scheduler;
 use crate::security::SecurityLayer;
 use crate::skills::{
@@ -31,7 +30,7 @@ use tokio::sync::Mutex;
 pub struct ToolRuntime {
     pub workspace_root: PathBuf,
     pub workspace_policy: crate::config::WorkspacePolicyConfig,
-    pub memory: Arc<SqliteMemory>,
+    pub memory: Arc<dyn Memory>,
     pub heartbeat: Arc<HeartbeatEngine>,
     pub scheduler: Arc<Mutex<Scheduler>>,
     pub heartbeat_config: crate::config::HeartbeatConfig,
@@ -62,8 +61,9 @@ impl ToolRuntime {
         security_config: &crate::config::SecurityConfig,
     ) -> Result<Self, String> {
         let workspace_root = canonical_or_current(&agent.workspace);
-        let memory = Arc::new(SqliteMemory::new(memory_config.database_path.clone()));
-        memory.init().await.map_err(|e| e.to_string())?;
+        let memory = create_memory_backend(memory_config)
+            .await
+            .map_err(|e| e.to_string())?;
         let heartbeat = Arc::new(
             HeartbeatEngine::new()
                 .with_state_path(agent.workspace.join("heartbeat.json"))
@@ -695,7 +695,7 @@ mod tests {
     };
     use crate::constants::DEFAULT_TOOL_VERSION;
     use crate::mcp::transport::McpTransportConfig;
-    use crate::memory::{Memory, MemoryQuery};
+    use crate::memory::{MemoryQuery, SqliteMemory};
     use crate::scheduler::{JobStatus, JobTrigger, SchedulerTrait};
     fn write_fixture(path: &std::path::Path, body: impl AsRef<[u8]>) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();

@@ -191,11 +191,17 @@ ws.send(JSON.stringify({
 
 | Type | Direction | Description |
 |------|-----------|-------------|
+| `request_pairing` | Client→Server | Request a pairing code |
 | `auth` | Client→Server | Authenticate with pairing code |
 | `message` | Client→Server | Send message |
+| `welcome` | Server→Client | Initial connection state |
+| `auth_required` | Server→Client | Authentication required before chat |
+| `pairing_code` | Server→Client | Generated pairing code |
+| `authenticated` | Server→Client | Authentication success |
 | `response` | Server→Client | Agent response |
 | `error` | Server→Client | Error message |
 | `heartbeat` | Server→Client | Connection keepalive |
+| `pong` | Server→Client | Heartbeat acknowledgement |
 
 ## Channel Configuration
 
@@ -238,25 +244,48 @@ Channel → MessageRouter → Agent → Response → Channel
 
 ## Adding Custom Channels
 
-Implement the `Channel` trait:
+Implement the current `Channel` trait:
 
 ```rust
-use borgclaw_core::channel::{Channel, ChannelSender, InboundMessage, OutboundMessage};
+use async_trait::async_trait;
+use borgclaw_core::channel::{
+    Channel, ChannelConfig, ChannelError, ChannelStatus, ChannelType, InboundMessage,
+    OutboundMessage,
+};
+use tokio::sync::mpsc;
 
 struct MyChannel;
 
 #[async_trait]
 impl Channel for MyChannel {
-    async fn start(&mut self, sender: ChannelSender) -> Result<(), ChannelError> {
-        // Listen for messages, send via sender
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::new("my-channel")
     }
-    
+
+    async fn init(&mut self, _config: &ChannelConfig) -> Result<(), ChannelError> {
+        Ok(())
+    }
+
+    async fn start_receiving(
+        &self,
+        sender: mpsc::Sender<InboundMessage>,
+    ) -> Result<(), ChannelError> {
+        let _ = sender;
+        // Listen for messages and forward them to the router.
+        Ok(())
+    }
+
     async fn send(&self, msg: OutboundMessage) -> Result<(), ChannelError> {
-        // Send message to channel
+        let _ = msg;
+        Ok(())
     }
-    
-    async fn stop(&mut self) -> Result<(), ChannelError> {
-        // Cleanup
+
+    async fn status(&self) -> ChannelStatus {
+        ChannelStatus::connected()
+    }
+
+    async fn shutdown(&self) -> Result<(), ChannelError> {
+        Ok(())
     }
 }
 ```
