@@ -2214,12 +2214,20 @@ async fn handle_ws_message(
             };
             match state.router.route(inbound).await {
                 Ok(outcome) => {
+                    // Determine content type from the outbound message
+                    let content_type = match &outcome.outbound.content {
+                        borgclaw_core::channel::MessagePayload::Markdown(_) => "markdown",
+                        borgclaw_core::channel::MessagePayload::Html(_) => "html",
+                        _ => "text",
+                    };
+                    
                     send_event(
                         socket,
                         serde_json::json!({
                             "type": "response",
                             "session_id": outcome.session_id.0,
                             "text": outcome.response.text,
+                            "content_type": content_type,
                             "tool_calls": outcome.response.tool_calls,
                             "metadata": outcome.response.metadata,
                         }),
