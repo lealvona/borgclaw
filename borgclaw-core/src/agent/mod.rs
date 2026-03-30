@@ -463,14 +463,16 @@ You are autonomous, helpful, and capable of complex multi-step tasks.",
                 continue;
             } else {
                 // No tool call, this is the final response
+                // Strip <think> blocks from text for user display (preserved in artifacts)
+                let clean_text = strip_think_blocks(&response_text);
                 let session =
                     self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
                 session.add_message(
-                    Message::assistant(response_text.clone()).with_artifacts(response.artifacts),
+                    Message::assistant(clean_text.clone()).with_artifacts(response.artifacts),
                 );
 
                 return Ok(AgentResponse {
-                    text: response_text,
+                    text: clean_text,
                     tool_calls: Vec::new(),
                     session_updates: HashMap::new(),
                     metadata: HashMap::new(),
@@ -639,6 +641,34 @@ impl Agent for SimpleAgent {
         self.state = AgentState::ShutDown;
         Ok(())
     }
+}
+
+/// Strip `<think>...</think>` blocks from text.
+/// Returns the text with thinking blocks removed.
+fn strip_think_blocks(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut cursor = text;
+
+    while let Some(start) = cursor.find("<think>") {
+        // Add content before the think block
+        result.push_str(&cursor[..start]);
+        
+        // Find the end of the think block
+        let after_start = &cursor[start + "<think>".len()..];
+        if let Some(end) = after_start.find("</think>") {
+            // Skip the entire think block including tags
+            cursor = &after_start[end + "</think>".len()..];
+        } else {
+            // No closing tag found, stop processing
+            break;
+        }
+    }
+
+    // Add any remaining content after the last think block
+    result.push_str(cursor);
+
+    // Trim leading/trailing whitespace that may result from removal
+    result.trim().to_string()
 }
 
 #[cfg(test)]
@@ -922,5 +952,43 @@ mod tests {
 
         // Clean up
         std::fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
+    fn strip_think_blocks_removes_thinking_content() {
+        let text = "<think>This is internal reasoning</think>Visible response";
+        assert_eq!(strip_think_blocks(text), "Visible response");
+    }
+
+    #[test]
+    fn strip_think_blocks_handles_multiple_blocks() {
+        let text = "<think>First thought</think>Hello<think>Second thought</think>World";
+        assert_eq!(strip_think_blocks(text), "HelloWorld");
+    }
+
+    #[test]
+    fn strip_think_blocks_handles_no_think_blocks() {
+        let text = "Just a normal response without thinking";
+        assert_eq!(strip_think_blocks(text), text);
+    }
+
+    #[test]
+    fn strip_think_blocks_handles_unclosed_think() {
+        let text = "<think>Unclosed thought";
+        // Unclosed think block leaves everything as-is (no closing tag found)
+        assert_eq!(strip_think_blocks(text), "<think>Unclosed thought");
+    }
+
+    #[test]
+    fn strip_think_blocks_handles_multiline_content() {
+        let text = "Before\n<think>\nLine 1\nLine 2\n</think>\nAfter";
+        // Note: extra newline from the \n before </think>
+        assert_eq!(strip_think_blocks(text), "Before\n\nAfter");
+    }
+
+    #[test]
+    fn strip_think_blocks_preserves_whitespace_outside() {
+        let text = "  <think>thinking</think>  response  ";
+        assert_eq!(strip_think_blocks(text), "response");
     }
 }
