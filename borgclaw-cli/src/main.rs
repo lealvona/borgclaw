@@ -839,19 +839,30 @@ async fn status(config: AppConfig) {
     );
     match config.memory.effective_backend() {
         MemoryBackend::Sqlite => println!("Memory database: {:?}", config.memory.database_path),
-        MemoryBackend::Postgres => println!(
-            "Memory connection: {}",
-            if config
-                .memory
-                .connection_string
-                .as_deref()
-                .is_some_and(|value| !value.trim().is_empty())
-            {
-                "configured"
-            } else {
-                "missing"
-            }
-        ),
+        MemoryBackend::Postgres => {
+            println!(
+                "Memory connection: {}",
+                if config
+                    .memory
+                    .connection_string
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty())
+                {
+                    "configured"
+                } else {
+                    "missing"
+                }
+            );
+            println!(
+                "Embedding endpoint: {}",
+                config
+                    .memory
+                    .embedding_endpoint
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or("not configured")
+            );
+        }
         MemoryBackend::Memory => println!("Memory persistence: disabled (in-memory only)"),
     }
     println!(
@@ -1161,6 +1172,18 @@ fn report_memory_status(config: &AppConfig) {
                 println!("✓ Memory backend 'postgres' connection configured");
             } else {
                 println!("✗ Memory backend 'postgres' missing connection_string");
+            }
+            if config.memory.hybrid_search {
+                if config
+                    .memory
+                    .embedding_endpoint
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty())
+                {
+                    println!("✓ PostgreSQL hybrid search embedding endpoint configured");
+                } else {
+                    println!("✗ PostgreSQL hybrid search missing embedding_endpoint");
+                }
             }
         }
         MemoryBackend::Memory => {
@@ -1548,6 +1571,17 @@ async fn self_test_failures(config: &AppConfig) -> Vec<String> {
                 .map_or(true, |value| value.trim().is_empty())
             {
                 failures.push("memory.connection_string missing for postgres backend".to_string());
+            }
+            if config.memory.hybrid_search
+                && config
+                    .memory
+                    .embedding_endpoint
+                    .as_deref()
+                    .map_or(true, |value| value.trim().is_empty())
+            {
+                failures.push(
+                    "memory.embedding_endpoint missing for postgres hybrid search".to_string(),
+                );
             }
         }
         MemoryBackend::Memory => {}
@@ -5459,6 +5493,29 @@ mod tests {
         assert!(failures
             .iter()
             .any(|line| line == "provider credential missing (OPENAI_API_KEY)"));
+    }
+
+    #[test]
+    fn self_test_failures_surface_missing_pgvector_embedding_endpoint() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut config = temp_config();
+        config.agent.workspace = std::env::temp_dir().join(format!(
+            "borgclaw_self_test_pgvector_workspace_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&config.agent.workspace).unwrap();
+        config.skills.skills_path = config.agent.workspace.join("skills");
+        std::fs::create_dir_all(&config.skills.skills_path).unwrap();
+        config.agent.provider = "ollama".to_string();
+        config.memory.backend = MemoryBackend::Postgres;
+        config.memory.connection_string = Some("postgres://localhost/borgclaw".to_string());
+        config.memory.hybrid_search = true;
+        config.memory.embedding_endpoint = None;
+
+        let failures = runtime.block_on(self_test_failures(&config));
+        assert!(failures
+            .iter()
+            .any(|line| line == "memory.embedding_endpoint missing for postgres hybrid search"));
     }
 
     #[test]

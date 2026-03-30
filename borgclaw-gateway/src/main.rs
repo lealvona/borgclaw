@@ -1207,6 +1207,14 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 <div id="tab-memory" class="config-tab-content">
                     <div class="config-form">
                         <div class="form-group">
+                            <label>Memory Backend</label>
+                            <select id="cfg-memory-backend" class="form-control">
+                                <option value="sqlite">SQLite</option>
+                                <option value="postgres">PostgreSQL</option>
+                                <option value="memory">In-memory</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
                             <label class="checkbox-label">
                                 <input type="checkbox" id="cfg-hybrid-search">
                                 Hybrid Search Enabled
@@ -1220,6 +1228,11 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                             <label>Database Path</label>
                             <input type="text" id="cfg-db-path" class="form-control" placeholder=".borgclaw/memory.db" readonly>
                             <small>Read-only: Edit config.toml directly to change</small>
+                        </div>
+                        <div class="form-group">
+                            <label>Embedding Endpoint</label>
+                            <input type="text" id="cfg-embedding-endpoint" class="form-control" placeholder="http://127.0.0.1:11434/api/embeddings">
+                            <small>Required for semantic pgvector search and runtime hybrid ranking.</small>
                         </div>
                     </div>
                 </div>
@@ -1735,9 +1748,11 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
             
             // Memory tab
             if (config.memory) {
+                document.getElementById('cfg-memory-backend').value = config.memory.backend || 'sqlite';
                 document.getElementById('cfg-hybrid-search').checked = config.memory.hybrid_search === true;
                 document.getElementById('cfg-session-max').value = config.memory.session_max_entries || 1000;
                 document.getElementById('cfg-db-path').value = config.memory.database_path || '.borgclaw/memory.db';
+                document.getElementById('cfg-embedding-endpoint').value = config.memory.embedding_endpoint || '';
             }
             
             // Skills tab
@@ -1805,8 +1820,10 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
             }
             
             // Collect memory settings
+            updates.memory.backend = document.getElementById('cfg-memory-backend').value;
             updates.memory.hybrid_search = document.getElementById('cfg-hybrid-search').checked;
             updates.memory.session_max_entries = parseInt(document.getElementById('cfg-session-max').value) || 1000;
+            updates.memory.embedding_endpoint = document.getElementById('cfg-embedding-endpoint').value.trim();
             
             // Collect skills settings
             updates.skills.auto_load = document.getElementById('cfg-auto-load').checked;
@@ -2629,6 +2646,7 @@ async fn api_config(State(state): State<GatewayState>) -> impl IntoResponse {
             "backend": state.config.memory.effective_backend(),
             "database_path": state.config.memory.database_path,
             "connection_configured": state.config.memory.connection_string.as_ref().map(|value| !value.trim().is_empty()).unwrap_or(false),
+            "embedding_endpoint": state.config.memory.embedding_endpoint,
             "hybrid_search": state.config.memory.hybrid_search,
             "session_max_entries": state.config.memory.session_max_entries,
         },
@@ -2684,6 +2702,7 @@ struct MemoryConfigUpdate {
     backend: Option<String>,
     hybrid_search: Option<bool>,
     connection_string: Option<String>,
+    embedding_endpoint: Option<String>,
     session_max_entries: Option<usize>,
 }
 
@@ -2746,6 +2765,18 @@ async fn api_config_post(
         if let Some(connection_string) = memory.connection_string {
             updated_config.memory.connection_string = Some(connection_string);
             changes_made.push("memory.connection_string = [redacted]".to_string());
+        }
+        if let Some(embedding_endpoint) = memory.embedding_endpoint {
+            if embedding_endpoint.trim().is_empty() {
+                updated_config.memory.embedding_endpoint = None;
+                changes_made.push("memory.embedding_endpoint cleared".to_string());
+            } else {
+                updated_config.memory.embedding_endpoint = Some(embedding_endpoint.clone());
+                changes_made.push(format!(
+                    "memory.embedding_endpoint = {}",
+                    embedding_endpoint
+                ));
+            }
         }
         if let Some(session_max_entries) = memory.session_max_entries {
             updated_config.memory.session_max_entries = session_max_entries;

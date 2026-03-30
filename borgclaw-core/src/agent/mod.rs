@@ -266,7 +266,7 @@ You are autonomous, helpful, and capable of complex multi-step tasks.",
             "✓ **Long-term Memory**: You can store and recall information across conversations.",
         );
         if self.memory_config.hybrid_search {
-            capabilities.push_str(" You have hybrid search (SQLite + FTS5) enabled.");
+            capabilities.push_str(" You have embedding-assisted hybrid search enabled when a memory embedding endpoint is configured.");
         }
         capabilities.push('\n');
 

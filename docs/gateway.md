@@ -91,7 +91,9 @@ The visual configuration editor lets you modify settings without editing `config
 - **Command Blocklist** — Comma-separated list of blocked commands (e.g., `rm, del, format`)
 
 **Memory Tab**
+- **Memory Backend** — Switch between SQLite, PostgreSQL, and in-memory storage
 - **Hybrid Search Enabled** — Enable embedding-assisted ranking for the selected memory backend
+- **Embedding Endpoint** — Configure the HTTP embedding service used for pgvector or SQLite hybrid recall
 - **Session Max Entries** — Maximum messages per session before compaction
 
 **Skills Tab**
@@ -121,7 +123,7 @@ curl http://localhost:3000/api/config
 
 Response includes all configuration sections: agent, channels, memory, security, skills, mcp.
 
-The `memory` section includes backend-specific status fields such as `backend`, `database_path`, and `connection_configured`.
+The `memory` section includes backend-specific status fields such as `backend`, `database_path`, `connection_configured`, and `embedding_endpoint`.
 
 **POST /api/config**
 Update configuration programmatically:

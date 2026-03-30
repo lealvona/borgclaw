@@ -37,16 +37,20 @@ BorgClaw provides a comprehensive memory system with selectable storage backends
 
 - **Full-text search** via SQLite FTS5
 - **Local file-backed persistence**
+- **Hybrid retrieval** via reciprocal-rank fusion when `embedding_endpoint` is configured
 
 ### PostgreSQL
 
 - **Persistent server-backed storage**
-- **Text recall plus embedding-assisted ranking when hybrid search is enabled**
+- **Native full-text search** via PostgreSQL `tsvector` / `tsquery`
+- **Native vector similarity** via the `pgvector` extension when hybrid search is enabled
+- **Hybrid ranking** using reciprocal-rank fusion across text and vector results
 
 ### In-Memory
 
 - **No persistence across restarts**
 - **Useful for tests and ephemeral local runs**
+- **Lightweight retrieval** using exact match, substring match, and token overlap scoring
 
 ### Configuration
 
@@ -55,6 +59,7 @@ BorgClaw provides a comprehensive memory system with selectable storage backends
 backend = "sqlite"  # "sqlite", "postgres", or "memory"
 database_path = ".local/data/memory.db"
 connection_string = "postgres://user:pass@localhost/borgclaw"  # postgres only
+embedding_endpoint = "http://127.0.0.1:11434/api/embeddings"   # required for hybrid vector search
 hybrid_search = true
 session_max_entries = 100
 ```
@@ -63,7 +68,17 @@ Notes:
 - `backend = "sqlite"` is the default when omitted.
 - `database_path` is used by the SQLite backend.
 - `connection_string` is required by the PostgreSQL backend.
+- `embedding_endpoint` enables runtime embedding generation for SQLite hybrid search and PostgreSQL + pgvector hybrid search.
+- PostgreSQL without `embedding_endpoint` still works for text-only persistence and recall.
 - Older configs that only set `vector_provider` still load through compatibility mapping, but `backend` is now the primary contract.
+
+### Runtime Requirements
+
+- SQLite requires no extra runtime components beyond the bundled database support.
+- PostgreSQL requires a running PostgreSQL instance; BorgClaw ships helper scripts to provision a local pgvector-enabled runtime with Docker:
+  `./scripts/install-pgvector.sh` or `.\scripts\install-pgvector.ps1`
+- Hybrid vector retrieval requires an embedding service. BorgClaw ships helper scripts for Ollama:
+  `./scripts/install-ollama.sh` or `.\scripts\install-ollama.ps1`
 
 ### API
 

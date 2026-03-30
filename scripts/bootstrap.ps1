@@ -53,6 +53,9 @@ cargo --version
 Write-Host ""
 Write-Host "[borgclaw] Optional tools:" -ForegroundColor Yellow
 Test-Command "node" | Out-Null
+Test-Command "docker" | Out-Null
+Test-Command "psql" | Out-Null
+Test-Command "ollama" | Out-Null
 Test-Command "signal-cli" | Out-Null
 Test-Command "bw" | Out-Null
 Test-Command "op" | Out-Null
@@ -90,6 +93,19 @@ if (-not (Test-Path ".gitignore")) {
     ".local/" | Out-File -FilePath ".gitignore" -Encoding utf8
 } elseif (-not (Select-String -Path ".gitignore" -Pattern "^\.local" -Quiet)) {
     Add-Content -Path ".gitignore" -Value ".local/"
+}
+
+Write-Host ""
+Write-Host "[borgclaw] Memory runtimes:" -ForegroundColor Yellow
+if (Get-Command "docker" -ErrorAction SilentlyContinue) {
+    Write-Host "  PostgreSQL + pgvector runtime: .\scripts\install-pgvector.ps1" -ForegroundColor Gray
+} else {
+    Write-Host "  Docker not found; pgvector convenience runtime installer requires Docker" -ForegroundColor Yellow
+}
+if (Get-Command "ollama" -ErrorAction SilentlyContinue) {
+    Write-Host "  ✓ Ollama: Installed" -ForegroundColor Green
+} else {
+    Write-Host "  Embeddings runtime (recommended for hybrid search): .\scripts\install-ollama.ps1" -ForegroundColor Gray
 }
 
 Write-Host ""

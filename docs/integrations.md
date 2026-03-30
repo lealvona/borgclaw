@@ -312,12 +312,13 @@ database_path = ".local/data/memory.db"
 hybrid_search = true
 ```
 
-### PostgreSQL
+### PostgreSQL + pgvector
 
 ```toml
 [memory]
 backend = "postgres"
 connection_string = "postgres://user:pass@localhost/borgclaw"
+embedding_endpoint = "http://127.0.0.1:11434/api/embeddings"
 hybrid_search = true
 ```
 
@@ -332,7 +333,9 @@ hybrid_search = false
 Notes:
 - `sqlite` remains the default when `backend` is omitted.
 - `postgres` requires `memory.connection_string`.
+- PostgreSQL hybrid vector recall uses the `pgvector` extension and a configured `memory.embedding_endpoint`.
 - `memory` is non-persistent and intended for ephemeral local runs or tests.
+- Helper scripts are available for the runtime pieces: `./scripts/install-pgvector.sh` and `./scripts/install-ollama.sh`
 
 ## Monitoring
 

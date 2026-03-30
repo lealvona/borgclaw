@@ -194,7 +194,7 @@ cargo run --bin borgclaw -- init --list-providers
 Onboarding can configure three runtime memory modes:
 
 - `SQLite + FTS5 (default)` for local persistent storage
-- `PostgreSQL (native backend)` for server-backed persistence using `memory.connection_string`
+- `PostgreSQL + pgvector` for server-backed persistence using `memory.connection_string`
 - `In-memory only` for non-persistent local or test runs
 
 Representative PostgreSQL config:
@@ -203,6 +203,13 @@ Representative PostgreSQL config:
 [memory]
 backend = "postgres"
 connection_string = "postgres://user:pass@localhost/borgclaw"
+embedding_endpoint = "http://127.0.0.1:11434/api/embeddings"
 hybrid_search = true
 session_max_entries = 100
 ```
+
+If you leave the embedding endpoint blank during onboarding, PostgreSQL runs in text-only mode and `hybrid_search` is disabled for that backend.
+
+Helper scripts:
+- `./scripts/install-pgvector.sh` or `.\scripts\install-pgvector.ps1` provisions a local pgvector-ready PostgreSQL runtime
+- `./scripts/install-ollama.sh` or `.\scripts\install-ollama.ps1` installs Ollama and pulls a recommended embeddings model

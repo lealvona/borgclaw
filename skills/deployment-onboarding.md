@@ -109,6 +109,7 @@ secrets_encryption = true     # Encrypt stored secrets
 [memory]
 backend = "sqlite"
 database_path = ".borgclaw/memory"
+embedding_endpoint = "http://127.0.0.1:11434/api/embeddings"  # Optional, enables hybrid vector recall
 hybrid_search = true
 
 [channels.telegram]

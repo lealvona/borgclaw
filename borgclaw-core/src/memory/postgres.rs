@@ -1,12 +1,15 @@
 use super::{
-    storage::cosine_similarity, EmbeddingProvider, Memory, MemoryEntry, MemoryError, MemoryQuery,
-    MemoryResult, NoOpEmbeddingProvider,
+    EmbeddingProvider, Memory, MemoryEntry, MemoryError, MemoryQuery, MemoryResult,
+    NoOpEmbeddingProvider,
 };
 use async_trait::async_trait;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+const RRF_K: f32 = 60.0;
 
 pub struct PostgresMemory {
     conn: Arc<RwLock<Option<sqlx::PgPool>>>,
@@ -28,6 +31,20 @@ struct PgMemoryRow {
     group_id: Option<String>,
 }
 
+#[derive(sqlx::FromRow)]
+struct PgRankedMemoryRow {
+    id: String,
+    key: String,
+    content: String,
+    metadata: String,
+    created_at: String,
+    accessed_at: String,
+    access_count: i64,
+    importance: f32,
+    group_id: Option<String>,
+    score: f32,
+}
+
 impl PgMemoryRow {
     fn into_memory_entry(self) -> MemoryEntry {
         MemoryEntry {
@@ -44,6 +61,26 @@ impl PgMemoryRow {
             access_count: self.access_count.max(0) as u32,
             importance: self.importance,
             group_id: self.group_id,
+        }
+    }
+}
+
+impl PgRankedMemoryRow {
+    fn into_memory_result(self) -> MemoryResult {
+        MemoryResult {
+            entry: PgMemoryRow {
+                id: self.id,
+                key: self.key,
+                content: self.content,
+                metadata: self.metadata,
+                created_at: self.created_at,
+                accessed_at: self.accessed_at,
+                access_count: self.access_count,
+                importance: self.importance,
+                group_id: self.group_id,
+            }
+            .into_memory_entry(),
+            score: self.score,
         }
     }
 }
@@ -98,24 +135,47 @@ impl PostgresMemory {
 
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS memory_embeddings (
-                memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
-                embedding BYTEA NOT NULL
-            )
+            ALTER TABLE memories
+            ADD COLUMN IF NOT EXISTS search_vector tsvector
+            GENERATED ALWAYS AS (
+                to_tsvector('english', coalesce(key, '') || ' ' || coalesce(content, ''))
+            ) STORED
             "#,
         )
         .execute(&pool)
         .await
         .map_err(|e| MemoryError::StorageError(e.to_string()))?;
 
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_memories_group_id ON memories(group_id)")
+            .execute(&pool)
+            .await
+            .map_err(|e| MemoryError::StorageError(e.to_string()))?;
+
         sqlx::query(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_memories_group_id ON memories(group_id)
-            "#,
+            "CREATE INDEX IF NOT EXISTS idx_memories_search_vector ON memories USING GIN(search_vector)",
         )
         .execute(&pool)
         .await
         .map_err(|e| MemoryError::StorageError(e.to_string()))?;
+
+        if self.hybrid_search {
+            sqlx::query("CREATE EXTENSION IF NOT EXISTS vector")
+                .execute(&pool)
+                .await
+                .map_err(|e| MemoryError::StorageError(e.to_string()))?;
+
+            sqlx::query(
+                r#"
+                CREATE TABLE IF NOT EXISTS memory_embeddings (
+                    memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
+                    embedding vector NOT NULL
+                )
+                "#,
+            )
+            .execute(&pool)
+            .await
+            .map_err(|e| MemoryError::StorageError(e.to_string()))?;
+        }
 
         *self.conn.write().await = Some(pool);
         Ok(())
@@ -131,50 +191,44 @@ impl PostgresMemory {
     }
 
     async fn recall_text(&self, query: &MemoryQuery) -> Result<Vec<MemoryResult>, MemoryError> {
+        let trimmed = query.query.trim();
+        if trimmed.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let pool = self.pool().await?;
-        let like = format!("%{}%", query.query);
-        let rows: Vec<PgMemoryRow> = if let Some(group_id) = &query.group_id {
-            sqlx::query_as::<_, PgMemoryRow>(
+        let rows: Vec<PgRankedMemoryRow> = if let Some(group_id) = &query.group_id {
+            sqlx::query_as::<_, PgRankedMemoryRow>(
                 r#"
                 SELECT id, key, content, metadata::text AS metadata, created_at::text AS created_at,
-                       accessed_at::text AS accessed_at, access_count, importance, group_id
+                       accessed_at::text AS accessed_at, access_count, importance, group_id,
+                       ts_rank_cd(search_vector, websearch_to_tsquery('english', $2)) AS score
                 FROM memories
-                WHERE group_id = $1 AND (key ILIKE $2 OR content ILIKE $2)
-                ORDER BY
-                    CASE
-                        WHEN key ILIKE $2 THEN 0
-                        WHEN content ILIKE $2 THEN 1
-                        ELSE 2
-                    END,
-                    importance DESC,
-                    accessed_at DESC
+                WHERE group_id = $1
+                  AND search_vector @@ websearch_to_tsquery('english', $2)
+                ORDER BY score DESC, importance DESC, accessed_at DESC
                 LIMIT $3
                 "#,
             )
             .bind(group_id)
-            .bind(&like)
+            .bind(trimmed)
             .bind(query.limit as i64)
             .fetch_all(&pool)
             .await
         } else {
-            sqlx::query_as::<_, PgMemoryRow>(
+            sqlx::query_as::<_, PgRankedMemoryRow>(
                 r#"
                 SELECT id, key, content, metadata::text AS metadata, created_at::text AS created_at,
-                       accessed_at::text AS accessed_at, access_count, importance, group_id
+                       accessed_at::text AS accessed_at, access_count, importance, group_id,
+                       ts_rank_cd(search_vector, websearch_to_tsquery('english', $1)) AS score
                 FROM memories
-                WHERE group_id IS NULL AND (key ILIKE $1 OR content ILIKE $1)
-                ORDER BY
-                    CASE
-                        WHEN key ILIKE $1 THEN 0
-                        WHEN content ILIKE $1 THEN 1
-                        ELSE 2
-                    END,
-                    importance DESC,
-                    accessed_at DESC
+                WHERE group_id IS NULL
+                  AND search_vector @@ websearch_to_tsquery('english', $1)
+                ORDER BY score DESC, importance DESC, accessed_at DESC
                 LIMIT $2
                 "#,
             )
-            .bind(&like)
+            .bind(trimmed)
             .bind(query.limit as i64)
             .fetch_all(&pool)
             .await
@@ -183,11 +237,8 @@ impl PostgresMemory {
 
         Ok(rows
             .into_iter()
-            .enumerate()
-            .map(|(index, row)| MemoryResult {
-                entry: row.into_memory_entry(),
-                score: (1.0 - (index as f32 * 0.1)).max(query.min_score),
-            })
+            .map(PgRankedMemoryRow::into_memory_result)
+            .filter(|result| result.score >= query.min_score)
             .collect())
     }
 
@@ -196,58 +247,55 @@ impl PostgresMemory {
         query: &MemoryQuery,
         query_embedding: &[f32],
     ) -> Result<Vec<MemoryResult>, MemoryError> {
+        if query_embedding.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let pool = self.pool().await?;
-        let rows: Vec<(String, Vec<u8>)> = if let Some(group_id) = &query.group_id {
-            sqlx::query_as(
+        let query_vector = vector_literal(query_embedding);
+        let rows: Vec<PgRankedMemoryRow> = if let Some(group_id) = &query.group_id {
+            sqlx::query_as::<_, PgRankedMemoryRow>(
                 r#"
-                SELECT me.memory_id, me.embedding
+                SELECT m.id, m.key, m.content, m.metadata::text AS metadata, m.created_at::text AS created_at,
+                       m.accessed_at::text AS accessed_at, m.access_count, m.importance, m.group_id,
+                       CAST(1 - (me.embedding <=> $2::vector) AS real) AS score
                 FROM memory_embeddings me
                 JOIN memories m ON m.id = me.memory_id
                 WHERE m.group_id = $1
+                ORDER BY me.embedding <=> $2::vector
+                LIMIT $3
                 "#,
             )
             .bind(group_id)
+            .bind(&query_vector)
+            .bind(query.limit as i64)
             .fetch_all(&pool)
             .await
         } else {
-            sqlx::query_as(
+            sqlx::query_as::<_, PgRankedMemoryRow>(
                 r#"
-                SELECT me.memory_id, me.embedding
+                SELECT m.id, m.key, m.content, m.metadata::text AS metadata, m.created_at::text AS created_at,
+                       m.accessed_at::text AS accessed_at, m.access_count, m.importance, m.group_id,
+                       CAST(1 - (me.embedding <=> $1::vector) AS real) AS score
                 FROM memory_embeddings me
                 JOIN memories m ON m.id = me.memory_id
                 WHERE m.group_id IS NULL
+                ORDER BY me.embedding <=> $1::vector
+                LIMIT $2
                 "#,
             )
+            .bind(&query_vector)
+            .bind(query.limit as i64)
             .fetch_all(&pool)
             .await
         }
         .map_err(|e| MemoryError::QueryError(e.to_string()))?;
 
-        let mut results = Vec::new();
-        for (memory_id, blob) in rows {
-            let embedding: Vec<f32> = blob
-                .chunks_exact(4)
-                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-                .collect();
-            let similarity = cosine_similarity(query_embedding, &embedding);
-            if similarity < query.min_score {
-                continue;
-            }
-            if let Some(entry) = self.get(&memory_id).await? {
-                results.push(MemoryResult {
-                    entry,
-                    score: similarity,
-                });
-            }
-        }
-
-        results.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        results.truncate(query.limit);
-        Ok(results)
+        Ok(rows
+            .into_iter()
+            .map(PgRankedMemoryRow::into_memory_result)
+            .filter(|result| result.score >= query.min_score)
+            .collect())
     }
 }
 
@@ -285,16 +333,16 @@ impl Memory for PostgresMemory {
 
         if self.hybrid_search {
             if let Ok(embedding) = self.embedding_provider.embed(&entry.content).await {
-                let blob: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+                let embedding_literal = vector_literal(&embedding);
                 sqlx::query(
                     r#"
                     INSERT INTO memory_embeddings (memory_id, embedding)
-                    VALUES ($1, $2)
+                    VALUES ($1, $2::vector)
                     ON CONFLICT (memory_id) DO UPDATE SET embedding = EXCLUDED.embedding
                     "#,
                 )
                 .bind(&entry.id)
-                .bind(blob)
+                .bind(embedding_literal)
                 .execute(&pool)
                 .await
                 .map_err(|e| MemoryError::StorageError(e.to_string()))?;
@@ -305,34 +353,20 @@ impl Memory for PostgresMemory {
     }
 
     async fn recall(&self, query: &MemoryQuery) -> Result<Vec<MemoryResult>, MemoryError> {
+        let text_results = self.recall_text(query).await?;
+
         if self.hybrid_search {
-            match self.embedding_provider.embed(&query.query).await {
-                Ok(query_embedding) => {
-                    let mut combined = std::collections::HashMap::new();
-                    for result in self.recall_text(query).await? {
-                        combined.insert(result.entry.id.clone(), result);
-                    }
-                    for result in self.recall_semantic(query, &query_embedding).await? {
-                        if let Some(existing) = combined.get_mut(&result.entry.id) {
-                            existing.score = (existing.score + result.score) / 2.0;
-                        } else {
-                            combined.insert(result.entry.id.clone(), result);
-                        }
-                    }
-                    let mut results: Vec<_> = combined.into_values().collect();
-                    results.sort_by(|a, b| {
-                        b.score
-                            .partial_cmp(&a.score)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                    results.truncate(query.limit);
-                    return Ok(results);
-                }
-                Err(_) => {}
+            if let Ok(query_embedding) = self.embedding_provider.embed(&query.query).await {
+                let semantic_results = self.recall_semantic(query, &query_embedding).await?;
+                return Ok(reciprocal_rank_fuse(
+                    text_results,
+                    semantic_results,
+                    query.limit,
+                ));
             }
         }
 
-        self.recall_text(query).await
+        Ok(text_results)
     }
 
     async fn get(&self, id: &str) -> Result<Option<MemoryEntry>, MemoryError> {
@@ -403,5 +437,117 @@ impl Memory for PostgresMemory {
                 .await
                 .map_err(|e| MemoryError::StorageError(e.to_string()))?;
         Ok(rows.into_iter().map(|(group,)| group).collect())
+    }
+}
+
+fn vector_literal(values: &[f32]) -> String {
+    let formatted = values
+        .iter()
+        .map(|value| {
+            if value.is_finite() {
+                value.to_string()
+            } else {
+                "0".to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("[{}]", formatted)
+}
+
+fn reciprocal_rank_fuse(
+    text_results: Vec<MemoryResult>,
+    semantic_results: Vec<MemoryResult>,
+    limit: usize,
+) -> Vec<MemoryResult> {
+    let mut merged: HashMap<String, MemoryResult> = HashMap::new();
+
+    for (rank, result) in text_results.into_iter().enumerate() {
+        let score = 1.0 / (RRF_K + rank as f32 + 1.0);
+        merged
+            .entry(result.entry.id.clone())
+            .and_modify(|existing| existing.score += score)
+            .or_insert(MemoryResult {
+                entry: result.entry,
+                score,
+            });
+    }
+
+    for (rank, result) in semantic_results.into_iter().enumerate() {
+        let score = 1.0 / (RRF_K + rank as f32 + 1.0);
+        merged
+            .entry(result.entry.id.clone())
+            .and_modify(|existing| existing.score += score)
+            .or_insert(MemoryResult {
+                entry: result.entry,
+                score,
+            });
+    }
+
+    let mut results: Vec<_> = merged.into_values().collect();
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    results.truncate(limit);
+    results
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::new_entry;
+
+    #[test]
+    fn vector_literal_formats_pgvector_syntax() {
+        let vector = vector_literal(&[1.0, 2.5, -3.25]);
+        assert_eq!(vector, "[1,2.5,-3.25]");
+    }
+
+    #[test]
+    fn vector_literal_replaces_non_finite_values() {
+        let vector = vector_literal(&[1.0, f32::NAN, f32::INFINITY]);
+        assert_eq!(vector, "[1,0,0]");
+    }
+
+    #[test]
+    fn reciprocal_rank_fuse_prefers_items_ranked_in_both_lists() {
+        let mut alpha = new_entry("alpha", "shared");
+        alpha.id = "alpha".to_string();
+        let mut beta = new_entry("beta", "text-only");
+        beta.id = "beta".to_string();
+        let mut gamma = new_entry("gamma", "semantic-only");
+        gamma.id = "gamma".to_string();
+
+        let fused = reciprocal_rank_fuse(
+            vec![
+                MemoryResult {
+                    entry: alpha.clone(),
+                    score: 0.9,
+                },
+                MemoryResult {
+                    entry: beta,
+                    score: 0.8,
+                },
+            ],
+            vec![
+                MemoryResult {
+                    entry: alpha,
+                    score: 0.95,
+                },
+                MemoryResult {
+                    entry: gamma,
+                    score: 0.85,
+                },
+            ],
+            3,
+        );
+
+        assert_eq!(
+            fused.first().map(|item| item.entry.id.as_str()),
+            Some("alpha")
+        );
+        assert_eq!(fused.len(), 3);
     }
 }

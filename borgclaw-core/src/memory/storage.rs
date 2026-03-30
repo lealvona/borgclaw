@@ -3,10 +3,13 @@
 use super::{EmbeddingProvider, Memory, MemoryEntry, MemoryError, MemoryQuery, MemoryResult};
 use async_trait::async_trait;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+const RRF_K: f32 = 60.0;
 
 /// SQLite-based memory storage with FTS5
 pub struct SqliteMemory {
@@ -290,31 +293,11 @@ impl SqliteMemory {
 
         let fts_results = self.recall_fts(query).await?;
         let semantic_results = self.recall_semantic(query, &query_embedding).await?;
-
-        let mut combined: std::collections::HashMap<String, MemoryResult> =
-            std::collections::HashMap::new();
-
-        for result in fts_results {
-            combined.insert(result.entry.id.clone(), result);
-        }
-
-        for result in semantic_results {
-            if let Some(existing) = combined.get_mut(&result.entry.id) {
-                existing.score = (existing.score + result.score) / 2.0;
-            } else {
-                combined.insert(result.entry.id.clone(), result);
-            }
-        }
-
-        let mut results: Vec<_> = combined.into_values().collect();
-        results.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        results.truncate(query.limit);
-
-        Ok(results)
+        Ok(reciprocal_rank_fuse(
+            fts_results,
+            semantic_results,
+            query.limit,
+        ))
     }
 
     async fn get(&self, id: &str) -> Result<Option<MemoryEntry>, MemoryError> {
@@ -503,6 +486,45 @@ pub(crate) fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     }
 
     dot_product / (magnitude_a * magnitude_b)
+}
+
+fn reciprocal_rank_fuse(
+    text_results: Vec<MemoryResult>,
+    semantic_results: Vec<MemoryResult>,
+    limit: usize,
+) -> Vec<MemoryResult> {
+    let mut merged: HashMap<String, MemoryResult> = HashMap::new();
+
+    for (rank, result) in text_results.into_iter().enumerate() {
+        let score = 1.0 / (RRF_K + rank as f32 + 1.0);
+        merged
+            .entry(result.entry.id.clone())
+            .and_modify(|existing| existing.score += score)
+            .or_insert(MemoryResult {
+                entry: result.entry,
+                score,
+            });
+    }
+
+    for (rank, result) in semantic_results.into_iter().enumerate() {
+        let score = 1.0 / (RRF_K + rank as f32 + 1.0);
+        merged
+            .entry(result.entry.id.clone())
+            .and_modify(|existing| existing.score += score)
+            .or_insert(MemoryResult {
+                entry: result.entry,
+                score,
+            });
+    }
+
+    let mut results: Vec<_> = merged.into_values().collect();
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    results.truncate(limit);
+    results
 }
 
 #[derive(sqlx::FromRow)]
@@ -698,5 +720,36 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
         assert_eq!(results.len(), 1);
         assert!(results[0].entry.content.contains("specific unique keyword"));
+    }
+
+    #[test]
+    fn reciprocal_rank_fuse_prefers_shared_hits_for_sqlite_hybrid_search() {
+        let shared = MemoryResult {
+            entry: new_entry("shared", "alpha"),
+            score: 0.9,
+        };
+        let text_only = MemoryResult {
+            entry: new_entry("text", "beta"),
+            score: 0.8,
+        };
+        let semantic_only = MemoryResult {
+            entry: new_entry("semantic", "gamma"),
+            score: 0.7,
+        };
+
+        let mut shared_semantic = shared.clone();
+        shared_semantic.score = 0.95;
+
+        let fused = reciprocal_rank_fuse(
+            vec![shared.clone(), text_only],
+            vec![shared_semantic, semantic_only],
+            3,
+        );
+
+        assert_eq!(
+            fused.first().map(|result| result.entry.key.as_str()),
+            Some("shared")
+        );
+        assert_eq!(fused.len(), 3);
     }
 }
