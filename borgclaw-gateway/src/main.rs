@@ -19,7 +19,8 @@ use borgclaw_core::{
         WebhookError, WebhookTrigger,
     },
     config::load_config,
-    security::SecurityLayer,
+    security::{load_process_records, process_state_path, CommandProcessStatus, SecurityLayer},
+    skills::SkillsRegistry,
     AppConfig,
 };
 use futures_util::StreamExt;
@@ -1129,6 +1130,19 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                             <small>Model name (e.g., gpt-4o, MiniMax-M2.7, kimi-k2.5)</small>
                         </div>
                         <div class="form-group">
+                            <label>Provider Profile</label>
+                            <input type="text" id="cfg-provider-profile" class="form-control" readonly>
+                            <small>Managed through the CLI provider-profile commands.</small>
+                        </div>
+                        <div class="form-group">
+                            <label>Identity Format</label>
+                            <input type="text" id="cfg-identity-format" class="form-control" readonly>
+                        </div>
+                        <div class="form-group">
+                            <label>Soul Path</label>
+                            <input type="text" id="cfg-soul-path" class="form-control" readonly>
+                        </div>
+                        <div class="form-group">
                             <label>System Prompt</label>
                             <textarea id="cfg-system-prompt" class="form-control" rows="4" placeholder="Optional system prompt..."></textarea>
                         </div>
@@ -1229,6 +1243,10 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                             <label>Docker Timeout (seconds)</label>
                             <input type="number" id="cfg-docker-timeout" class="form-control" placeholder="120">
                         </div>
+                        <div class="status-box">
+                            <h4>Process Runtime</h4>
+                            <div id="process-runtime-status"></div>
+                        </div>
                     </div>
                 </div>
                 
@@ -1263,6 +1281,14 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                             <input type="text" id="cfg-embedding-endpoint" class="form-control" placeholder="http://127.0.0.1:11434/api/embeddings">
                             <small>Required for semantic pgvector search and runtime hybrid ranking.</small>
                         </div>
+                        <div class="status-box">
+                            <h4>External Memory</h4>
+                            <div id="memory-external-status"></div>
+                        </div>
+                        <div class="status-box">
+                            <h4>Privacy Policy</h4>
+                            <div id="memory-privacy-status"></div>
+                        </div>
                     </div>
                 </div>
                 
@@ -1279,9 +1305,21 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                             <label>Skills Path</label>
                             <input type="text" id="cfg-skills-path" class="form-control" readonly>
                         </div>
+                        <div class="form-group">
+                            <label>Workspace Skills Path</label>
+                            <input type="text" id="cfg-workspace-skills-path" class="form-control" readonly>
+                        </div>
+                        <div class="form-group">
+                            <label>Registry URL</label>
+                            <input type="text" id="cfg-skills-registry-url" class="form-control" readonly>
+                        </div>
                         <div class="status-box">
                             <h4>Skill Status</h4>
                             <div id="skill-status-list"></div>
+                        </div>
+                        <div class="status-box">
+                            <h4>Discovered Skills</h4>
+                            <div id="skill-discovery-list"></div>
                         </div>
                     </div>
                 </div>
@@ -1749,6 +1787,9 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
             if (config.agent) {
                 document.getElementById('cfg-provider').value = config.agent.provider || 'openai';
                 document.getElementById('cfg-model').value = config.agent.model || '';
+                document.getElementById('cfg-provider-profile').value = config.agent.provider_profile || '(none)';
+                document.getElementById('cfg-identity-format').value = config.agent.identity_format || 'auto';
+                document.getElementById('cfg-soul-path').value = config.agent.soul_path || '(not configured)';
             }
             
             // Channels tab
@@ -1777,6 +1818,18 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 document.getElementById('cfg-docker-workspace-mount').value = config.security.docker?.workspace_mount || 'ro';
                 document.getElementById('cfg-docker-timeout').value = config.security.docker?.timeout_seconds || 120;
             }
+            if (config.runtime?.processes) {
+                document.getElementById('process-runtime-status').innerHTML = `
+                    <div class="skill-status-item">
+                        <span class="status-dot ${config.runtime.processes.running > 0 ? 'ok' : 'off'}"></span>
+                        <span>State: ${config.runtime.processes.state_path}</span>
+                    </div>
+                    <div class="skill-status-item">
+                        <span class="status-dot ok"></span>
+                        <span>Processes total=${config.runtime.processes.total}, running=${config.runtime.processes.running}, finished=${config.runtime.processes.finished}</span>
+                    </div>
+                `;
+            }
             
             // Memory tab
             if (config.memory) {
@@ -1785,12 +1838,34 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 document.getElementById('cfg-session-max').value = config.memory.session_max_entries || 1000;
                 document.getElementById('cfg-db-path').value = config.memory.database_path || '.borgclaw/memory.db';
                 document.getElementById('cfg-embedding-endpoint').value = config.memory.embedding_endpoint || '';
+                document.getElementById('memory-external-status').innerHTML = `
+                    <div class="skill-status-item">
+                        <span class="status-dot ${config.memory.external?.enabled ? 'ok' : 'off'}"></span>
+                        <span>External adapter ${config.memory.external?.enabled ? '(enabled)' : '(disabled)'}</span>
+                    </div>
+                    <div class="skill-status-item">
+                        <span class="status-dot ${config.memory.external?.endpoint ? 'ok' : 'off'}"></span>
+                        <span>Endpoint ${config.memory.external?.endpoint || '(not configured)'}</span>
+                    </div>
+                `;
+                document.getElementById('memory-privacy-status').innerHTML = `
+                    <div class="skill-status-item">
+                        <span class="status-dot ${config.memory.privacy?.enabled ? 'ok' : 'off'}"></span>
+                        <span>Privacy ${config.memory.privacy?.enabled ? '(enabled)' : '(disabled)'}</span>
+                    </div>
+                    <div class="skill-status-item">
+                        <span class="status-dot ok"></span>
+                        <span>Default=${config.memory.privacy?.default_sensitivity || 'workspace'}, subagent=${config.memory.privacy?.subagent_scope || 'workspace'}, scheduler=${config.memory.privacy?.scheduler_scope || 'workspace'}, heartbeat=${config.memory.privacy?.heartbeat_scope || 'workspace'}</span>
+                    </div>
+                `;
             }
             
             // Skills tab
             if (config.skills) {
                 document.getElementById('cfg-auto-load').checked = config.skills.auto_load !== false;
                 document.getElementById('cfg-skills-path').value = config.skills.skills_path || '.borgclaw/skills';
+                document.getElementById('cfg-workspace-skills-path').value = config.skills.workspace_path || '.borgclaw/workspace/skills';
+                document.getElementById('cfg-skills-registry-url').value = config.skills.registry_url || '(none)';
                 
                 // Populate skill status
                 const skillList = document.getElementById('skill-status-list');
@@ -1807,7 +1882,23 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                         <span class="status-dot ${config.skills.browser_configured ? 'ok' : 'off'}"></span>
                         <span>Browser ${config.skills.browser_configured ? '(configured)' : '(not configured)'}</span>
                     </div>
+                    <div class="skill-status-item">
+                        <span class="status-dot ok"></span>
+                        <span>Ready effective=${config.skills.summary?.ready_effective || 0}, gated=${config.skills.summary?.gated || 0}, shadowed=${config.skills.summary?.shadowed || 0}</span>
+                    </div>
                 `;
+                const discoveryList = document.getElementById('skill-discovery-list');
+                const discovered = config.skills.discovered || [];
+                if (discovered.length === 0) {
+                    discoveryList.innerHTML = '<div class="skill-status-item"><span class="status-dot off"></span><span>No discovered SKILL.md skills</span></div>';
+                } else {
+                    discoveryList.innerHTML = discovered.map(skill => `
+                        <div class="skill-status-item">
+                            <span class="status-dot ${(skill.available && skill.effective) ? 'ok' : 'off'}"></span>
+                            <span>${skill.id} [${skill.source}] ${skill.effective ? '(effective)' : '(shadowed)'} ${skill.available ? '' : '- ' + (skill.reasons || []).join(', ')}</span>
+                        </div>
+                    `).join('');
+                }
             }
         }
         
@@ -2673,12 +2764,178 @@ async fn api_metrics(State(state): State<GatewayState>) -> impl IntoResponse {
     )
 }
 
+#[derive(Debug, serde::Serialize)]
+struct GatewaySkillStatus {
+    id: String,
+    name: String,
+    source: String,
+    effective: bool,
+    available: bool,
+    reasons: Vec<String>,
+}
+
+async fn gateway_skill_statuses(config: &AppConfig) -> Vec<GatewaySkillStatus> {
+    let mut registry = SkillsRegistry::new(config.skills.skills_path.clone());
+    let bundled = PathBuf::from("skills");
+    if bundled.exists() {
+        registry = registry.with_bundled_path(bundled);
+    }
+    let workspace_skills = config.agent.workspace.join("skills");
+    if workspace_skills != config.skills.skills_path {
+        registry = registry.with_workspace_path(workspace_skills);
+    }
+    if registry.load_all().await.is_err() {
+        return Vec::new();
+    }
+
+    let catalog = registry.catalog().await;
+    let mut skills = Vec::with_capacity(catalog.len());
+    for entry in catalog {
+        let (available, reasons) = gateway_skill_requirements(config, &entry.manifest).await;
+        skills.push(GatewaySkillStatus {
+            id: entry.id,
+            name: entry.manifest.name,
+            source: entry.source.as_str().to_string(),
+            effective: entry.shadowed_by.is_none(),
+            available,
+            reasons,
+        });
+    }
+    skills
+}
+
+async fn gateway_skill_requirements(
+    config: &AppConfig,
+    manifest: &borgclaw_core::skills::SkillManifest,
+) -> (bool, Vec<String>) {
+    let mut reasons = Vec::new();
+    if !manifest.is_compatible(env!("CARGO_PKG_VERSION")) {
+        reasons.push(format!(
+            "requires borgclaw >= {}",
+            manifest.min_version.as_deref().unwrap_or("unknown")
+        ));
+    }
+    for binary in &manifest.binaries {
+        if !gateway_binary_available(std::path::Path::new(binary)) {
+            reasons.push(format!("missing binary '{}'", binary));
+        }
+    }
+    for env_key in manifest.env.keys() {
+        if !gateway_env_requirement_available(config, env_key).await {
+            reasons.push(format!("missing env/secret '{}'", env_key));
+        }
+    }
+    for config_key in manifest.config.keys() {
+        if !gateway_config_key_available(config, config_key) {
+            reasons.push(format!("missing config '{}'", config_key));
+        }
+    }
+    (reasons.is_empty(), reasons)
+}
+
+fn gateway_binary_available(binary: &std::path::Path) -> bool {
+    if binary.components().count() > 1 {
+        return binary.exists();
+    }
+
+    let Some(binary_name) = binary.to_str() else {
+        return false;
+    };
+
+    std::env::var_os("PATH")
+        .map(|paths| {
+            std::env::split_paths(&paths).any(|dir| {
+                let candidate = dir.join(binary_name);
+                candidate.exists()
+                    || cfg!(windows) && dir.join(format!("{}.exe", binary_name)).exists()
+            })
+        })
+        .unwrap_or(false)
+}
+
+async fn gateway_env_requirement_available(config: &AppConfig, key: &str) -> bool {
+    if std::env::var(key)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    SecurityLayer::with_config(config.security.clone())
+        .get_secret(key)
+        .await
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn gateway_config_key_available(config: &AppConfig, key: &str) -> bool {
+    let Ok(value) = serde_json::to_value(config) else {
+        return false;
+    };
+    let mut current = &value;
+    for segment in key.split('.') {
+        match current {
+            serde_json::Value::Object(map) => {
+                let Some(next) = map.get(segment) else {
+                    return false;
+                };
+                current = next;
+            }
+            _ => return false,
+        }
+    }
+
+    match current {
+        serde_json::Value::Null => false,
+        serde_json::Value::Bool(value) => *value,
+        serde_json::Value::String(value) => !value.trim().is_empty(),
+        serde_json::Value::Array(values) => !values.is_empty(),
+        serde_json::Value::Object(values) => !values.is_empty(),
+        serde_json::Value::Number(_) => true,
+    }
+}
+
+fn process_runtime_summary(config: &AppConfig) -> serde_json::Value {
+    let state_path = process_state_path(&config.agent.workspace);
+    let records = load_process_records(&state_path).unwrap_or_default();
+    let total = records.len();
+    let running = records
+        .values()
+        .filter(|record| record.status == CommandProcessStatus::Running)
+        .count();
+    let finished = total.saturating_sub(running);
+    serde_json::json!({
+        "supported": true,
+        "state_path": state_path,
+        "total": total,
+        "running": running,
+        "finished": finished,
+    })
+}
+
 async fn api_config(State(state): State<GatewayState>) -> impl IntoResponse {
+    let discovered_skills = gateway_skill_statuses(&state.config).await;
+    let ready_skill_count = discovered_skills
+        .iter()
+        .filter(|skill| skill.available && skill.effective)
+        .count();
+    let gated_skill_count = discovered_skills
+        .iter()
+        .filter(|skill| !skill.available)
+        .count();
+    let shadowed_skill_count = discovered_skills
+        .iter()
+        .filter(|skill| !skill.effective)
+        .count();
+    let process_summary = process_runtime_summary(&state.config);
     let sanitized = serde_json::json!({
         "agent": {
             "model": state.config.agent.model,
             "provider": state.config.agent.provider,
             "workspace": state.config.agent.workspace,
+            "provider_profile": state.config.agent.provider_profile,
+            "identity_format": state.config.agent.identity_format,
+            "soul_path": state.config.agent.soul_path,
         },
         "channels": state.config.channels,
         "memory": {
@@ -2688,6 +2945,19 @@ async fn api_config(State(state): State<GatewayState>) -> impl IntoResponse {
             "embedding_endpoint": state.config.memory.embedding_endpoint,
             "hybrid_search": state.config.memory.hybrid_search,
             "session_max_entries": state.config.memory.session_max_entries,
+            "external": {
+                "enabled": state.config.memory.external.enabled,
+                "endpoint": state.config.memory.external.endpoint,
+                "mirror_writes": state.config.memory.external.mirror_writes,
+                "timeout_seconds": state.config.memory.external.timeout_seconds,
+            },
+            "privacy": {
+                "enabled": state.config.memory.privacy.enabled,
+                "default_sensitivity": state.config.memory.privacy.default_sensitivity,
+                "subagent_scope": state.config.memory.privacy.subagent_scope,
+                "scheduler_scope": state.config.memory.privacy.scheduler_scope,
+                "heartbeat_scope": state.config.memory.privacy.heartbeat_scope,
+            },
         },
         "security": {
             "approval_mode": state.config.security.approval_mode,
@@ -2705,13 +2975,26 @@ async fn api_config(State(state): State<GatewayState>) -> impl IntoResponse {
                 "workspace_mount": state.config.security.docker.workspace_mount,
                 "timeout_seconds": state.config.security.docker.timeout_seconds,
                 "allowed_tools": state.config.security.docker.allowed_tools,
+                "contexts": state.config.security.docker.contexts,
             },
         },
         "skills": {
+            "auto_load": state.config.skills.auto_load,
+            "registry_url": state.config.skills.registry_url,
             "github_configured": !state.config.skills.github.token.is_empty(),
             "google_configured": !state.config.skills.google.client_id.is_empty(),
             "browser_configured": !state.config.skills.browser.node_path.as_os_str().is_empty(),
             "skills_path": state.config.skills.skills_path,
+            "workspace_path": state.config.agent.workspace.join("skills"),
+            "discovered": discovered_skills,
+            "summary": {
+                "ready_effective": ready_skill_count,
+                "gated": gated_skill_count,
+                "shadowed": shadowed_skill_count,
+            },
+        },
+        "runtime": {
+            "processes": process_summary,
         },
         "mcp": state.config.mcp,
     });
@@ -3219,6 +3502,54 @@ async fn api_doctor(State(state): State<GatewayState>) -> impl IntoResponse {
             checks.push(serde_json::json!({"name": "memory_db", "status": "ok", "message": "In-memory backend configured"}));
         }
     }
+    if state.config.memory.external.enabled {
+        let endpoint_configured = state
+            .config
+            .memory
+            .external
+            .endpoint
+            .as_ref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+        checks.push(serde_json::json!({
+            "name": "memory_external",
+            "status": if endpoint_configured { "ok" } else { "error" },
+            "message": if endpoint_configured {
+                "External memory adapter configured"
+            } else {
+                "External memory adapter enabled but endpoint missing"
+            }
+        }));
+    } else {
+        checks.push(serde_json::json!({
+            "name": "memory_external",
+            "status": "info",
+            "message": "External memory adapter disabled"
+        }));
+    }
+
+    if let Some(soul_path) = &state.config.agent.soul_path {
+        checks.push(serde_json::json!({
+            "name": "identity_document",
+            "status": if soul_path.exists() { "ok" } else { "error" },
+            "message": if soul_path.exists() {
+                format!("Identity document {:?} ({:?})", soul_path, state.config.agent.identity_format)
+            } else {
+                format!("Identity document {:?} is missing", soul_path)
+            }
+        }));
+    } else {
+        checks.push(serde_json::json!({
+            "name": "identity_document",
+            "status": "info",
+            "message": "No soul/identity document configured"
+        }));
+    }
+    checks.push(serde_json::json!({
+        "name": "provider_profile",
+        "status": "info",
+        "message": state.config.agent.provider_profile.clone().unwrap_or_else(|| "No provider profile selected".to_string())
+    }));
 
     // Security check
     let security = SecurityLayer::new();
@@ -3265,6 +3596,21 @@ async fn api_doctor(State(state): State<GatewayState>) -> impl IntoResponse {
     } else {
         checks.push(serde_json::json!({"name": "skills_path", "status": "warning", "message": "Skills path does not exist"}));
     }
+    let discovered_skills = gateway_skill_statuses(&state.config).await;
+    let gated_skills = discovered_skills
+        .iter()
+        .filter(|skill| !skill.available)
+        .count();
+    checks.push(serde_json::json!({
+        "name": "skills_discovery",
+        "status": if gated_skills == 0 { "ok" } else { "warning" },
+        "message": format!(
+            "{} discovered skills, {} gated, {} effective",
+            discovered_skills.len(),
+            gated_skills,
+            discovered_skills.iter().filter(|skill| skill.effective).count()
+        )
+    }));
 
     // Scheduler state check
     let scheduler_path = state.config.agent.workspace.join("scheduler.json");
@@ -3281,6 +3627,20 @@ async fn api_doctor(State(state): State<GatewayState>) -> impl IntoResponse {
     } else {
         checks.push(serde_json::json!({"name": "heartbeat_state", "status": "info", "message": "No persisted heartbeat state"}));
     }
+    let process_path = process_state_path(&state.config.agent.workspace);
+    let processes = load_process_records(&process_path).unwrap_or_default();
+    checks.push(serde_json::json!({
+        "name": "process_runtime",
+        "status": "info",
+        "message": format!(
+            "{} persisted background processes ({} running)",
+            processes.len(),
+            processes
+                .values()
+                .filter(|record| record.status == CommandProcessStatus::Running)
+                .count()
+        )
+    }));
 
     let all_ok = checks
         .iter()
@@ -3399,6 +3759,102 @@ mod tests {
 
         let response = api_status(State(state)).await.into_response();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn api_config_includes_identity_memory_runtime_and_skill_status() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_gateway_config_surface_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(root.join("managed").join("release")).unwrap();
+        std::fs::create_dir_all(root.join("workspace").join("skills").join("release")).unwrap();
+        std::fs::write(
+            root.join("managed").join("release").join("SKILL.md"),
+            "name: managed-release\ndescription: managed\n## Instructions\nUse managed.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("workspace").join("skills").join("release").join("SKILL.md"),
+            "name: workspace-release\ndescription: workspace\nconfig:\n- skills.github.token=GitHub token\n## Instructions\nUse workspace.\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("identity.md"), "# Identity").unwrap();
+
+        let mut config = AppConfig::default();
+        config.agent.provider_profile = Some("work".to_string());
+        config.agent.identity_format = borgclaw_core::config::IdentityFormat::Markdown;
+        config.agent.soul_path = Some(root.join("identity.md"));
+        config.agent.workspace = root.join("workspace");
+        config.skills.skills_path = root.join("managed");
+        config.memory.external.enabled = true;
+        config.memory.external.endpoint = Some("http://127.0.0.1:8081".to_string());
+
+        let state = GatewayState {
+            config_path: Arc::new(PathBuf::from(".")),
+            config: Arc::new(config.clone()),
+            router: Arc::new(MessageRouter::from_config(&config)),
+            webhook: None,
+            metrics: Arc::new(GatewayMetrics::new()),
+            connections: Arc::new(RwLock::new(HashMap::new())),
+        };
+
+        let response = api_config(State(state)).await.into_response();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(payload["agent"]["provider_profile"], "work");
+        assert_eq!(payload["agent"]["identity_format"], "markdown");
+        assert_eq!(
+            payload["memory"]["external"]["enabled"],
+            serde_json::Value::Bool(true)
+        );
+        assert_eq!(payload["runtime"]["processes"]["supported"], true);
+        assert_eq!(payload["skills"]["summary"]["shadowed"], 1);
+        assert_eq!(payload["skills"]["summary"]["gated"], 1);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn api_doctor_reports_identity_external_memory_and_process_runtime() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_gateway_doctor_surface_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(root.join("workspace")).unwrap();
+
+        let mut config = AppConfig::default();
+        config.agent.workspace = root.join("workspace");
+        config.agent.soul_path = Some(root.join("missing-identity.md"));
+        config.memory.external.enabled = true;
+        config.memory.external.endpoint = None;
+
+        let state = GatewayState {
+            config_path: Arc::new(PathBuf::from(".")),
+            config: Arc::new(config.clone()),
+            router: Arc::new(MessageRouter::from_config(&config)),
+            webhook: None,
+            metrics: Arc::new(GatewayMetrics::new()),
+            connections: Arc::new(RwLock::new(HashMap::new())),
+        };
+
+        let response = api_doctor(State(state)).await.into_response();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let checks = payload["checks"].as_array().unwrap();
+
+        assert!(checks
+            .iter()
+            .any(|check| check["name"] == "identity_document"));
+        assert!(checks
+            .iter()
+            .any(|check| check["name"] == "memory_external"));
+        assert!(checks
+            .iter()
+            .any(|check| check["name"] == "process_runtime"));
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

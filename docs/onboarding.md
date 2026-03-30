@@ -255,6 +255,14 @@ Representative AIEOS file:
 
 If `identity_format = "auto"`, BorgClaw treats `.json` identity files as AIEOS and other files as markdown.
 
+The onboarding summary now surfaces:
+
+- selected `provider_profile`
+- `identity_format` and `soul_path`
+- memory backend plus external-adapter/privacy state
+- process state path inside the workspace
+- managed and workspace skill paths
+
 ## Memory Backends
 
 Onboarding can configure three runtime memory modes:
@@ -275,6 +283,17 @@ session_max_entries = 100
 ```
 
 If you leave the embedding endpoint blank during onboarding, PostgreSQL runs in text-only mode and `hybrid_search` is disabled for that backend.
+
+Onboarding also exposes the optional external memory adapter and the memory privacy policy:
+
+- `memory.external.enabled`
+- `memory.external.endpoint`
+- `memory.external.mirror_writes`
+- `memory.privacy.enabled`
+- `memory.privacy.default_sensitivity`
+- `memory.privacy.subagent_scope`
+- `memory.privacy.scheduler_scope`
+- `memory.privacy.heartbeat_scope`
 
 Helper scripts:
 - `./scripts/install-pgvector.sh` or `.\scripts\install-pgvector.ps1` provisions a local pgvector-ready PostgreSQL runtime

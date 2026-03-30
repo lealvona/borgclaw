@@ -122,13 +122,17 @@ Returns current configuration as JSON:
 curl http://localhost:3000/api/config
 ```
 
-Response includes all configuration sections: agent, channels, memory, security, skills, mcp.
+Response includes all configuration sections: agent, channels, memory, security, skills, runtime, mcp.
 
-The `agent` section includes provider-selection fields such as `provider`, `provider_profile`, and `model`. The current web editor manages `provider` and `model`; `provider_profile` is visible through the API and can be managed through the CLI provider-profile commands.
+The `agent` section includes provider-selection and identity fields such as `provider`, `provider_profile`, `model`, `identity_format`, and `soul_path`. The current web editor manages provider/model directly and exposes the profile/identity contract read-only so the remote control plane reflects the live runtime state without bypassing the CLI secret/profile flows.
 
-The `memory` section includes backend-specific status fields such as `backend`, `database_path`, `connection_configured`, and `embedding_endpoint`.
+The `memory` section includes backend-specific status fields such as `backend`, `database_path`, `connection_configured`, `embedding_endpoint`, the external adapter contract, and the privacy policy scopes.
 
-The `security` section includes Docker sandbox state under `security.docker`.
+The `security` section includes Docker sandbox state under `security.docker`, including the context override contract.
+
+The `skills` section includes `auto_load`, registry/path details, discovered skill summaries, and per-skill gate results for bundled, managed, and workspace `SKILL.md` entries.
+
+The `runtime` section includes persisted background-process status so operators can inspect command-runtime activity without issuing mutable control operations.
 
 **POST /api/config**
 Update configuration programmatically:
