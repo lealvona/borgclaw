@@ -13,11 +13,12 @@ use borgclaw_core::{
         },
     },
     scheduler::{Job, JobStatus, JobTrigger},
-    security::SecurityLayer,
+    security::{ProviderProfile, SecurityLayer},
     skills::SkillsRegistry,
 };
 use clap::{Parser, Subcommand};
 use colored::Colorize;
+use dialoguer::Password;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::{error, info};
@@ -111,6 +112,11 @@ enum Commands {
     },
     /// Show comprehensive runtime status
     Runtime,
+    /// Manage provider profiles
+    Providers {
+        #[command(subcommand)]
+        action: ProviderAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -133,6 +139,29 @@ enum ConfigAction {
     Set { key: String, value: String },
     /// Reset to defaults
     Reset,
+}
+
+#[derive(Subcommand)]
+enum ProviderAction {
+    /// List configured provider profiles
+    List,
+    /// Show one provider profile
+    Show { id: String },
+    /// Add or update a provider profile
+    Add {
+        id: String,
+        provider: String,
+        #[arg(long)]
+        env_key: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        api_key: Option<String>,
+    },
+    /// Select a provider profile for the agent
+    Select { id: String },
+    /// Delete a provider profile
+    Delete { id: String },
 }
 
 #[derive(Subcommand)]
@@ -384,6 +413,7 @@ async fn main() {
         Commands::Subagent { action } => subagent(config, action),
         Commands::Secrets { action } => secrets(config, action).await,
         Commands::Runtime => runtime(config).await,
+        Commands::Providers { action } => providers_action(&config_path, &mut config, action).await,
     }
 }
 
@@ -661,6 +691,7 @@ async fn config_action(path: &PathBuf, mut config: AppConfig, action: ConfigActi
 fn set_config_key(config: &mut AppConfig, key: &str, value: &str) -> bool {
     match key {
         "agent.provider" => config.agent.provider = value.to_string(),
+        "agent.provider_profile" => config.agent.provider_profile = Some(value.to_string()),
         "agent.model" => config.agent.model = value.to_string(),
         "agent.max_tokens" => {
             if let Ok(v) = value.parse::<u32>() {
@@ -686,6 +717,130 @@ fn set_config_key(config: &mut AppConfig, key: &str, value: &str) -> bool {
         _ => return false,
     }
     true
+}
+
+async fn providers_action(path: &PathBuf, config: &mut AppConfig, action: ProviderAction) {
+    let security = SecurityLayer::with_config(config.security.clone());
+    match action {
+        ProviderAction::List => match security.list_provider_profiles().await {
+            Ok(profiles) if profiles.is_empty() => println!("No provider profiles configured"),
+            Ok(profiles) => {
+                for profile in profiles {
+                    let marker = if config.agent.provider_profile.as_deref() == Some(&profile.id) {
+                        "*"
+                    } else {
+                        " "
+                    };
+                    println!(
+                        "{} {} [{}] model={} key={}",
+                        marker,
+                        profile.id,
+                        profile.provider,
+                        profile.model.as_deref().unwrap_or("-"),
+                        if profile
+                            .api_key
+                            .as_deref()
+                            .is_some_and(|value| !value.trim().is_empty())
+                        {
+                            "configured"
+                        } else {
+                            "missing"
+                        }
+                    );
+                }
+            }
+            Err(err) => println!("Failed to list provider profiles: {}", err),
+        },
+        ProviderAction::Show { id } => match security.get_provider_profile(&id).await {
+            Ok(Some(profile)) => {
+                println!("id: {}", profile.id);
+                println!("provider: {}", profile.provider);
+                println!("env_key: {}", profile.env_key.as_deref().unwrap_or("-"));
+                println!("model: {}", profile.model.as_deref().unwrap_or("-"));
+                println!(
+                    "api_key: {}",
+                    if profile
+                        .api_key
+                        .as_deref()
+                        .is_some_and(|value| !value.trim().is_empty())
+                    {
+                        "configured"
+                    } else {
+                        "missing"
+                    }
+                );
+            }
+            Ok(None) => println!("Unknown provider profile: {}", id),
+            Err(err) => println!("Failed to read provider profile: {}", err),
+        },
+        ProviderAction::Add {
+            id,
+            provider,
+            env_key,
+            model,
+            api_key,
+        } => {
+            let api_key = match api_key {
+                Some(value) => value,
+                None => match Password::new()
+                    .with_prompt("Enter provider API key")
+                    .allow_empty_password(true)
+                    .interact()
+                {
+                    Ok(value) => value,
+                    Err(err) => {
+                        println!("Failed to read API key: {}", err);
+                        return;
+                    }
+                },
+            };
+            let profile = ProviderProfile {
+                id: id.clone(),
+                provider,
+                env_key,
+                api_key: if api_key.trim().is_empty() {
+                    None
+                } else {
+                    Some(api_key)
+                },
+                model,
+            };
+            match security.upsert_provider_profile(profile).await {
+                Ok(()) => println!("Stored provider profile {}", id),
+                Err(err) => println!("Failed to store provider profile: {}", err),
+            }
+        }
+        ProviderAction::Select { id } => match security.get_provider_profile(&id).await {
+            Ok(Some(profile)) => {
+                config.agent.provider_profile = Some(profile.id.clone());
+                config.agent.provider = profile.provider.clone();
+                if let Some(model) = profile.model {
+                    config.agent.model = model;
+                }
+                if let Err(err) = save_config(config, path) {
+                    println!("Failed to save config: {}", err);
+                    return;
+                }
+                println!("Selected provider profile {}", id);
+            }
+            Ok(None) => println!("Unknown provider profile: {}", id),
+            Err(err) => println!("Failed to select provider profile: {}", err),
+        },
+        ProviderAction::Delete { id } => match security.delete_provider_profile(&id).await {
+            Ok(true) => {
+                if config.agent.provider_profile.as_deref() == Some(id.as_str()) {
+                    config.agent.provider_profile = None;
+                    if let Err(err) = save_config(config, path) {
+                        println!("Deleted profile but failed to save config: {}", err);
+                        return;
+                    }
+                }
+                println!("Deleted provider profile {}", id);
+            }
+            Ok(false) => println!("Unknown provider profile: {}", id),
+            Err(err) => println!("Failed to delete provider profile: {}", err),
+        },
+    }
 }
 
 async fn skills_action(config: &AppConfig, action: SkillsAction) {
@@ -5951,7 +6106,8 @@ mod skill_packaging_tests {
 
 #[cfg(test)]
 mod cli_path_tests {
-    use super::cli_path_available;
+    use super::{cli_path_available, set_config_key};
+    use borgclaw_core::config::AppConfig;
     use std::path::Path;
 
     #[test]
@@ -5964,6 +6120,20 @@ mod cli_path_tests {
         assert!(!cli_path_available(Path::new(
             "/definitely/not/a/real/binary"
         )));
+    }
+
+    #[test]
+    fn set_config_key_updates_agent_provider_profile() {
+        let mut config = AppConfig::default();
+        assert!(set_config_key(
+            &mut config,
+            "agent.provider_profile",
+            "openai-work"
+        ));
+        assert_eq!(
+            config.agent.provider_profile.as_deref(),
+            Some("openai-work")
+        );
     }
 }
 

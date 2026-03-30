@@ -124,6 +124,8 @@ curl http://localhost:3000/api/config
 
 Response includes all configuration sections: agent, channels, memory, security, skills, mcp.
 
+The `agent` section includes provider-selection fields such as `provider`, `provider_profile`, and `model`. The current web editor manages `provider` and `model`; `provider_profile` is visible through the API and can be managed through the CLI provider-profile commands.
+
 The `memory` section includes backend-specific status fields such as `backend`, `database_path`, `connection_configured`, and `embedding_endpoint`.
 
 The `security` section includes Docker sandbox state under `security.docker`.

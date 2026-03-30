@@ -21,6 +21,7 @@ use super::config::{
 };
 use chrono::{Duration, Utc};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -404,6 +405,17 @@ pub struct SecurityLayer {
     ssrf_guard: SsrfGuard,
 }
 
+const PROVIDER_PROFILES_SECRET_KEY: &str = "BORGCLAW_PROVIDER_PROFILES";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderProfile {
+    pub id: String,
+    pub provider: String,
+    pub env_key: Option<String>,
+    pub api_key: Option<String>,
+    pub model: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 struct PendingApproval {
     tool_name: String,
@@ -558,6 +570,44 @@ impl SecurityLayer {
     pub async fn secret_env(&self) -> HashMap<String, String> {
         let secrets = self.secrets.read().await;
         secrets.inject_env().await
+    }
+
+    pub async fn list_provider_profiles(&self) -> Result<Vec<ProviderProfile>, SecurityError> {
+        self.load_provider_profiles().await
+    }
+
+    pub async fn get_provider_profile(
+        &self,
+        profile_id: &str,
+    ) -> Result<Option<ProviderProfile>, SecurityError> {
+        let profiles = self.load_provider_profiles().await?;
+        Ok(profiles
+            .into_iter()
+            .find(|profile| profile.id == profile_id))
+    }
+
+    pub async fn upsert_provider_profile(
+        &self,
+        profile: ProviderProfile,
+    ) -> Result<(), SecurityError> {
+        let mut profiles = self.load_provider_profiles().await?;
+        if let Some(existing) = profiles.iter_mut().find(|item| item.id == profile.id) {
+            *existing = profile;
+        } else {
+            profiles.push(profile);
+        }
+        self.persist_provider_profiles(&profiles).await
+    }
+
+    pub async fn delete_provider_profile(&self, profile_id: &str) -> Result<bool, SecurityError> {
+        let mut profiles = self.load_provider_profiles().await?;
+        let before = profiles.len();
+        profiles.retain(|profile| profile.id != profile_id);
+        if profiles.len() == before {
+            return Ok(false);
+        }
+        self.persist_provider_profiles(&profiles).await?;
+        Ok(true)
     }
 
     pub fn vault_provider(&self) -> Option<&str> {
@@ -759,6 +809,29 @@ impl SecurityLayer {
             }
             ApprovalMode::Autonomous => false,
         }
+    }
+
+    async fn load_provider_profiles(&self) -> Result<Vec<ProviderProfile>, SecurityError> {
+        let secrets = self.secrets.read().await;
+        let raw = secrets.get(PROVIDER_PROFILES_SECRET_KEY).await;
+        drop(secrets);
+
+        match raw {
+            Some(raw) if !raw.trim().is_empty() => {
+                serde_json::from_str(&raw).map_err(|e| SecurityError::SecretError(e.to_string()))
+            }
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    async fn persist_provider_profiles(
+        &self,
+        profiles: &[ProviderProfile],
+    ) -> Result<(), SecurityError> {
+        let payload = serde_json::to_string(profiles)
+            .map_err(|e| SecurityError::SecretError(e.to_string()))?;
+        let secrets = self.secrets.write().await;
+        secrets.store(PROVIDER_PROFILES_SECRET_KEY, &payload).await
     }
 
     pub async fn execute_command(
@@ -1671,5 +1744,47 @@ mod tests {
         assert!(!result.blocked);
         assert_eq!(result.leaks_redacted, 0);
         assert_eq!(result.text, "task completed successfully");
+    }
+
+    #[tokio::test]
+    async fn provider_profiles_round_trip_through_secret_store() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_provider_profiles_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let security = SecurityLayer::with_config(SecurityConfig {
+            secrets_path: root.join("secrets.enc"),
+            ..Default::default()
+        });
+
+        security
+            .upsert_provider_profile(ProviderProfile {
+                id: "openai-work".to_string(),
+                provider: "openai".to_string(),
+                env_key: Some("OPENAI_API_KEY".to_string()),
+                api_key: Some("secret".to_string()),
+                model: Some("gpt-4o".to_string()),
+            })
+            .await
+            .unwrap();
+
+        let profiles = security.list_provider_profiles().await.unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].id, "openai-work");
+
+        let loaded = SecurityLayer::with_config(SecurityConfig {
+            secrets_path: root.join("secrets.enc"),
+            ..Default::default()
+        });
+        let profile = loaded
+            .get_provider_profile("openai-work")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(profile.provider, "openai");
+        assert_eq!(profile.model.as_deref(), Some("gpt-4o"));
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

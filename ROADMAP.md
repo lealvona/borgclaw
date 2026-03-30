@@ -11,6 +11,7 @@ Status note as of March 29, 2026:
 - Phase 4 is complete against the current documented contract.
 - Phase 5 is complete for the current product contract, with ongoing lint/doc maintenance remaining as normal follow-up work.
 - See `docs/IMPLEMENTATION_AUDIT_2026-03-29.md` for the evidence-backed issue list and concrete fix steps.
+- The remaining post-contract follow-up train is tracked in `docs/IMPLEMENTATION_PLAN_2026-03-30_REMAINING_BACKLOG.md`.
 
 ## Phase 1: Core Runtime
 
