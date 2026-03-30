@@ -1886,7 +1886,7 @@ async fn heartbeat(config: AppConfig, action: HeartbeatAction) {
 }
 
 enum HeartbeatTriggerOutcome {
-    Triggered(borgclaw_core::memory::HeartbeatResult),
+    Triggered(Box<borgclaw_core::memory::HeartbeatResult>),
     Disabled,
     Missing,
 }
@@ -1909,7 +1909,7 @@ async fn trigger_heartbeat_task(
         .run_task_now(id)
         .await
         .ok_or_else(|| format!("heartbeat task '{}' could not be triggered", id))?;
-    Ok(HeartbeatTriggerOutcome::Triggered(result))
+    Ok(HeartbeatTriggerOutcome::Triggered(Box::new(result)))
 }
 
 fn subagent(config: AppConfig, action: SubagentAction) {
@@ -3039,6 +3039,9 @@ fn schedule_detail_lines(path: &std::path::Path, id: &str) -> Result<Vec<String>
                 retry,
                 error
             ));
+            if let Some(fallback) = run.fallback.as_ref() {
+                append_fallback_lines(&mut lines, "    ", fallback);
+            }
         }
     }
 
@@ -3451,6 +3454,9 @@ fn heartbeat_detail_lines(path: &std::path::Path, id: &str) -> Result<Vec<String
                 if success { "ok" } else { "failed" },
                 message
             ));
+            if let Some(fallback) = last_result.get("fallback") {
+                append_json_fallback_lines(&mut lines, "", fallback);
+            }
         }
     }
 
@@ -3582,6 +3588,8 @@ fn subagent_list_lines(path: &std::path::Path) -> Result<Vec<String>, String> {
             .unwrap_or("unknown");
         let goal = task
             .get("goal")
+            .or_else(|| task.get("input"))
+            .or_else(|| task.get("name"))
             .and_then(|v| v.as_str())
             .unwrap_or("unnamed");
         lines.push(format!("{} [{}] {}", id, status, goal));
@@ -3610,7 +3618,12 @@ fn subagent_detail_lines(path: &std::path::Path, id: &str) -> Result<Vec<String>
         lines.push(format!("status: {}", status));
     }
 
-    if let Some(goal) = task.get("goal").and_then(|v| v.as_str()) {
+    if let Some(goal) = task
+        .get("goal")
+        .or_else(|| task.get("input"))
+        .or_else(|| task.get("name"))
+        .and_then(|v| v.as_str())
+    {
         lines.push(format!("goal: {}", goal));
     }
 
@@ -3618,7 +3631,112 @@ fn subagent_detail_lines(path: &std::path::Path, id: &str) -> Result<Vec<String>
         lines.push(format!("created_at: {}", created));
     }
 
+    if let Some(result) = task.get("result") {
+        if !result.is_null() {
+            if let Some(success) = result.get("success").and_then(|v| v.as_bool()) {
+                lines.push(format!("result_success: {}", success));
+            }
+            if let Some(output) = result.get("output").and_then(|v| v.as_str()) {
+                if !output.is_empty() {
+                    lines.push(format!("result_output: {}", output));
+                }
+            }
+            if let Some(error) = result.get("error").and_then(|v| v.as_str()) {
+                if !error.is_empty() {
+                    lines.push(format!("result_error: {}", error));
+                }
+            }
+            if let Some(fallback) = result.get("fallback") {
+                append_json_fallback_lines(&mut lines, "", fallback);
+            }
+        }
+    }
+
     Ok(lines)
+}
+
+fn append_fallback_lines(
+    lines: &mut Vec<String>,
+    prefix: &str,
+    fallback: &borgclaw_core::FallbackDeliverable,
+) {
+    lines.push(format!(
+        "{}fallback: {} [{}]",
+        prefix, fallback.title, fallback.failure_kind
+    ));
+    lines.push(format!("{}summary: {}", prefix, fallback.summary));
+    if !fallback.suggested_actions.is_empty() {
+        lines.push(format!(
+            "{}actions: {}",
+            prefix,
+            fallback.suggested_actions.join(" | ")
+        ));
+    }
+    if !fallback.context.is_empty() {
+        let mut context = fallback.context.iter().collect::<Vec<_>>();
+        context.sort_by(|left, right| left.0.cmp(right.0));
+        lines.push(format!(
+            "{}context: {}",
+            prefix,
+            context
+                .into_iter()
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+}
+
+fn append_json_fallback_lines(lines: &mut Vec<String>, prefix: &str, fallback: &serde_json::Value) {
+    if fallback.is_null() {
+        return;
+    }
+
+    let title = fallback
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("fallback deliverable");
+    let failure_kind = fallback
+        .get("failure_kind")
+        .and_then(|v| v.as_str())
+        .unwrap_or("failed");
+    lines.push(format!("{}fallback: {} [{}]", prefix, title, failure_kind));
+
+    if let Some(summary) = fallback.get("summary").and_then(|v| v.as_str()) {
+        lines.push(format!("{}summary: {}", prefix, summary));
+    }
+
+    if let Some(actions) = fallback.get("suggested_actions").and_then(|v| v.as_array()) {
+        let joined = actions
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<_>>();
+        if !joined.is_empty() {
+            lines.push(format!("{}actions: {}", prefix, joined.join(" | ")));
+        }
+    }
+
+    if let Some(context) = fallback.get("context").and_then(|v| v.as_object()) {
+        if !context.is_empty() {
+            let mut items = context.iter().collect::<Vec<_>>();
+            items.sort_by(|left, right| left.0.cmp(right.0));
+            lines.push(format!(
+                "{}context: {}",
+                prefix,
+                items
+                    .into_iter()
+                    .map(|(key, value)| {
+                        let rendered = value
+                            .as_str()
+                            .map(str::to_string)
+                            .unwrap_or_else(|| value.to_string());
+                        format!("{key}={rendered}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
 }
 
 fn cancel_subagent_task(path: &std::path::Path, id: &str) -> Result<bool, String> {
@@ -6229,7 +6347,19 @@ mod tests {
                     "finished_at": "2026-03-19T00:05:03Z",
                     "status": "failed",
                     "error": "disk full",
-                    "retry_scheduled": 2
+                    "retry_scheduled": 2,
+                    "fallback": {
+                      "title": "scheduler job nightly-backup fallback deliverable",
+                      "summary": "disk full",
+                      "failure_kind": "failed",
+                      "suggested_actions": [
+                        "Inspect the persisted error details and retry only after correcting the input or dependency issue."
+                      ],
+                      "context": {
+                        "job_id": "job-1",
+                        "action": "message"
+                      }
+                    }
                   }
                 ],
                 "metadata": {
@@ -6254,6 +6384,11 @@ mod tests {
         assert!(lines.iter().any(|line| {
             line == "  - 2026-03-19T00:05:00+00:00 -> 2026-03-19T00:05:03+00:00 [failed] retry=2 error=disk full"
         }));
+        assert!(lines.iter().any(|line| line
+            == "    fallback: scheduler job nightly-backup fallback deliverable [failed]"));
+        assert!(lines
+            .iter()
+            .any(|line| line == "    context: action=message, job_id=job-1"));
     }
 
     #[test]
@@ -6424,6 +6559,100 @@ mod tests {
         assert!(lines
             .iter()
             .any(|line| line == "last_result: ok - Health check passed"));
+    }
+
+    #[test]
+    fn heartbeat_detail_lines_include_fallback_deliverable() {
+        let workspace = std::env::temp_dir().join(format!(
+            "borgclaw_cli_heartbeat_detail_fallback_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = workspace.join("heartbeat.json");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(
+            &path,
+            r#"{
+              "hb-1": {
+                "id": "hb-1",
+                "name": "health_check",
+                "enabled": false,
+                "schedule": "0 0 0 * * *",
+                "run_count": 2,
+                "dead_lettered_at": "2026-03-19T00:06:00Z",
+                "last_result": {
+                  "success": false,
+                  "message": "provider unavailable",
+                  "fallback": {
+                    "title": "heartbeat task hb-1 fallback deliverable",
+                    "summary": "provider unavailable",
+                    "failure_kind": "failed",
+                    "suggested_actions": [
+                      "Inspect the persisted error details and retry only after correcting the input or dependency issue."
+                    ],
+                    "context": {
+                      "task_id": "hb-1"
+                    }
+                  }
+                },
+                "metadata": {}
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let lines = heartbeat_detail_lines(&path, "hb-1").unwrap();
+        assert!(lines
+            .iter()
+            .any(|line| line == "fallback: heartbeat task hb-1 fallback deliverable [failed]"));
+        assert!(lines.iter().any(|line| line == "context: task_id=hb-1"));
+    }
+
+    #[test]
+    fn subagent_detail_lines_include_fallback_deliverable() {
+        let workspace = std::env::temp_dir().join(format!(
+            "borgclaw_cli_subagent_detail_fallback_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = workspace.join("subagents.json");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(
+            &path,
+            r#"{
+              "sg-1": {
+                "status": "timeout",
+                "goal": "index the workspace",
+                "created_at": "2026-03-19T00:00:00Z",
+                "result": {
+                  "success": false,
+                  "output": "",
+                  "error": "timed out",
+                  "fallback": {
+                    "title": "sub-agent task sg-1 fallback deliverable",
+                    "summary": "timed out",
+                    "failure_kind": "timeout",
+                    "suggested_actions": [
+                      "Increase the timeout if the task is expected to run longer."
+                    ],
+                    "context": {
+                      "goal": "index the workspace",
+                      "task_id": "sg-1"
+                    }
+                  }
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let lines = subagent_detail_lines(&path, "sg-1").unwrap();
+        assert!(lines.iter().any(|line| line == "result_success: false"));
+        assert!(lines.iter().any(|line| line == "result_error: timed out"));
+        assert!(lines
+            .iter()
+            .any(|line| line == "fallback: sub-agent task sg-1 fallback deliverable [timeout]"));
+        assert!(lines
+            .iter()
+            .any(|line| line == "context: goal=index the workspace, task_id=sg-1"));
     }
 
     #[tokio::test]

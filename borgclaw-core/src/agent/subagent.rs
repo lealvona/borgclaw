@@ -147,6 +147,8 @@ pub struct SubAgentResult {
     pub duration_ms: u64,
     pub memory_entries_created: usize,
     pub error: Option<String>,
+    #[serde(default)]
+    pub fallback: Option<crate::fallback::FallbackDeliverable>,
 }
 
 #[derive(Clone)]
@@ -365,9 +367,15 @@ impl SubAgentCoordinator {
                     duration_ms,
                     memory_entries_created: output.memory_entries_created,
                     error: None,
+                    fallback: None,
                 }),
                 Err(e) => {
                     let error_text = e.to_string();
+                    let failure_kind = if matches!(e, SubAgentError::Timeout(_)) {
+                        "timeout"
+                    } else {
+                        "failed"
+                    };
                     AttemptOutcome::Failure {
                         error: e,
                         result: SubAgentResult {
@@ -377,7 +385,16 @@ impl SubAgentCoordinator {
                             tools_used: vec![],
                             duration_ms,
                             memory_entries_created: 0,
-                            error: Some(error_text),
+                            error: Some(error_text.clone()),
+                            fallback: Some(
+                                crate::fallback::background_failure_deliverable(
+                                    failure_kind,
+                                    &format!("sub-agent task {}", task.name),
+                                    error_text,
+                                )
+                                .with_context("task_id", task_id.to_string())
+                                .with_context("goal", task.input.clone()),
+                            ),
                         },
                     }
                 }
@@ -551,6 +568,14 @@ impl SubAgentCoordinator {
                     duration_ms: 0,
                     memory_entries_created: 0,
                     error: Some("Task not found".to_string()),
+                    fallback: Some(
+                        crate::fallback::background_failure_deliverable(
+                            "failed",
+                            "sub-agent task",
+                            "Task not found",
+                        )
+                        .with_context("task_id", task_id.to_string()),
+                    ),
                 },
                 error: SubAgentError::NotFound(task_id.to_string()),
             };
@@ -565,6 +590,14 @@ impl SubAgentCoordinator {
                 duration_ms: 0,
                 memory_entries_created: 0,
                 error: Some("Task cancelled".to_string()),
+                fallback: Some(
+                    crate::fallback::background_failure_deliverable(
+                        "failed",
+                        "sub-agent task",
+                        "Task cancelled",
+                    )
+                    .with_context("task_id", task_id.to_string()),
+                ),
             };
             task.result = Some(cancelled.clone());
             persist_tasks(&self.state_path, &tasks);
@@ -1325,6 +1358,16 @@ mod tests {
         assert_eq!(task.retry_count, 1);
         assert!(task.next_retry_at.is_none());
         assert!(task.dead_lettered_at.is_some());
+        let fallback = task
+            .result
+            .as_ref()
+            .and_then(|result| result.fallback.as_ref());
+        let fallback = fallback.expect("expected fallback deliverable");
+        assert_eq!(fallback.failure_kind, "timeout");
+        assert_eq!(
+            fallback.context.get("task_id").map(String::as_str),
+            Some(task_id.as_str())
+        );
     }
 
     #[tokio::test]
