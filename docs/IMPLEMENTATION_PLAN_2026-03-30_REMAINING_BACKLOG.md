@@ -34,8 +34,8 @@ These items remain useful upstream references, but they are not part of BorgClaw
 | 5 | Memory Query Extensions + External Adapter | complete | Add `since`/`until`, richer memory APIs, and an optional OpenMemory-style adapter |
 | 6 | Workspace-Layered Memory Privacy | complete | Add sensitivity-aware memory access policy across execution contexts |
 | 7 | PTY + Background Command Runtime | complete | Extend `execute_command` with PTY/background execution and persisted process state |
-| 8 | Docker Sandbox Hardening | in progress | Add split sandbox modes and stricter defaults for remote/background execution |
-| 9 | Skills Lifecycle Completion | pending | Add skill gating, richer discovery/status, and explicit source tiers |
+| 8 | Docker Sandbox Hardening | complete | Add split sandbox modes and stricter defaults for remote/background execution |
+| 9 | Skills Lifecycle Completion | in progress | Add skill gating, richer discovery/status, and explicit source tiers |
 | 10 | Gateway + Onboarding Control Plane | pending | Expose all new runtime contracts in onboarding, status, doctor, and gateway surfaces |
 | 11 | Final Audit + Smell Cleanup | pending | Resolve cross-cutting cleanup, fill test gaps, and close the intended backlog |
 

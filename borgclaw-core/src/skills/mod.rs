@@ -36,51 +36,78 @@ use tokio::sync::RwLock;
 /// Skills registry
 pub struct SkillsRegistry {
     skills: Arc<RwLock<HashMap<String, Skill>>>,
-    skills_path: PathBuf,
+    catalog: Arc<RwLock<Vec<SkillCatalogEntry>>>,
+    managed_path: PathBuf,
+    bundled_path: Option<PathBuf>,
+    workspace_path: Option<PathBuf>,
 }
 
 impl SkillsRegistry {
-    pub fn new(skills_path: PathBuf) -> Self {
+    pub fn new(managed_path: PathBuf) -> Self {
         Self {
             skills: Arc::new(RwLock::new(HashMap::new())),
-            skills_path,
+            catalog: Arc::new(RwLock::new(Vec::new())),
+            managed_path,
+            bundled_path: None,
+            workspace_path: None,
         }
+    }
+
+    pub fn with_bundled_path(mut self, bundled_path: PathBuf) -> Self {
+        self.bundled_path = Some(bundled_path);
+        self
+    }
+
+    pub fn with_workspace_path(mut self, workspace_path: PathBuf) -> Self {
+        self.workspace_path = Some(workspace_path);
+        self
     }
 
     /// Load all skills from skills directory
     pub async fn load_all(&self) -> Result<(), SkillsError> {
         let mut skills = self.skills.write().await;
+        let mut catalog = self.catalog.write().await;
+        skills.clear();
+        catalog.clear();
 
-        if !self.skills_path.exists() {
-            return Ok(());
+        let mut seen_roots = std::collections::HashSet::new();
+        for (source, path) in self.source_roots() {
+            let normalized = normalize_root_key(&path);
+            if !seen_roots.insert(normalized) {
+                continue;
+            }
+            scan_skill_root(source, &path, &mut catalog)?;
         }
 
-        let entries = std::fs::read_dir(&self.skills_path)
-            .map_err(|e| SkillsError::IoError(e.to_string()))?;
+        catalog.sort_by(|left, right| {
+            left.id
+                .cmp(&right.id)
+                .then_with(|| left.source.priority().cmp(&right.source.priority()))
+        });
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                let skill_md = path.join("SKILL.md");
-                if skill_md.exists() {
-                    if let Ok(content) = std::fs::read_to_string(&skill_md) {
-                        if let Ok(skill) = SkillManifest::parse(&content) {
-                            let id = path
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("unknown")
-                                .to_string();
+        let mut effective_sources = HashMap::new();
+        for entry in catalog.iter() {
+            let candidate = effective_sources
+                .entry(entry.id.clone())
+                .or_insert(entry.source);
+            if entry.source.priority() > candidate.priority() {
+                *candidate = entry.source;
+            }
+        }
 
-                            skills.insert(
-                                id,
-                                Skill {
-                                    manifest: skill,
-                                    path,
-                                },
-                            );
-                        }
-                    }
-                }
+        for entry in catalog.iter_mut() {
+            let effective_source = effective_sources.get(&entry.id).copied();
+            entry.shadowed_by = effective_source.filter(|source| *source != entry.source);
+            if effective_source == Some(entry.source) {
+                skills.insert(
+                    entry.id.clone(),
+                    Skill {
+                        id: entry.id.clone(),
+                        manifest: entry.manifest.clone(),
+                        path: entry.path.clone(),
+                        source: entry.source,
+                    },
+                );
             }
         }
 
@@ -102,6 +129,30 @@ impl SkillsRegistry {
             .collect()
     }
 
+    /// List effective skills with source metadata
+    pub async fn effective_skills(&self) -> Vec<Skill> {
+        let mut skills = self
+            .skills
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        skills.sort_by(|left, right| left.id.cmp(&right.id));
+        skills
+    }
+
+    /// List all discovered skills across bundled, managed, and workspace roots
+    pub async fn catalog(&self) -> Vec<SkillCatalogEntry> {
+        let mut catalog = self.catalog.read().await.clone();
+        catalog.sort_by(|left, right| {
+            left.id
+                .cmp(&right.id)
+                .then_with(|| left.source.priority().cmp(&right.source.priority()))
+        });
+        catalog
+    }
+
     /// Get skill by command name
     pub async fn get_by_command(&self, command: &str) -> Option<Skill> {
         let skills = self.skills.read().await;
@@ -115,8 +166,106 @@ impl SkillsRegistry {
 /// Loaded skill
 #[derive(Debug, Clone)]
 pub struct Skill {
+    pub id: String,
     pub manifest: SkillManifest,
     pub path: PathBuf,
+    pub source: SkillSourceTier,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SkillSourceTier {
+    Bundled,
+    Managed,
+    Workspace,
+}
+
+impl SkillSourceTier {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Bundled => "bundled",
+            Self::Managed => "managed",
+            Self::Workspace => "workspace",
+        }
+    }
+
+    fn priority(&self) -> u8 {
+        match self {
+            Self::Bundled => 0,
+            Self::Managed => 1,
+            Self::Workspace => 2,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SkillCatalogEntry {
+    pub id: String,
+    pub manifest: SkillManifest,
+    pub path: PathBuf,
+    pub source: SkillSourceTier,
+    pub shadowed_by: Option<SkillSourceTier>,
+}
+
+fn scan_skill_root(
+    source: SkillSourceTier,
+    root: &std::path::Path,
+    catalog: &mut Vec<SkillCatalogEntry>,
+) -> Result<(), SkillsError> {
+    if !root.exists() {
+        return Ok(());
+    }
+
+    let entries = std::fs::read_dir(root).map_err(|e| SkillsError::IoError(e.to_string()))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let skill_md = path.join("SKILL.md");
+        if !skill_md.exists() {
+            continue;
+        }
+
+        let content =
+            std::fs::read_to_string(&skill_md).map_err(|e| SkillsError::IoError(e.to_string()))?;
+        let manifest = SkillManifest::parse(&content)?;
+        let id = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+        catalog.push(SkillCatalogEntry {
+            id,
+            manifest,
+            path,
+            source,
+            shadowed_by: None,
+        });
+    }
+
+    Ok(())
+}
+
+fn normalize_root_key(path: &std::path::Path) -> String {
+    std::fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .to_string()
+}
+
+impl SkillsRegistry {
+    fn source_roots(&self) -> Vec<(SkillSourceTier, PathBuf)> {
+        let mut roots = Vec::new();
+        if let Some(path) = &self.bundled_path {
+            roots.push((SkillSourceTier::Bundled, path.clone()));
+        }
+        roots.push((SkillSourceTier::Managed, self.managed_path.clone()));
+        if let Some(path) = &self.workspace_path {
+            roots.push((SkillSourceTier::Workspace, path.clone()));
+        }
+        roots
+    }
 }
 
 /// Skills errors
@@ -198,6 +347,52 @@ mod tests {
 
         // Cleanup
         let _ = std::fs::remove_dir_all(&temp_path);
+    }
+
+    #[tokio::test]
+    async fn skills_registry_prefers_workspace_over_managed_over_bundled() {
+        let root = temp_dir();
+        let bundled = root.join("bundled");
+        let managed = root.join("managed");
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(bundled.join("release-skill")).unwrap();
+        std::fs::create_dir_all(managed.join("release-skill")).unwrap();
+        std::fs::create_dir_all(workspace.join("release-skill")).unwrap();
+        std::fs::write(
+            bundled.join("release-skill").join("SKILL.md"),
+            "---\nname: bundled-release\ncommands:\n- audit\n---\n## Instructions\nUse bundled\n",
+        )
+        .unwrap();
+        std::fs::write(
+            managed.join("release-skill").join("SKILL.md"),
+            "---\nname: managed-release\ncommands:\n- audit\n---\n## Instructions\nUse managed\n",
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.join("release-skill").join("SKILL.md"),
+            "---\nname: workspace-release\ncommands:\n- audit\n---\n## Instructions\nUse workspace\n",
+        )
+        .unwrap();
+
+        let registry = SkillsRegistry::new(managed.clone())
+            .with_bundled_path(bundled.clone())
+            .with_workspace_path(workspace.clone());
+        registry.load_all().await.unwrap();
+
+        let effective = registry.get("release-skill").await.unwrap();
+        assert_eq!(effective.manifest.name, "workspace-release");
+        assert_eq!(effective.source, SkillSourceTier::Workspace);
+
+        let catalog = registry.catalog().await;
+        assert_eq!(catalog.len(), 3);
+        assert_eq!(catalog[0].source, SkillSourceTier::Bundled);
+        assert_eq!(catalog[0].shadowed_by, Some(SkillSourceTier::Workspace));
+        assert_eq!(catalog[1].source, SkillSourceTier::Managed);
+        assert_eq!(catalog[1].shadowed_by, Some(SkillSourceTier::Workspace));
+        assert_eq!(catalog[2].source, SkillSourceTier::Workspace);
+        assert_eq!(catalog[2].shadowed_by, None);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -179,6 +179,18 @@ enum SkillsAction {
         /// Optional substring filter for installed and registry skills
         filter: Option<String>,
     },
+    /// Search discovered skills
+    Search {
+        /// Search query applied to skill ids, names, and descriptions
+        query: String,
+    },
+    /// Show one skill in detail
+    Info { id: String },
+    /// Show skill availability and gate status
+    Status {
+        /// Optional substring filter for skill ids and names
+        filter: Option<String>,
+    },
     /// Install a skill
     Install { name: String },
     /// Package a skill for distribution
@@ -866,33 +878,32 @@ async fn skills_action(config: &AppConfig, action: SkillsAction) {
     match action {
         SkillsAction::List { filter } => {
             let filter = filter.map(|value| value.to_lowercase());
-            println!("Built-in skills:");
-            println!("  - memory_store");
-            println!("  - memory_recall");
-            println!("  - execute_command");
-            println!("  - read_file");
-            println!("  - list_directory");
-            println!("  - web_search");
-            println!("  - fetch_url");
-            println!("  - message");
-            println!("  - schedule_task");
-            let registry = SkillsRegistry::new(config.skills.skills_path.clone());
-            let mut installed_ids = std::collections::HashSet::new();
-            if registry.load_all().await.is_ok() {
-                let mut installed = registry.list().await;
-                if let Some(filter) = &filter {
-                    installed.retain(|(id, name)| {
-                        id.to_lowercase().contains(filter) || name.to_lowercase().contains(filter)
-                    });
-                }
-                if !installed.is_empty() {
-                    println!("\nInstalled skills:");
-                    for (id, name) in installed {
-                        installed_ids.insert(id.clone());
-                        println!("  - {} ({})", name, id);
+            print_builtin_skills();
+            if let Ok(catalog) = load_skill_catalog(config).await {
+                let effective = filter_skill_catalog(&catalog, filter.as_deref(), true);
+                if !effective.is_empty() {
+                    println!("\nEffective skills:");
+                    for skill in effective {
+                        println!(
+                            "  - {} ({}, source={}, {})",
+                            skill.entry.manifest.name,
+                            skill.entry.id,
+                            skill.entry.source.as_str(),
+                            if skill.available { "ready" } else { "gated" }
+                        );
                     }
                 }
             }
+            let installed_ids = load_skill_catalog(config)
+                .await
+                .map(|catalog| {
+                    catalog
+                        .into_iter()
+                        .filter(|skill| skill.is_effective)
+                        .map(|skill| skill.entry.id)
+                        .collect::<std::collections::HashSet<_>>()
+                })
+                .unwrap_or_default();
             if let Some(registry_url) = config.skills.registry_url.as_deref() {
                 match fetch_registry_skills(registry_url).await {
                     Ok(skills) if !skills.is_empty() => {
@@ -913,6 +924,50 @@ async fn skills_action(config: &AppConfig, action: SkillsAction) {
                 }
             }
         }
+        SkillsAction::Search { query } => match load_skill_catalog(config).await {
+            Ok(catalog) => {
+                let matches = filter_skill_catalog(&catalog, Some(&query.to_lowercase()), false);
+                if matches.is_empty() {
+                    println!("No discovered skills matched '{}'", query);
+                } else {
+                    println!("Discovered skills matching '{}':", query);
+                    for skill in matches {
+                        println!(
+                            "  - {} ({}, source={}, {}, {})",
+                            skill.entry.manifest.name,
+                            skill.entry.id,
+                            skill.entry.source.as_str(),
+                            if skill.is_effective {
+                                "effective"
+                            } else {
+                                "shadowed"
+                            },
+                            if skill.available { "ready" } else { "gated" }
+                        );
+                    }
+                }
+            }
+            Err(err) => println!("Failed to load skills: {}", err),
+        },
+        SkillsAction::Info { id } => match load_skill_catalog(config).await {
+            Ok(catalog) => print_skill_info(&catalog, &id),
+            Err(err) => println!("Failed to load skills: {}", err),
+        },
+        SkillsAction::Status { filter } => match load_skill_catalog(config).await {
+            Ok(catalog) => {
+                let filtered = filter_skill_catalog(
+                    &catalog,
+                    filter.as_ref().map(|value| value.to_lowercase()).as_deref(),
+                    false,
+                );
+                if filtered.is_empty() {
+                    println!("No discovered skills matched the requested filter");
+                } else {
+                    print_skill_status(&filtered);
+                }
+            }
+            Err(err) => println!("Failed to load skills: {}", err),
+        },
         SkillsAction::Install { name } => {
             match install_skill(
                 &config.skills.skills_path,
@@ -973,6 +1028,263 @@ async fn skills_action(config: &AppConfig, action: SkillsAction) {
                 Err(err) => println!("✗ Failed to inspect package: {}", err),
             }
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct LoadedSkillStatus {
+    entry: borgclaw_core::skills::SkillCatalogEntry,
+    available: bool,
+    reasons: Vec<String>,
+    is_effective: bool,
+}
+
+fn print_builtin_skills() {
+    println!("Built-in skills:");
+    println!("  - memory_store");
+    println!("  - memory_recall");
+    println!("  - execute_command");
+    println!("  - read_file");
+    println!("  - list_directory");
+    println!("  - web_search");
+    println!("  - fetch_url");
+    println!("  - message");
+    println!("  - schedule_task");
+}
+
+async fn load_skill_catalog(config: &AppConfig) -> Result<Vec<LoadedSkillStatus>, String> {
+    let mut registry = SkillsRegistry::new(config.skills.skills_path.clone());
+    if let Some(path) = bundled_skills_path() {
+        registry = registry.with_bundled_path(path);
+    }
+    let workspace_skills = config.agent.workspace.join("skills");
+    if workspace_skills != config.skills.skills_path {
+        registry = registry.with_workspace_path(workspace_skills);
+    }
+    registry.load_all().await.map_err(|e| e.to_string())?;
+    let catalog = registry.catalog().await;
+    let mut loaded = Vec::with_capacity(catalog.len());
+    for entry in catalog {
+        let (available, reasons) = evaluate_skill_requirements(config, &entry.manifest).await;
+        loaded.push(LoadedSkillStatus {
+            is_effective: entry.shadowed_by.is_none(),
+            entry,
+            available,
+            reasons,
+        });
+    }
+    Ok(loaded)
+}
+
+fn bundled_skills_path() -> Option<std::path::PathBuf> {
+    let path = std::path::PathBuf::from("skills");
+    path.exists().then_some(path)
+}
+
+fn filter_skill_catalog<'a>(
+    catalog: &'a [LoadedSkillStatus],
+    filter: Option<&str>,
+    effective_only: bool,
+) -> Vec<&'a LoadedSkillStatus> {
+    catalog
+        .iter()
+        .filter(|skill| !effective_only || skill.is_effective)
+        .filter(|skill| match filter {
+            Some(query) => {
+                let query = query.to_lowercase();
+                skill.entry.id.to_lowercase().contains(&query)
+                    || skill.entry.manifest.name.to_lowercase().contains(&query)
+                    || skill
+                        .entry
+                        .manifest
+                        .description
+                        .to_lowercase()
+                        .contains(&query)
+            }
+            None => true,
+        })
+        .collect()
+}
+
+fn print_skill_info(catalog: &[LoadedSkillStatus], id: &str) {
+    let matching = catalog
+        .iter()
+        .filter(|skill| skill.entry.id == id)
+        .collect::<Vec<_>>();
+    if matching.is_empty() {
+        println!(
+            "Skill '{}' is not installed in any discovered source tier",
+            id
+        );
+        return;
+    }
+
+    for skill in matching {
+        println!("Skill: {}", skill.entry.manifest.name);
+        println!("  id: {}", skill.entry.id);
+        println!("  source: {}", skill.entry.source.as_str());
+        println!("  path: {}", skill.entry.path.display());
+        println!(
+            "  status: {}{}",
+            if skill.available { "ready" } else { "gated" },
+            if skill.is_effective {
+                " (effective)"
+            } else {
+                ""
+            }
+        );
+        if let Some(shadowed_by) = skill.entry.shadowed_by {
+            println!("  shadowed_by: {}", shadowed_by.as_str());
+        }
+        if !skill.entry.manifest.description.is_empty() {
+            println!("  description: {}", skill.entry.manifest.description);
+        }
+        if let Some(min_version) = &skill.entry.manifest.min_version {
+            println!("  min_version: {}", min_version);
+        }
+        if !skill.entry.manifest.commands.is_empty() {
+            println!("  commands: {}", skill.entry.manifest.commands.join(", "));
+        }
+        if !skill.entry.manifest.binaries.is_empty() {
+            println!("  binaries: {}", skill.entry.manifest.binaries.join(", "));
+        }
+        if !skill.entry.manifest.env.is_empty() {
+            println!(
+                "  env: {}",
+                skill
+                    .entry
+                    .manifest
+                    .env
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        if !skill.entry.manifest.config.is_empty() {
+            println!(
+                "  config: {}",
+                skill
+                    .entry
+                    .manifest
+                    .config
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        if !skill.available && !skill.reasons.is_empty() {
+            println!("  blocked_by:");
+            for reason in &skill.reasons {
+                println!("    - {}", reason);
+            }
+        }
+        println!();
+    }
+}
+
+fn print_skill_status(skills: &[&LoadedSkillStatus]) {
+    println!("Skill status:");
+    for skill in skills {
+        let status = if skill.available { "ready" } else { "gated" };
+        let precedence = if skill.is_effective {
+            "effective".to_string()
+        } else if let Some(shadowed_by) = skill.entry.shadowed_by {
+            format!("shadowed by {}", shadowed_by.as_str())
+        } else {
+            "shadowed".to_string()
+        };
+        println!(
+            "{} {} ({}, source={}, {})",
+            marker(skill.available),
+            skill.entry.id,
+            skill.entry.manifest.name,
+            skill.entry.source.as_str(),
+            precedence
+        );
+        if !skill.reasons.is_empty() {
+            for reason in &skill.reasons {
+                println!("  - {}", reason);
+            }
+        } else {
+            println!("  - {}", status);
+        }
+    }
+}
+
+async fn evaluate_skill_requirements(
+    config: &AppConfig,
+    manifest: &borgclaw_core::skills::SkillManifest,
+) -> (bool, Vec<String>) {
+    let mut reasons = Vec::new();
+    if !manifest.is_compatible(env!("CARGO_PKG_VERSION")) {
+        reasons.push(format!(
+            "requires borgclaw >= {}",
+            manifest.min_version.as_deref().unwrap_or("unknown")
+        ));
+    }
+
+    for binary in &manifest.binaries {
+        if !cli_path_available(std::path::Path::new(binary)) {
+            reasons.push(format!("missing binary '{}'", binary));
+        }
+    }
+
+    for env_key in manifest.env.keys() {
+        if !env_requirement_available(config, env_key).await {
+            reasons.push(format!("missing env/secret '{}'", env_key));
+        }
+    }
+
+    for config_key in manifest.config.keys() {
+        if !config_key_available(config, config_key) {
+            reasons.push(format!("missing config '{}'", config_key));
+        }
+    }
+
+    (reasons.is_empty(), reasons)
+}
+
+async fn env_requirement_available(config: &AppConfig, key: &str) -> bool {
+    if std::env::var(key)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    SecurityLayer::with_config(config.security.clone())
+        .get_secret(key)
+        .await
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn config_key_available(config: &AppConfig, key: &str) -> bool {
+    let Ok(value) = serde_json::to_value(config) else {
+        return false;
+    };
+    let mut current = &value;
+    for segment in key.split('.') {
+        match current {
+            serde_json::Value::Object(map) => {
+                let Some(next) = map.get(segment) else {
+                    return false;
+                };
+                current = next;
+            }
+            _ => return false,
+        }
+    }
+
+    match current {
+        serde_json::Value::Null => false,
+        serde_json::Value::Bool(value) => *value,
+        serde_json::Value::String(value) => !value.trim().is_empty(),
+        serde_json::Value::Array(values) => !values.is_empty(),
+        serde_json::Value::Object(values) => !values.is_empty(),
+        serde_json::Value::Number(_) => true,
     }
 }
 
@@ -5051,6 +5363,83 @@ mod tests {
             std::fs::read_to_string(destination.join("prompts/system.txt")).unwrap(),
             "prompt"
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn config_key_available_reads_nested_values() {
+        let mut config = temp_config();
+        config.security.docker.enabled = true;
+        config.skills.github.token = "${GITHUB_TOKEN}".to_string();
+
+        assert!(config_key_available(&config, "security.docker.enabled"));
+        assert!(config_key_available(&config, "skills.github.token"));
+        assert!(!config_key_available(&config, "skills.google.client_id"));
+        assert!(!config_key_available(&config, "skills.missing.setting"));
+    }
+
+    #[tokio::test]
+    async fn evaluate_skill_requirements_reports_missing_inputs() {
+        let config = temp_config();
+        let manifest = borgclaw_core::skills::SkillManifest::parse(
+            "name: gated\nbinaries:\n- borgclaw-missing-bin\nenv:\n- TEST_SKILL_SECRET=secret\nconfig:\n- skills.github.token=GitHub token\n## Instructions\nUse gated skill.\n",
+        )
+        .unwrap();
+
+        let (available, reasons) = evaluate_skill_requirements(&config, &manifest).await;
+        assert!(!available);
+        assert!(reasons
+            .iter()
+            .any(|reason| reason.contains("missing binary")));
+        assert!(reasons
+            .iter()
+            .any(|reason| reason.contains("TEST_SKILL_SECRET")));
+        assert!(reasons
+            .iter()
+            .any(|reason| reason.contains("skills.github.token")));
+    }
+
+    #[tokio::test]
+    async fn load_skill_catalog_marks_workspace_skill_effective_and_managed_shadowed() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_cli_skill_catalog_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let managed = root.join("managed");
+        let workspace = root.join("workspace");
+        let workspace_skills = workspace.join("skills");
+        std::fs::create_dir_all(managed.join("release")).unwrap();
+        std::fs::create_dir_all(workspace_skills.join("release")).unwrap();
+        std::fs::write(
+            managed.join("release").join("SKILL.md"),
+            "name: release-managed\ndescription: managed release\n## Instructions\nUse managed.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            workspace_skills.join("release").join("SKILL.md"),
+            "name: release-workspace\ndescription: workspace release\n## Instructions\nUse workspace.\n",
+        )
+        .unwrap();
+
+        let mut config = temp_config();
+        config.skills.skills_path = managed;
+        config.agent.workspace = workspace;
+
+        let catalog = load_skill_catalog(&config).await.unwrap();
+        assert_eq!(catalog.len(), 2);
+        assert!(catalog.iter().any(|skill| {
+            skill.entry.id == "release"
+                && skill.entry.source == borgclaw_core::skills::SkillSourceTier::Workspace
+                && skill.is_effective
+        }));
+        assert!(catalog.iter().any(|skill| {
+            skill.entry.id == "release"
+                && skill.entry.source == borgclaw_core::skills::SkillSourceTier::Managed
+                && !skill.is_effective
+                && skill.entry.shadowed_by
+                    == Some(borgclaw_core::skills::SkillSourceTier::Workspace)
+        }));
+
         std::fs::remove_dir_all(root).unwrap();
     }
 

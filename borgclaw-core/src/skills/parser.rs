@@ -23,6 +23,10 @@ pub struct SkillManifest {
     pub dependencies: Vec<String>,
     /// Companion files that should be installed alongside SKILL.md
     pub files: Vec<String>,
+    /// Required binaries for the skill to be usable
+    pub binaries: Vec<String>,
+    /// Required config keys for the skill to be usable
+    pub config: HashMap<String, String>,
     /// Instructions for the AI
     pub instructions: String,
     /// Examples
@@ -68,6 +72,8 @@ impl SkillManifest {
             Env,
             Dependencies,
             Files,
+            Binaries,
+            Config,
         }
 
         let mut name = String::new();
@@ -78,6 +84,8 @@ impl SkillManifest {
         let mut env = HashMap::new();
         let mut dependencies = Vec::new();
         let mut files = Vec::new();
+        let mut binaries = Vec::new();
+        let mut config = HashMap::new();
         let mut instructions = String::new();
         let mut examples = Vec::new();
 
@@ -113,6 +121,10 @@ impl SkillManifest {
                 current_list = Some(ManifestList::Dependencies);
             } else if line.starts_with("files:") {
                 current_list = Some(ManifestList::Files);
+            } else if line.starts_with("binaries:") {
+                current_list = Some(ManifestList::Binaries);
+            } else if line.starts_with("config:") {
+                current_list = Some(ManifestList::Config);
             } else if line.starts_with("- ") && !in_instructions && !in_examples {
                 let item = line.trim_start_matches("- ").trim();
                 match current_list {
@@ -132,6 +144,17 @@ impl SkillManifest {
                     }
                     Some(ManifestList::Files) => {
                         files.push(item.to_string());
+                    }
+                    Some(ManifestList::Binaries) => {
+                        binaries.push(item.to_string());
+                    }
+                    Some(ManifestList::Config) => {
+                        let parts: Vec<_> = item.splitn(2, '=').collect();
+                        if parts.len() == 2 {
+                            config.insert(parts[0].to_string(), parts[1].to_string());
+                        } else if !item.is_empty() {
+                            config.insert(item.to_string(), String::new());
+                        }
                     }
                 }
             } else if line == "## Instructions" || line == "## instructions" {
@@ -184,6 +207,8 @@ impl SkillManifest {
             env,
             dependencies,
             files,
+            binaries,
+            config,
             instructions: instructions.trim().to_string(),
             examples,
             min_version,
@@ -257,6 +282,30 @@ mod tests {
                 "assets/icon.txt".to_string(),
                 "prompts/system.txt".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn parse_extracts_binary_and_config_requirements() {
+        let content = "---\nname: test-skill\nbinaries:\n- curl\n- jq\nconfig:\n- skills.github.token=GitHub token\n- security.docker.enabled\n---\n# Test Skill\n";
+        let manifest = SkillManifest::parse(content).unwrap();
+        assert_eq!(
+            manifest.binaries,
+            vec!["curl".to_string(), "jq".to_string()]
+        );
+        assert_eq!(
+            manifest
+                .config
+                .get("skills.github.token")
+                .map(String::as_str),
+            Some("GitHub token")
+        );
+        assert_eq!(
+            manifest
+                .config
+                .get("security.docker.enabled")
+                .map(String::as_str),
+            Some("")
         );
     }
 
