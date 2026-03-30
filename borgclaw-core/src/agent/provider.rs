@@ -647,7 +647,7 @@ impl ChatProvider for OllamaProvider {
 /// API base URL can be overridden via {PROVIDER}_API_BASE env var
 /// e.g., OPENAI_API_BASE, ANTHROPIC_API_BASE, KIMI_API_BASE, etc.
 macro_rules! openai_compatible_provider {
-    ($name:ident, $env_key:expr, $default_base_url:expr) => {
+    ($name:ident, $env_key:expr, $default_base_url:expr, $reasoning_split:expr) => {
         struct $name {
             api_key: String,
             http: reqwest::Client,
@@ -667,6 +667,25 @@ macro_rules! openai_compatible_provider {
                     http: reqwest::Client::new(),
                     base_url,
                 })
+            }
+
+            fn reasoning_split() -> Option<bool> {
+                $reasoning_split
+            }
+
+            fn build_request_body(request: &ProviderRequest) -> serde_json::Value {
+                let mut body = serde_json::json!({
+                    "model": request.model,
+                    "temperature": request.temperature,
+                    "max_tokens": request.max_tokens,
+                    "messages": request.messages,
+                });
+
+                if let Some(reasoning_split) = Self::reasoning_split() {
+                    body["reasoning_split"] = serde_json::json!(reasoning_split);
+                }
+
+                body
             }
 
             fn resolve_base_url() -> String {
@@ -704,14 +723,6 @@ macro_rules! openai_compatible_provider {
                     request.max_tokens
                 );
 
-                #[derive(Serialize)]
-                struct Body<'a> {
-                    model: &'a str,
-                    temperature: f32,
-                    max_tokens: u32,
-                    messages: &'a [ChatMessage],
-                }
-
                 #[derive(Deserialize)]
                 struct Response {
                     choices: Vec<Choice>,
@@ -732,12 +743,7 @@ macro_rules! openai_compatible_provider {
                     .http
                     .post(&url)
                     .bearer_auth(&self.api_key)
-                    .json(&Body {
-                        model: &request.model,
-                        temperature: request.temperature,
-                        max_tokens: request.max_tokens,
-                        messages: &request.messages,
-                    })
+                    .json(&Self::build_request_body(request))
                     .send()
                     .await
                     .map_err(|e| ProviderError::Request(e.to_string()))?;
@@ -752,9 +758,11 @@ macro_rules! openai_compatible_provider {
                             .unwrap_or(60);
                         return Err(ProviderError::RateLimited(retry_after));
                     }
+                    let status = response.status();
+                    let error_body = response.text().await.unwrap_or_default();
                     return Err(ProviderError::Request(format!(
-                        "http {}",
-                        response.status()
+                        "http {}: {}",
+                        status, error_body
                     )));
                 }
 
@@ -774,13 +782,19 @@ macro_rules! openai_compatible_provider {
 }
 
 // Generate OpenAI-compatible providers
-openai_compatible_provider!(KimiProvider, "KIMI_API_KEY", "https://api.moonshot.cn/v1");
+openai_compatible_provider!(
+    KimiProvider,
+    "KIMI_API_KEY",
+    "https://api.moonshot.cn/v1",
+    None
+);
 openai_compatible_provider!(
     MiniMaxProvider,
     "MINIMAX_API_KEY",
-    "https://api.minimax.io/v1"
+    "https://api.minimax.io/v1",
+    Some(false)
 );
-openai_compatible_provider!(ZProvider, "Z_API_KEY", "https://api.z.ai/api/paas/v4");
+openai_compatible_provider!(ZProvider, "Z_API_KEY", "https://api.z.ai/api/paas/v4", None);
 
 #[cfg(test)]
 mod tests {
@@ -871,5 +885,35 @@ mod tests {
 
         assert!(ProviderFactory::create(&config, &security).await.is_ok());
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn minimax_request_body_preserves_multi_turn_reasoning_payloads() {
+        let request = ProviderRequest {
+            model: "MiniMax-M2.7".to_string(),
+            temperature: 0.7,
+            max_tokens: 4096,
+            messages: vec![
+                ChatMessage {
+                    role: "system".to_string(),
+                    content: "You are helpful.".to_string(),
+                },
+                ChatMessage {
+                    role: "assistant".to_string(),
+                    content: "<think>reasoning</think>Hello".to_string(),
+                },
+                ChatMessage {
+                    role: "user".to_string(),
+                    content: "Second turn".to_string(),
+                },
+            ],
+        };
+
+        let body = MiniMaxProvider::build_request_body(&request);
+        assert_eq!(body["reasoning_split"], serde_json::json!(false));
+        assert_eq!(
+            body["messages"][1]["content"],
+            "<think>reasoning</think>Hello"
+        );
     }
 }

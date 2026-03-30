@@ -6,7 +6,8 @@ It assumes the merged baseline through the Docker sandbox tranche and turns the 
 
 Status note:
 - PR 1 (`Backlog Contract Repair`) is landed.
-- PR 2 (`Provider Profile Registry`) is implemented in the current feature branch and should be merged before the next tranche starts.
+- PR 2 (`Provider Profile Registry`) is landed.
+- The next required tranche is a provider-turn hotfix for MiniMax multi-turn chat stability before identity/transcript expansion continues.
 
 ## Scope Notes
 
@@ -22,15 +23,16 @@ These items remain useful upstream references, but they are not part of BorgClaw
 | PR | Title | Status | Main Outcome |
 |---|---|---|---|
 | 1 | Backlog Contract Repair | complete | Align docs, status tracking, and follow-up ownership with the intended backlog |
-| 2 | Provider Profile Registry | in progress | Add encrypted named provider profiles and runtime profile selection |
-| 3 | Identity Formats + Transcript Artifacts | pending | Support markdown and structured identities, plus richer internal provider artifacts |
-| 4 | Memory Query Extensions + External Adapter | pending | Add `since`/`until`, richer memory APIs, and an optional OpenMemory-style adapter |
-| 5 | Workspace-Layered Memory Privacy | pending | Add sensitivity-aware memory access policy across execution contexts |
-| 6 | PTY + Background Command Runtime | pending | Extend `execute_command` with PTY/background execution and persisted process state |
-| 7 | Docker Sandbox Hardening | pending | Add split sandbox modes and stricter defaults for remote/background execution |
-| 8 | Skills Lifecycle Completion | pending | Add skill gating, richer discovery/status, and explicit source tiers |
-| 9 | Gateway + Onboarding Control Plane | pending | Expose all new runtime contracts in onboarding, status, doctor, and gateway surfaces |
-| 10 | Final Audit + Smell Cleanup | pending | Resolve cross-cutting cleanup, fill test gaps, and close the intended backlog |
+| 2 | Provider Profile Registry | complete | Add encrypted named provider profiles and runtime profile selection |
+| 3 | MiniMax Multi-Turn Stability Fix | pending | Keep MiniMax chat history valid after the first turn and add regression coverage for the chat turn pipeline |
+| 4 | Identity Formats + Transcript Artifacts | pending | Support markdown and structured identities, plus richer internal provider artifacts |
+| 5 | Memory Query Extensions + External Adapter | pending | Add `since`/`until`, richer memory APIs, and an optional OpenMemory-style adapter |
+| 6 | Workspace-Layered Memory Privacy | pending | Add sensitivity-aware memory access policy across execution contexts |
+| 7 | PTY + Background Command Runtime | pending | Extend `execute_command` with PTY/background execution and persisted process state |
+| 8 | Docker Sandbox Hardening | pending | Add split sandbox modes and stricter defaults for remote/background execution |
+| 9 | Skills Lifecycle Completion | pending | Add skill gating, richer discovery/status, and explicit source tiers |
+| 10 | Gateway + Onboarding Control Plane | pending | Expose all new runtime contracts in onboarding, status, doctor, and gateway surfaces |
+| 11 | Final Audit + Smell Cleanup | pending | Resolve cross-cutting cleanup, fill test gaps, and close the intended backlog |
 
 ## PR 1: Backlog Contract Repair
 
@@ -56,13 +58,19 @@ Acceptance:
 - Existing configs keep working.
 - New installs can be fully configured through named profiles without plaintext provider secrets in `config.toml`.
 
-Current branch status:
-- Core runtime resolution is implemented.
-- Onboarding writes a default named profile and selects it in config.
-- CLI provider profile management commands are implemented.
-- Docs and status tracking are updated in this branch.
+## PR 3: MiniMax Multi-Turn Stability Fix
 
-## PR 3: Identity Formats And Transcript Artifacts
+Required changes:
+- Inspect the MiniMax chat turn pipeline end to end, including stored assistant payloads and replayed history.
+- Ensure BorgClaw preserves the provider-specific reasoning payload semantics required for valid second and later turns.
+- Add regression coverage proving that a second user turn does not degrade into provider-side `400 Bad Request` responses because of malformed replayed history.
+- Improve provider-side error visibility so future contract mismatches are diagnosable from logs and surfaced failures.
+
+Acceptance:
+- BorgClaw can complete more than one MiniMax chat turn without the observed `400 Bad Request` failure.
+- The regression is covered in automated tests.
+
+## PR 4: Identity Formats And Transcript Artifacts
 
 Required changes:
 - Replace the one-off `soul_path` loading logic with an identity loader abstraction.
@@ -74,7 +82,7 @@ Acceptance:
 - Existing `soul_path` users remain compatible.
 - Structured identities and richer transcript records round-trip correctly.
 
-## PR 4: Memory Query Extensions And External Adapter
+## PR 5: Memory Query Extensions And External Adapter
 
 Required changes:
 - Add `since` and `until` filters to memory recall.
@@ -86,7 +94,7 @@ Acceptance:
 - All built-in backends support the same extended recall contract.
 - External memory can be enabled without breaking local memory behavior.
 
-## PR 5: Workspace-Layered Memory Privacy
+## PR 6: Workspace-Layered Memory Privacy
 
 Required changes:
 - Add sensitivity/privacy metadata to memory entries.
@@ -97,7 +105,7 @@ Acceptance:
 - Privacy levels are enforced consistently across execution contexts.
 - Legacy entries without sensitivity metadata remain readable under the default policy.
 
-## PR 6: PTY And Background Command Runtime
+## PR 7: PTY And Background Command Runtime
 
 Required changes:
 - Extend `execute_command` with `pty`, `background`, `yield_ms`, and persisted process state.
@@ -108,7 +116,7 @@ Acceptance:
 - Foreground PTY and non-PTY background execution are both covered.
 - Background command execution persists state and integrates with current status/doctor flows.
 
-## PR 7: Docker Sandbox Hardening
+## PR 8: Docker Sandbox Hardening
 
 Required changes:
 - Split Docker sandbox policy by execution context.
@@ -119,7 +127,7 @@ Acceptance:
 - Existing Docker configs remain compatible.
 - Remote/background command execution defaults to stricter isolation than trusted local sessions.
 
-## PR 8: Skills Lifecycle Completion
+## PR 9: Skills Lifecycle Completion
 
 Required changes:
 - Make bundled, managed/local, and workspace skill tiers explicit.
@@ -130,7 +138,7 @@ Acceptance:
 - Skill load failures explain why the skill is unavailable.
 - Source precedence and gate evaluation are operator-visible.
 
-## PR 9: Gateway And Onboarding Control Plane
+## PR 10: Gateway And Onboarding Control Plane
 
 Required changes:
 - Surface provider profiles, identity formats, memory extensions, process runtime, privacy status, and skill gates in onboarding and gateway config/status.
@@ -140,7 +148,7 @@ Required changes:
 Acceptance:
 - Gateway and onboarding expose the full feature surface without introducing a second implementation path.
 
-## PR 10: Final Audit And Cleanup
+## PR 11: Final Audit And Cleanup
 
 Required changes:
 - Run the full strict verification suite.
