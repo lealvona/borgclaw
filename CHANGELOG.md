@@ -7,6 +7,27 @@
 
 ## Unreleased
 
+## 0.16.0 - 2026-03-30
+
+### Infrastructure
+
+- **GitHub Actions Nightly Builds** — Automated daily builds with `nightly-YYYY-MM-DD` tags
+  - Builds for Linux x86_64 and macOS ARM64
+  - Runs full test suite before tagging
+  - Artifacts retained for 7 days
+  - Manual trigger support via workflow_dispatch
+
+- **Release Automation** — Full release workflow for version tags
+  - Automatic binary builds on tag push
+  - GitHub Release creation with artifacts
+  - Multi-platform support (Linux, macOS)
+
+- **Dynamic Port Configuration** — Scripts now respect configured ports
+  - `scripts/gateway.sh`, `scripts/doctor.sh`, `scripts/onboarding.sh` read ports from config.toml
+  - Default WebSocket port: 3000 (configurable via `channels.websocket.port`)
+  - Default Webhook port: 8080 (configurable via `channels.webhook.port`)
+  - New `scripts/lib/config.sh` library for config parsing
+
 ### Features
 
 - `borgclaw heartbeat trigger <id>` now executes persisted heartbeat tasks immediately through the heartbeat engine instead of acting as a placeholder-only CLI surface.

@@ -1,0 +1,139 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.16.0)'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Build release binaries
+        run: |
+          source scripts/lib/build-env.sh
+          borgclaw_prepare_build_env
+          cargo build --workspace --release
+
+      - name: Package binaries
+        run: |
+          mkdir -p dist
+          VERSION="${GITHUB_REF_NAME:-v${{ inputs.version }}}"
+          cp target/release/borgclaw "dist/borgclaw-${VERSION}-linux-x86_64"
+          cp target/release/borgclaw-gateway "dist/borgclaw-gateway-${VERSION}-linux-x86_64"
+          chmod +x dist/*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: borgclaw-release-linux-x86_64
+          path: dist/*
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release binaries
+        run: |
+          source scripts/lib/build-env.sh
+          borgclaw_prepare_build_env
+          cargo build --workspace --release
+
+      - name: Package binaries
+        run: |
+          mkdir -p dist
+          VERSION="${GITHUB_REF_NAME:-v${{ inputs.version }}}"
+          cp target/release/borgclaw "dist/borgclaw-${VERSION}-macos-arm64"
+          cp target/release/borgclaw-gateway "dist/borgclaw-gateway-${VERSION}-macos-arm64"
+          chmod +x dist/*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: borgclaw-release-macos-arm64
+          path: dist/*
+
+  create-release:
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: borgclaw-release-linux-x86_64
+          path: dist/linux
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: borgclaw-release-macos-arm64
+          path: dist/macos
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/linux/*
+            dist/macos/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "## Release ${{ github.ref_name }} Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Binaries:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Linux x86_64" >> $GITHUB_STEP_SUMMARY
+          echo "- macOS ARM64" >> $GITHUB_STEP_SUMMARY

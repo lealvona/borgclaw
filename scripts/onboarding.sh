@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 source "$ROOT_DIR/scripts/lib/build-env.sh"
+source "$ROOT_DIR/scripts/lib/config.sh"
 borgclaw_prepare_build_env
 
 show_help() {
@@ -215,10 +216,11 @@ echo "╔═══════════════════════�
 echo "║                    ✅ Setup Complete!                          ║"
 echo "╚════════════════════════════════════════════════════════════════╝"
 echo ""
+WS_PORT=$(borgclaw_ws_port)
 echo "Next steps:"
 echo "  • Start REPL:        ./scripts/repl.sh"
 echo "  • Start Gateway:     ./scripts/gateway.sh"
-echo "  • Open Dashboard:    http://localhost:3000"
+echo "  • Open Dashboard:    http://localhost:${WS_PORT}"
 echo "  • Edit Config (UI):  Press Ctrl+, in browser"
 echo "  • Check system:      ./scripts/doctor.sh"
 echo ""

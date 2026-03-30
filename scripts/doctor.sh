@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 source "$ROOT_DIR/scripts/lib/build-env.sh"
+source "$ROOT_DIR/scripts/lib/config.sh"
 borgclaw_prepare_build_env
 
 echo "[borgclaw] System Doctor"
@@ -150,8 +151,9 @@ echo "  borgclaw backup export   - Export runtime state"
 
 echo ""
 echo "=== Gateway Web Interface ==="
+WS_PORT=$(borgclaw_ws_port)
 echo "  Start:    ./scripts/gateway.sh"
-echo "  URL:      http://localhost:3000"
+echo "  URL:      http://localhost:${WS_PORT}"
 echo "  Config:   Press Ctrl+, in browser for visual editor"
 
 echo ""
