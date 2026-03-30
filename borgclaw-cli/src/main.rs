@@ -137,6 +137,8 @@ enum SecretAction {
     Delete { key: String },
     /// Check whether a secret exists
     Check { key: String },
+    /// Rotate the service authentication token
+    RotateToken,
 }
 
 #[derive(Subcommand)]
@@ -2044,6 +2046,45 @@ async fn secrets(config: AppConfig, action: SecretAction) {
                 println!("✓ Secret '{}' exists", key);
             } else {
                 println!("✗ Secret '{}' not found", key);
+            }
+        }
+        SecretAction::RotateToken => {
+            match store.rotate_service_token().await {
+                Ok(token) => {
+                    // Write token to service token file
+                    if let Some(token_path) = store.service_token_path() {
+                        if let Some(parent) = token_path.parent() {
+                            let _ = tokio::fs::create_dir_all(parent).await;
+                        }
+                        match tokio::fs::write(&token_path, &token).await {
+                            Ok(()) => {
+                                // Set restrictive permissions (600) on Unix
+                                #[cfg(unix)]
+                                {
+                                    use std::os::unix::fs::PermissionsExt;
+                                    let mut perms = std::fs::metadata(&token_path)
+                                        .map(|m| m.permissions())
+                                        .unwrap_or_else(|_| std::fs::Permissions::from_mode(0o600));
+                                    perms.set_mode(0o600);
+                                    let _ = std::fs::set_permissions(&token_path, perms);
+                                }
+                                println!("✓ Service token rotated and stored");
+                                println!("  Location: {}", token_path.display());
+                                println!("  Permissions: 600 (owner read/write only)");
+                            }
+                            Err(e) => {
+                                println!("✗ Failed to write service token file: {}", e);
+                                println!("  Token hash stored in secret store, but token file not created.");
+                                println!("  You may need to create the file manually or check permissions.");
+                            }
+                        }
+                    } else {
+                        println!("✗ Could not determine service token path");
+                    }
+                }
+                Err(e) => {
+                    println!("✗ Failed to rotate service token: {}", e);
+                }
             }
         }
     }
