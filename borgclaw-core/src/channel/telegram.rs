@@ -112,7 +112,10 @@ impl Channel for TelegramChannel {
                 ChannelError::AuthFailed("Telegram bot token not provided".to_string())
             })?;
 
-        let bot = Bot::new(token);
+        let client = build_telegram_client(config.proxy_url.as_deref())
+            .map_err(ChannelError::ConnectionFailed)?;
+
+        let bot = Bot::with_client(token, client);
 
         // Test the bot
         bot.get_me()
@@ -395,6 +398,18 @@ fn resolve_telegram_token(configured: &str) -> Option<String> {
     Some(configured.to_string())
 }
 
+fn build_telegram_client(proxy_url: Option<&str>) -> Result<reqwest11::Client, String> {
+    let builder = teloxide::net::default_reqwest_settings();
+    let Some(proxy_url) = proxy_url else {
+        return builder.build().map_err(|err| err.to_string());
+    };
+
+    crate::config::validate_proxy_url(proxy_url)?;
+    let resolved = crate::config::resolve_proxy_url(proxy_url)?;
+    let proxy = reqwest11::Proxy::all(&resolved).map_err(|err| err.to_string())?;
+    builder.proxy(proxy).build().map_err(|err| err.to_string())
+}
+
 fn persist_telegram_state_snapshot(path: Option<&std::path::Path>, state: TelegramState) {
     let Some(path) = path else {
         return;
@@ -428,6 +443,25 @@ mod tests {
         unsafe {
             std::env::remove_var(key);
         }
+    }
+
+    #[tokio::test]
+    async fn telegram_init_rejects_invalid_proxy_url_before_network_use() {
+        let mut channel = TelegramChannel::new();
+        let err = channel
+            .init(&ChannelConfig {
+                channel_type: ChannelType::telegram(),
+                enabled: true,
+                credentials: Some("123456:ABCDEF".to_string()),
+                proxy_url: Some("ftp://proxy.invalid".to_string()),
+                allow_from: vec![],
+                dm_policy: crate::config::DmPolicy::Open,
+                extra: std::collections::HashMap::new(),
+            })
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("unsupported proxy_url scheme"));
     }
 
     #[tokio::test]

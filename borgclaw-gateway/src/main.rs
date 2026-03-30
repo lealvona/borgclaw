@@ -1178,6 +1178,10 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                             <label>Webhook Port</label>
                             <input type="number" id="cfg-webhook-port" class="form-control" placeholder="8080">
                         </div>
+                        <div class="form-group">
+                            <label>Webhook Proxy</label>
+                            <div id="cfg-webhook-proxy-status" class="text-muted">(not configured)</div>
+                        </div>
                     </div>
                 </div>
                 
@@ -1803,6 +1807,8 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 const webhook = config.channels.webhook || {};
                 document.getElementById('cfg-webhook-enabled').checked = webhook.enabled === true;
                 document.getElementById('cfg-webhook-port').value = webhook.port || 8080;
+                document.getElementById('cfg-webhook-proxy-status').textContent =
+                    webhook.proxy_configured ? (webhook.proxy_display || '(configured)') : '(not configured)';
             }
             
             // Security tab
@@ -2548,8 +2554,17 @@ async fn route_webhook_request(
                     .and_then(|value| value.as_str())
                 {
                     if let Some(trigger) = webhook.get_trigger(trigger_id).await {
-                        if let Err(err) =
-                            forward_configured_webhook(&trigger, &route_outcome.response.text).await
+                        let proxy_url = state
+                            .config
+                            .channels
+                            .get("webhook")
+                            .and_then(|channel| channel.proxy_url.as_deref());
+                        if let Err(err) = forward_configured_webhook(
+                            &trigger,
+                            proxy_url,
+                            &route_outcome.response.text,
+                        )
+                        .await
                         {
                             warn!("webhook forward failed for trigger {}: {}", trigger_id, err);
                             return json_error_response(StatusCode::BAD_GATEWAY, "forward failed");
@@ -2581,7 +2596,11 @@ async fn route_webhook_request(
     }
 }
 
-async fn forward_configured_webhook(trigger: &WebhookTrigger, message: &str) -> Result<(), String> {
+async fn forward_configured_webhook(
+    trigger: &WebhookTrigger,
+    proxy_url: Option<&str>,
+    message: &str,
+) -> Result<(), String> {
     let Some(url) = trigger.forward_url.as_deref() else {
         return Ok(());
     };
@@ -2589,7 +2608,12 @@ async fn forward_configured_webhook(trigger: &WebhookTrigger, message: &str) -> 
     let method =
         reqwest::Method::from_bytes(trigger.method.as_bytes()).map_err(|err| err.to_string())?;
     let body = render_webhook_body(trigger.body_template.as_deref(), message);
-    let client = reqwest::Client::new();
+    let client = borgclaw_core::config::apply_proxy_to_client_builder(
+        reqwest::Client::builder(),
+        proxy_url,
+    )?
+    .build()
+    .map_err(|err| err.to_string())?;
     let mut request = client.request(method, url);
 
     for (key, value) in &trigger.headers {
@@ -2913,6 +2937,35 @@ fn process_runtime_summary(config: &AppConfig) -> serde_json::Value {
     })
 }
 
+fn sanitized_channels(config: &AppConfig) -> serde_json::Value {
+    let mut channels = serde_json::Map::new();
+    for (name, channel) in &config.channels {
+        let mut value = serde_json::to_value(channel).unwrap_or_else(|_| serde_json::json!({}));
+        if let Some(object) = value.as_object_mut() {
+            let (configured, display) = channel_proxy_summary(channel);
+            object.insert(
+                "proxy_configured".to_string(),
+                serde_json::json!(configured),
+            );
+            if let Some(display) = display {
+                object.insert("proxy_display".to_string(), serde_json::json!(display));
+            }
+        }
+        channels.insert(name.clone(), value);
+    }
+    serde_json::Value::Object(channels)
+}
+
+fn channel_proxy_summary(channel: &borgclaw_core::config::ChannelConfig) -> (bool, Option<String>) {
+    match channel.proxy_url() {
+        Some(proxy_url) => (
+            true,
+            Some(borgclaw_core::config::proxy_display_value(proxy_url)),
+        ),
+        None => (false, None),
+    }
+}
+
 async fn api_config(State(state): State<GatewayState>) -> impl IntoResponse {
     let discovered_skills = gateway_skill_statuses(&state.config).await;
     let ready_skill_count = discovered_skills
@@ -2937,7 +2990,7 @@ async fn api_config(State(state): State<GatewayState>) -> impl IntoResponse {
             "identity_format": state.config.agent.identity_format,
             "soul_path": state.config.agent.soul_path,
         },
-        "channels": state.config.channels,
+        "channels": sanitized_channels(&state.config),
         "memory": {
             "backend": state.config.memory.effective_backend(),
             "database_path": state.config.memory.database_path,
@@ -3789,6 +3842,9 @@ mod tests {
         config.skills.skills_path = root.join("managed");
         config.memory.external.enabled = true;
         config.memory.external.endpoint = Some("http://127.0.0.1:8081".to_string());
+        let webhook = config.channels.entry("webhook".to_string()).or_default();
+        webhook.enabled = true;
+        webhook.proxy_url = Some("http://user:secret@127.0.0.1:8080".to_string());
 
         let state = GatewayState {
             config_path: Arc::new(PathBuf::from(".")),
@@ -3812,6 +3868,12 @@ mod tests {
         assert_eq!(payload["runtime"]["processes"]["supported"], true);
         assert_eq!(payload["skills"]["summary"]["shadowed"], 1);
         assert_eq!(payload["skills"]["summary"]["gated"], 1);
+        assert_eq!(payload["channels"]["webhook"]["proxy_configured"], true);
+        assert_eq!(
+            payload["channels"]["webhook"]["proxy_display"],
+            "http://127.0.0.1:8080"
+        );
+        assert!(payload["channels"]["webhook"].get("proxy_url").is_none());
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -3902,6 +3964,17 @@ mod tests {
             render_webhook_body(Some("{\"text\":\"{{message}}\"}"), "hello"),
             "{\"text\":\"hello\"}"
         );
+    }
+
+    #[tokio::test]
+    async fn forward_configured_webhook_rejects_invalid_proxy_url() {
+        let trigger =
+            WebhookTrigger::new("notify", "/webhook").with_forward_url("https://example.com/hook");
+
+        let err = forward_configured_webhook(&trigger, Some("ftp://proxy.invalid"), "hello")
+            .await
+            .unwrap_err();
+        assert!(err.contains("unsupported proxy_url scheme"));
     }
 
     #[tokio::test]

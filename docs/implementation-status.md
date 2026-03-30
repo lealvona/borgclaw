@@ -111,7 +111,7 @@ Audit note:
 
 ## Temporary Limitations
 
-- Inspiration backlog still open by design: per-channel proxy settings.
+- No intended inspiration-derived runtime features remain open; the remaining work is the final audit/cleanup tranche.
 - Explicitly declined and not planned: AWS Bedrock provider support, Composio integration, and Slack approval UI/buttons.
 - The repo treats the remaining items as tracked follow-up features, not as implemented functionality. See [inspirations.md](inspirations.md) and [IMPLEMENTATION_PLAN_2026-03-30_REMAINING_BACKLOG](IMPLEMENTATION_PLAN_2026-03-30_REMAINING_BACKLOG.md) for the execution backlog.
 
