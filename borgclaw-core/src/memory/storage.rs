@@ -291,12 +291,15 @@ impl SqliteMemory {
         let results: Vec<MemoryResult> = rows
             .into_iter()
             .enumerate()
-            .map(|(i, row)| {
-                let score = 1.0 - (i as f32 * 0.1);
-                MemoryResult {
-                    entry: row.into_memory_entry(),
-                    score: score.max(query.min_score),
-                }
+            .filter_map(|(i, row)| {
+                let entry = row.into_memory_entry();
+                query.matches_entry(&entry).then(|| {
+                    let score = 1.0 - (i as f32 * 0.1);
+                    MemoryResult {
+                        entry,
+                        score: score.max(query.min_score),
+                    }
+                })
             })
             .collect();
 
@@ -353,7 +356,11 @@ impl SqliteMemory {
         }
         .map_err(|e| MemoryError::QueryError(e.to_string()))?;
 
-        Ok(rows.into_iter().map(MemoryRow::into_memory_entry).collect())
+        Ok(rows
+            .into_iter()
+            .map(MemoryRow::into_memory_entry)
+            .filter(|entry| query.matches_entry(entry))
+            .collect())
     }
 
     async fn recall_hybrid(&self, query: &MemoryQuery) -> Result<Vec<MemoryResult>, MemoryError> {
@@ -540,10 +547,12 @@ impl SqliteMemory {
                 let similarity = cosine_similarity(query_embedding, &embedding);
                 if similarity >= query.min_score {
                     if let Some(entry) = self.get(&memory_id).await? {
-                        results.push(MemoryResult {
-                            entry,
-                            score: similarity,
-                        });
+                        if query.matches_entry(&entry) {
+                            results.push(MemoryResult {
+                                entry,
+                                score: similarity,
+                            });
+                        }
                     }
                 }
             }

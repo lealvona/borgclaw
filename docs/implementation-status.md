@@ -20,7 +20,7 @@ Audit note:
 | Identity formats + transcript artifacts | `complete` | Markdown and AIEOS identity documents are supported, and assistant session messages can preserve structured reasoning/provider artifacts without changing visible channel text. |
 | Shared channel routing | `complete` | CLI, gateway, webhook, and channel policy flow through the shared router. |
 | WebSocket gateway auth/events | `complete` | Auth, pairing, error, heartbeat, and control-plane events are implemented. |
-| Memory backends + group isolation | `complete` | SQLite, PostgreSQL + pgvector, and in-memory backends share metadata round-trip, isolation, recall, time-range filtering, history, procedural memory, and compaction-facing runtime integration. |
+| Memory backends + group isolation | `complete` | SQLite, PostgreSQL + pgvector, and in-memory backends share metadata round-trip, isolation, recall, time-range filtering, history, procedural memory, sensitivity-aware access filtering, and compaction-facing runtime integration. |
 | Solution memory | `complete` | Documented public structs and search helpers are aligned. |
 | Heartbeat engine | `complete` | Core engine, persistence, retries, enable/disable flow, operator visibility, and manual CLI trigger execution against persisted state are landed. |
 | Scheduler | `complete` | Execution loop, timeout/concurrency policy, retries/dead-letter behavior, persisted job state, bounded run history, restart-recovery coverage, catch-up/recovery semantics, and full operator CRUD (list, show, create, delete, pause, resume) are all landed. |
@@ -107,7 +107,7 @@ Audit note:
 
 ## Temporary Limitations
 
-- Inspiration backlog still open by design: structured fallback deliverables for failed/stuck jobs, per-channel proxy settings, PTY/background exec tooling, workspace-layered privacy memory, and broader managed skills lifecycle.
+- Inspiration backlog still open by design: structured fallback deliverables for failed/stuck jobs, per-channel proxy settings, PTY/background exec tooling, and broader managed skills lifecycle.
 - Docker sandbox v1 is complete for `execute_command`, but follow-on hardening from the inspiration set remains open: split sandbox images by execution context and stricter default isolation for higher-risk remote/background command execution.
 - Explicitly declined and not planned: AWS Bedrock provider support, Composio integration, and Slack approval UI/buttons.
 - The repo treats the remaining items as tracked follow-up features, not as implemented functionality. See [inspirations.md](inspirations.md) and [IMPLEMENTATION_PLAN_2026-03-30_REMAINING_BACKLOG](IMPLEMENTATION_PLAN_2026-03-30_REMAINING_BACKLOG.md) for the execution backlog.

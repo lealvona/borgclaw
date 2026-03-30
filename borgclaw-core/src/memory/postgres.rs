@@ -248,6 +248,7 @@ impl PostgresMemory {
         Ok(rows
             .into_iter()
             .map(PgRankedMemoryRow::into_memory_result)
+            .filter(|result| query.matches_entry(&result.entry))
             .filter(|result| result.score >= query.min_score)
             .collect())
     }
@@ -314,6 +315,7 @@ impl PostgresMemory {
         Ok(rows
             .into_iter()
             .map(PgRankedMemoryRow::into_memory_result)
+            .filter(|result| query.matches_entry(&result.entry))
             .filter(|result| result.score >= query.min_score)
             .collect())
     }
@@ -365,6 +367,7 @@ impl PostgresMemory {
         Ok(rows
             .into_iter()
             .map(PgMemoryRow::into_memory_entry)
+            .filter(|entry| query.matches_entry(entry))
             .collect())
     }
 }

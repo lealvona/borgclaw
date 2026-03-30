@@ -32,6 +32,7 @@ BorgClaw provides a comprehensive memory system with selectable storage backends
 - **Importance scoring** - Weighted recall
 - **Access tracking** - Frequency and recency
 - **Time-range recall** - Optional `since` / `until` filters across all built-in backends
+- **Sensitivity-aware recall** - Entries can be marked `public`, `workspace`, or `private`, and background/delegated contexts are filtered by policy before results are returned
 - **Common `Memory` trait** - The runtime uses the same API across SQLite, PostgreSQL, and in-memory modes
 - **History + procedural memory APIs** - Backends expose newest-first history and low-importance procedural memory storage
 
@@ -70,6 +71,13 @@ enabled = true
 endpoint = "http://127.0.0.1:8765"
 mirror_writes = true
 timeout_seconds = 15
+
+[memory.privacy]
+enabled = true
+default_sensitivity = "workspace"  # "public", "workspace", or "private"
+subagent_scope = "workspace"
+scheduler_scope = "workspace"
+heartbeat_scope = "workspace"
 ```
 
 Notes:
@@ -80,6 +88,13 @@ Notes:
 - PostgreSQL without `embedding_endpoint` still works for text-only persistence and recall.
 - Older configs that only set `vector_provider` still load through compatibility mapping, but `backend` is now the primary contract.
 - `memory.external` is additive: local memory remains authoritative, while the external adapter can augment recall/history and optionally mirror writes.
+- `memory.privacy` controls which execution contexts can recall more-sensitive entries.
+- Interactive sessions default to full access. Background contexts such as sub-agents, scheduler jobs, and heartbeat tasks use their configured scope.
+
+Sensitivity levels:
+- `public`: visible to all contexts
+- `workspace`: visible to the main interactive agent and workspace-scoped background contexts
+- `private`: only visible to the fully privileged interactive context unless policy is broadened
 
 ### Runtime Requirements
 
@@ -109,6 +124,7 @@ let results = memory.recall(MemoryQuery {
     group_id: Some("work".to_string()),
     since: None,
     until: None,
+    access_scope: MemoryAccessScope::Private,
 }).await?;
 
 // Filtered history
@@ -148,6 +164,8 @@ pub struct MemoryEntry {
     pub group_id: Option<String>,
 }
 ```
+
+Sensitivity is stored in `metadata["sensitivity"]`. Legacy entries without this metadata are treated as `workspace` sensitivity for backward compatibility.
 
 ### External Memory Adapter
 

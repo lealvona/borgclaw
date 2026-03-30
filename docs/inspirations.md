@@ -12,7 +12,7 @@ Status note:
 Current BorgClaw disposition of major inspiration items:
 - Implemented and verified in the runtime: provider-backed shared routing, structured gateway auth/events, scheduler/heartbeat/sub-agent persistence and recovery, typed workspace policy, unified approval flow for foreground/background tool execution, explicit memory backend selection with PostgreSQL + pgvector, tool-level retry, system prompt date/time injection, archive-backed skill installs, and the typed optional Docker command sandbox.
 - Implemented and still worth iterating on: the Docker sandbox currently covers `execute_command` through one typed `security.docker` policy and one base image. The more advanced OpenClaw-style split-by-context image strategy is still backlog, not missing core functionality.
-- Not yet implemented but explicitly tracked here: structured fallback deliverables for failed/stuck jobs, per-channel proxy settings, PTY/background exec tooling, workspace-layered privacy memory, and broader managed skills lifecycle.
+- Not yet implemented but explicitly tracked here: structured fallback deliverables for failed/stuck jobs, per-channel proxy settings, PTY/background exec tooling, and broader managed skills lifecycle.
 - Explicitly declined for BorgClaw: AWS Bedrock provider support, Composio integration, and Slack approval UI/buttons.
 
 Use it for two things:

@@ -4,7 +4,7 @@ use super::{
 };
 use crate::memory::{
     new_entry, new_entry_for_group, new_procedural_entry, new_procedural_entry_for_group,
-    MemoryQuery,
+    MemoryAccessScope, MemoryQuery, MemorySensitivity,
 };
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -30,6 +30,21 @@ pub fn register(tools: &mut Vec<Tool>) {
                             description: Some("Information to store".to_string()),
                             default: None,
                             enum_values: None,
+                        },
+                    ),
+                    (
+                        "sensitivity".to_string(),
+                        PropertySchema {
+                            prop_type: "string".to_string(),
+                            description: Some(
+                                "Optional sensitivity: public, workspace, or private".to_string(),
+                            ),
+                            default: None,
+                            enum_values: Some(vec![
+                                serde_json::json!("public"),
+                                serde_json::json!("workspace"),
+                                serde_json::json!("private"),
+                            ]),
                         },
                     ),
                 ]
@@ -138,6 +153,21 @@ pub fn register(tools: &mut Vec<Tool>) {
                         description: Some("Procedural memory content".to_string()),
                         default: None,
                         enum_values: None,
+                    },
+                ),
+                (
+                    "sensitivity".to_string(),
+                    PropertySchema {
+                        prop_type: "string".to_string(),
+                        description: Some(
+                            "Optional sensitivity: public, workspace, or private".to_string(),
+                        ),
+                        default: None,
+                        enum_values: Some(vec![
+                            serde_json::json!("public"),
+                            serde_json::json!("workspace"),
+                            serde_json::json!("private"),
+                        ]),
                     },
                 ),
             ]
@@ -261,10 +291,15 @@ pub async fn memory_store(
     };
 
     let group_id = optional_group_id(arguments, runtime);
-    let entry = match group_id.clone() {
+    let sensitivity = match parse_sensitivity(arguments, runtime) {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let mut entry = match group_id.clone() {
         Some(group_id) => new_entry_for_group(key, value, group_id),
         None => new_entry(key, value),
     };
+    entry.set_sensitivity(sensitivity);
     match runtime.memory.store(entry).await {
         Ok(()) => {
             let mut result = ToolResult::ok("stored");
@@ -305,6 +340,7 @@ pub async fn memory_recall(
             group_id: group_id.clone(),
             since,
             until,
+            access_scope: memory_access_scope(runtime),
         })
         .await
     {
@@ -354,6 +390,7 @@ pub async fn memory_history(
             group_id: group_id.clone(),
             since,
             until,
+            access_scope: memory_access_scope(runtime),
             ..Default::default()
         })
         .await
@@ -396,11 +433,16 @@ pub async fn memory_store_procedural(
         Err(err) => return ToolResult::err(err),
     };
     let group_id = optional_group_id(arguments, runtime);
+    let sensitivity = match parse_sensitivity(arguments, runtime) {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
 
-    let entry = match group_id.clone() {
+    let mut entry = match group_id.clone() {
         Some(group_id) => new_procedural_entry_for_group(key, value, group_id),
         None => new_procedural_entry(key, value),
     };
+    entry.set_sensitivity(sensitivity);
 
     match runtime.memory.store_procedural(entry).await {
         Ok(()) => {
@@ -509,6 +551,8 @@ pub async fn solution_store(
         importance: 0.8,
         group_id: Some("solutions".to_string()),
     };
+    let mut entry = entry;
+    entry.set_sensitivity(runtime.memory_config.privacy.default_sensitivity.into());
 
     match runtime.memory.store(entry).await {
         Ok(()) => ToolResult::ok(format!("stored solution for: {}", problem)),
@@ -533,6 +577,7 @@ pub async fn solution_find(
             limit,
             min_score: 0.0,
             group_id: Some("solutions".to_string()),
+            access_scope: memory_access_scope(runtime),
             ..Default::default()
         })
         .await
@@ -566,4 +611,37 @@ fn parse_optional_rfc3339(
                 .map_err(|_| format!("invalid RFC3339 datetime for '{}'", key))
         })
         .transpose()
+}
+
+fn parse_sensitivity(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> Result<MemorySensitivity, String> {
+    match get_string(arguments, "sensitivity").as_deref() {
+        Some("public") => Ok(MemorySensitivity::Public),
+        Some("workspace") => Ok(MemorySensitivity::Workspace),
+        Some("private") => Ok(MemorySensitivity::Private),
+        Some(_) => Err("invalid sensitivity; expected public, workspace, or private".to_string()),
+        None => Ok(runtime.memory_config.privacy.default_sensitivity.into()),
+    }
+}
+
+fn memory_access_scope(runtime: &ToolRuntime) -> MemoryAccessScope {
+    if !runtime.memory_config.privacy.enabled {
+        return MemoryAccessScope::Private;
+    }
+
+    let Some(invocation) = runtime.invocation.as_ref() else {
+        return MemoryAccessScope::Private;
+    };
+
+    if invocation.metadata.contains_key("heartbeat_task_id") {
+        return runtime.memory_config.privacy.heartbeat_scope.into();
+    }
+
+    match invocation.sender.channel.as_str() {
+        "subagent" => runtime.memory_config.privacy.subagent_scope.into(),
+        "scheduler" => runtime.memory_config.privacy.scheduler_scope.into(),
+        _ => MemoryAccessScope::Private,
+    }
 }
