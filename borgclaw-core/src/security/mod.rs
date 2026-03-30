@@ -2,12 +2,18 @@
 
 mod audit;
 mod pairing;
+mod processes;
 mod secrets;
 mod vault;
 mod wasm;
 
 pub use audit::{AuditConfig, AuditEntry, AuditError, AuditEventType, AuditLogger};
 pub use pairing::PairingManager;
+pub use processes::{
+    cancel_process_record, get_process_record, load_process_records, process_state_path,
+    save_process_records, upsert_process_record, CommandProcessRecord, CommandProcessStatus,
+    PROCESS_STATE_FILE,
+};
 pub use secrets::{secrets_key_path, SecretStore, SecretStoreConfig};
 pub use vault::{
     BitwardenClient, BitwardenConfig, OnePasswordClient, OnePasswordConfig, VaultClient,
@@ -20,11 +26,14 @@ use super::config::{
     LeakAction, SecurityConfig, WorkspacePolicyConfig,
 };
 use chrono::{Duration, Utc};
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::io::AsyncReadExt;
 use tokio::sync::RwLock;
 
 pub const INJECTION_PATTERNS: &[&str] = &[
@@ -840,7 +849,7 @@ impl SecurityLayer {
         command: &str,
         workspace_root: &Path,
         workspace_policy: &WorkspacePolicyConfig,
-        timeout_secs: u64,
+        options: CommandExecutionOptions,
     ) -> Result<CommandExecutionResult, SecurityError> {
         match self.check_command(command) {
             CommandCheck::Allowed => {}
@@ -852,10 +861,48 @@ impl SecurityLayer {
             }
         }
 
-        let timeout_secs = timeout_secs
+        let timeout_secs = options
+            .timeout_secs
             .max(1)
             .min(self.config.docker.timeout_seconds.max(1));
-        if self.effective_command_execution_mode(tool_name) == CommandExecutionMode::Docker {
+        let execution_mode = self.effective_command_execution_mode(tool_name);
+
+        if options.background {
+            if options.pty {
+                return Err(SecurityError::ExecutionError(
+                    "background command execution does not support pty mode".to_string(),
+                ));
+            }
+            return execute_background_command(BackgroundCommandRequest {
+                docker_config: &self.config.docker,
+                execution_mode,
+                command,
+                workspace_root,
+                workspace_policy,
+                timeout_secs,
+                yield_ms: options.yield_ms,
+                host_envs: self.secret_env().await,
+                docker_envs: docker_runtime_env(self).await,
+            })
+            .await;
+        }
+
+        if options.pty {
+            if execution_mode == CommandExecutionMode::Docker {
+                return Err(SecurityError::ExecutionError(
+                    "pty mode is only supported for host execution".to_string(),
+                ));
+            }
+            return execute_host_command_pty(
+                command,
+                workspace_root,
+                timeout_secs,
+                self.secret_env().await,
+            )
+            .await;
+        }
+
+        if execution_mode == CommandExecutionMode::Docker {
             execute_docker_command(
                 &self.config.docker,
                 command,
@@ -1012,7 +1059,27 @@ pub enum CommandCheck {
     Blocked(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
+pub struct CommandExecutionOptions {
+    pub timeout_secs: u64,
+    pub pty: bool,
+    pub background: bool,
+    pub yield_ms: Option<u64>,
+}
+
+impl Default for CommandExecutionOptions {
+    fn default() -> Self {
+        Self {
+            timeout_secs: 60,
+            pty: false,
+            background: false,
+            yield_ms: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CommandExecutionMode {
     Host,
     Docker,
@@ -1024,6 +1091,10 @@ pub struct CommandExecutionResult {
     pub success: bool,
     pub mode: CommandExecutionMode,
     pub image: Option<String>,
+    pub process_id: Option<String>,
+    pub pid: Option<u32>,
+    pub pty: bool,
+    pub background: bool,
 }
 
 /// Pairing status
@@ -1091,7 +1162,95 @@ async fn execute_host_command(
         success: output.status.success(),
         mode: CommandExecutionMode::Host,
         image: None,
+        process_id: None,
+        pid: None,
+        pty: false,
+        background: false,
     })
+}
+
+async fn execute_host_command_pty(
+    command: &str,
+    workspace_root: &Path,
+    timeout_secs: u64,
+    secret_env: HashMap<String, String>,
+) -> Result<CommandExecutionResult, SecurityError> {
+    let command = command.to_string();
+    let workspace_root = workspace_root.to_path_buf();
+    let result = tokio::task::spawn_blocking(move || {
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|err| SecurityError::ExecutionError(err.to_string()))?;
+
+        let mut builder = CommandBuilder::new("sh");
+        builder.arg("-lc");
+        builder.arg(command);
+        builder.cwd(workspace_root);
+        for (key, value) in secret_env {
+            builder.env(key, value);
+        }
+
+        let mut child = pair
+            .slave
+            .spawn_command(builder)
+            .map_err(|err| SecurityError::ExecutionError(err.to_string()))?;
+        drop(pair.slave);
+
+        let mut reader = pair
+            .master
+            .try_clone_reader()
+            .map_err(|err| SecurityError::ExecutionError(err.to_string()))?;
+        let output_handle = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = reader.read_to_end(&mut bytes);
+            String::from_utf8_lossy(&bytes).trim().to_string()
+        });
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+        loop {
+            match child
+                .try_wait()
+                .map_err(|err| SecurityError::ExecutionError(err.to_string()))?
+            {
+                Some(status) => {
+                    let output = output_handle.join().unwrap_or_else(|_| String::new());
+                    return Ok(CommandExecutionResult {
+                        output,
+                        success: status.exit_code() == 0,
+                        mode: CommandExecutionMode::Host,
+                        image: None,
+                        process_id: None,
+                        pid: None,
+                        pty: true,
+                        background: false,
+                    });
+                }
+                None if std::time::Instant::now() >= deadline => {
+                    child
+                        .kill()
+                        .map_err(|err| SecurityError::ExecutionError(err.to_string()))?;
+                    let _ = child.wait();
+                    let output = output_handle.join().unwrap_or_else(|_| String::new());
+                    return Err(SecurityError::ExecutionError(if output.is_empty() {
+                        "command timed out".to_string()
+                    } else {
+                        format!("command timed out\n{}", output)
+                    }));
+                }
+                None => std::thread::sleep(std::time::Duration::from_millis(25)),
+            }
+        }
+    })
+    .await
+    .map_err(|err| SecurityError::ExecutionError(err.to_string()))??;
+
+    Ok(result)
 }
 
 async fn execute_docker_command(
@@ -1122,7 +1281,201 @@ async fn execute_docker_command(
         success: output.status.success(),
         mode: CommandExecutionMode::Docker,
         image: Some(config.image.clone()),
+        process_id: None,
+        pid: None,
+        pty: false,
+        background: false,
     })
+}
+
+async fn execute_background_command(
+    request: BackgroundCommandRequest<'_>,
+) -> Result<CommandExecutionResult, SecurityError> {
+    let process_id = uuid::Uuid::new_v4().to_string();
+    let state_path = process_state_path(request.workspace_root);
+    let started_at = Utc::now();
+
+    let mut child = match request.execution_mode {
+        CommandExecutionMode::Host => {
+            let mut cmd = tokio::process::Command::new("sh");
+            cmd.arg("-lc")
+                .arg(request.command)
+                .current_dir(request.workspace_root)
+                .envs(request.host_envs.clone())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            cmd.spawn()
+                .map_err(|err| SecurityError::ExecutionError(err.to_string()))?
+        }
+        CommandExecutionMode::Docker => {
+            let invocation = build_docker_invocation(
+                request.docker_config,
+                request.workspace_root,
+                request.workspace_policy,
+                request.command,
+                request.docker_envs.clone(),
+            )?;
+            let mut cmd = tokio::process::Command::new("docker");
+            cmd.args(&invocation.args)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            cmd.spawn()
+                .map_err(|err| SecurityError::ExecutionError(err.to_string()))?
+        }
+    };
+
+    let pid = child.id();
+    let image = (request.execution_mode == CommandExecutionMode::Docker)
+        .then(|| request.docker_config.image.clone());
+    let image_for_task = image.clone();
+
+    let running_record = CommandProcessRecord {
+        id: process_id.clone(),
+        command: request.command.to_string(),
+        pid,
+        started_at,
+        finished_at: None,
+        status: CommandProcessStatus::Running,
+        exit_code: None,
+        output: String::new(),
+        pty: false,
+        timeout_secs: request.timeout_secs,
+        yield_ms: request.yield_ms,
+        execution_mode: request.execution_mode,
+        image: image.clone(),
+    };
+    upsert_process_record(&state_path, &running_record)?;
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let stdout_handle = tokio::spawn(read_command_stream(stdout));
+    let stderr_handle = tokio::spawn(read_command_stream(stderr));
+    let state_path_for_task = state_path.clone();
+    let process_id_for_task = process_id.clone();
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+
+    tokio::spawn(async move {
+        let completion = match tokio::time::timeout(
+            std::time::Duration::from_secs(request.timeout_secs.max(1)),
+            child.wait(),
+        )
+        .await
+        {
+            Ok(Ok(status)) => (status.code(), None),
+            Ok(Err(err)) => (None, Some(err.to_string())),
+            Err(_) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                (None, Some("command timed out".to_string()))
+            }
+        };
+
+        let stdout = stdout_handle.await.unwrap_or_else(|_| String::new());
+        let stderr = stderr_handle.await.unwrap_or_else(|_| String::new());
+        let combined_output = combine_stream_output(&stdout, &stderr);
+
+        let mut record = get_process_record(&state_path_for_task, &process_id_for_task)
+            .ok()
+            .flatten()
+            .unwrap_or(CommandProcessRecord {
+                id: process_id_for_task.clone(),
+                command: String::new(),
+                pid: None,
+                started_at: Utc::now(),
+                finished_at: None,
+                status: CommandProcessStatus::Running,
+                exit_code: None,
+                output: String::new(),
+                pty: false,
+                timeout_secs: request.timeout_secs,
+                yield_ms: request.yield_ms,
+                execution_mode: request.execution_mode,
+                image: image_for_task.clone(),
+            });
+
+        record.finished_at = Some(Utc::now());
+        record.output = combined_output.clone();
+        match completion {
+            (Some(code), None) if code == 0 => {
+                record.status = CommandProcessStatus::Succeeded;
+                record.exit_code = Some(code);
+            }
+            (Some(code), None) => {
+                record.status = CommandProcessStatus::Failed;
+                record.exit_code = Some(code);
+            }
+            (None, Some(message)) if message == "command timed out" => {
+                record.status = CommandProcessStatus::TimedOut;
+                record.output = if combined_output.is_empty() {
+                    message
+                } else {
+                    format!("{}\n{}", combined_output, message)
+                };
+            }
+            (None, Some(message)) => {
+                record.status = CommandProcessStatus::Failed;
+                record.output = if combined_output.is_empty() {
+                    message
+                } else {
+                    format!("{}\n{}", combined_output, message)
+                };
+            }
+            _ => {}
+        }
+
+        let _ = upsert_process_record(&state_path_for_task, &record);
+        let _ = done_tx.send(record);
+    });
+
+    if let Some(yield_ms) = request.yield_ms.filter(|value| *value > 0) {
+        if let Ok(Ok(record)) =
+            tokio::time::timeout(std::time::Duration::from_millis(yield_ms), done_rx).await
+        {
+            return Ok(CommandExecutionResult {
+                output: if record.output.is_empty() {
+                    format!("background process {} completed", record.id)
+                } else {
+                    record.output
+                },
+                success: matches!(record.status, CommandProcessStatus::Succeeded),
+                mode: record.execution_mode,
+                image: record.image,
+                process_id: Some(record.id),
+                pid: record.pid,
+                pty: false,
+                background: true,
+            });
+        }
+    }
+
+    Ok(CommandExecutionResult {
+        output: format!(
+            "started background process {} (pid={})",
+            process_id,
+            pid.map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        ),
+        success: true,
+        mode: request.execution_mode,
+        image,
+        process_id: Some(process_id),
+        pid,
+        pty: false,
+        background: true,
+    })
+}
+
+#[derive(Clone)]
+struct BackgroundCommandRequest<'a> {
+    docker_config: &'a DockerSandboxConfig,
+    execution_mode: CommandExecutionMode,
+    command: &'a str,
+    workspace_root: &'a Path,
+    workspace_policy: &'a WorkspacePolicyConfig,
+    timeout_secs: u64,
+    yield_ms: Option<u64>,
+    host_envs: HashMap<String, String>,
+    docker_envs: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1289,12 +1642,30 @@ async fn docker_runtime_env(security: &SecurityLayer) -> HashMap<String, String>
 fn combine_command_output(output: &std::process::Output) -> String {
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    combine_stream_output(&stdout, &stderr)
+}
+
+fn combine_stream_output(stdout: &str, stderr: &str) -> String {
     if stderr.is_empty() {
-        stdout
+        stdout.to_string()
     } else if stdout.is_empty() {
-        stderr
+        stderr.to_string()
     } else {
         format!("{}\n{}", stdout, stderr)
+    }
+}
+
+async fn read_command_stream<R>(stream: Option<R>) -> String
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    match stream {
+        Some(mut stream) => {
+            let mut bytes = Vec::new();
+            let _ = stream.read_to_end(&mut bytes).await;
+            String::from_utf8_lossy(&bytes).trim().to_string()
+        }
+        None => String::new(),
     }
 }
 
@@ -1467,6 +1838,103 @@ mod tests {
 
         std::fs::remove_dir_all(&workspace).unwrap();
         std::fs::remove_dir_all(&outside).unwrap();
+    }
+
+    #[tokio::test]
+    async fn host_pty_execution_captures_output() {
+        let workspace =
+            std::env::temp_dir().join(format!("borgclaw_pty_exec_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let security = SecurityLayer::new();
+        let result = security
+            .execute_command(
+                "execute_command",
+                "printf pty-ok",
+                &workspace,
+                &WorkspacePolicyConfig::default(),
+                CommandExecutionOptions {
+                    timeout_secs: 5,
+                    pty: true,
+                    background: false,
+                    yield_ms: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(result.success);
+        assert_eq!(result.output, "pty-ok");
+        assert!(result.pty);
+
+        std::fs::remove_dir_all(&workspace).unwrap();
+    }
+
+    #[tokio::test]
+    async fn background_command_persists_process_state() {
+        let workspace =
+            std::env::temp_dir().join(format!("borgclaw_background_exec_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let security = SecurityLayer::new();
+        let result = security
+            .execute_command(
+                "execute_command",
+                "printf background-ok",
+                &workspace,
+                &WorkspacePolicyConfig::default(),
+                CommandExecutionOptions {
+                    timeout_secs: 5,
+                    pty: false,
+                    background: true,
+                    yield_ms: Some(500),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(result.process_id.is_some());
+        let state_path = process_state_path(&workspace);
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let record = get_process_record(&state_path, result.process_id.as_deref().unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            record.status,
+            CommandProcessStatus::Succeeded | CommandProcessStatus::Running
+        ));
+
+        std::fs::remove_dir_all(&workspace).unwrap();
+    }
+
+    #[tokio::test]
+    async fn background_command_rejects_pty_mode() {
+        let workspace =
+            std::env::temp_dir().join(format!("borgclaw_background_pty_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let security = SecurityLayer::new();
+        let error = security
+            .execute_command(
+                "execute_command",
+                "printf nope",
+                &workspace,
+                &WorkspacePolicyConfig::default(),
+                CommandExecutionOptions {
+                    timeout_secs: 5,
+                    pty: true,
+                    background: true,
+                    yield_ms: None,
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("background command execution does not support pty mode"));
+
+        std::fs::remove_dir_all(&workspace).unwrap();
     }
 
     #[test]

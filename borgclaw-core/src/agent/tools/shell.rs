@@ -1,6 +1,6 @@
 use super::{
-    get_required_string, get_u64, require_tool_approval, truncate_output, PropertySchema, Tool,
-    ToolResult, ToolRuntime, ToolSchema,
+    get_bool, get_required_string, get_u64, require_tool_approval, truncate_output, PropertySchema,
+    Tool, ToolResult, ToolRuntime, ToolSchema,
 };
 use std::collections::HashMap;
 
@@ -36,6 +36,35 @@ pub fn register(tools: &mut Vec<Tool>) {
                             enum_values: None,
                         },
                     ),
+                    (
+                        "pty".to_string(),
+                        PropertySchema {
+                            prop_type: "boolean".to_string(),
+                            description: Some("Run the foreground command in a PTY".to_string()),
+                            default: Some(serde_json::json!(false)),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "background".to_string(),
+                        PropertySchema {
+                            prop_type: "boolean".to_string(),
+                            description: Some("Run the command in the background".to_string()),
+                            default: Some(serde_json::json!(false)),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "yield_ms".to_string(),
+                        PropertySchema {
+                            prop_type: "number".to_string(),
+                            description: Some(
+                                "When background=true, wait this many milliseconds for a quick completion before returning".to_string(),
+                            ),
+                            default: Some(serde_json::json!(250)),
+                            enum_values: None,
+                        },
+                    ),
                 ]
                 .into(),
                 vec!["command".to_string()],
@@ -54,6 +83,9 @@ pub async fn execute_command(
         Err(err) => return ToolResult::err(err),
     };
     let timeout_secs = get_u64(arguments, "timeout").unwrap_or(60);
+    let pty = get_bool(arguments, "pty").unwrap_or(false);
+    let background = get_bool(arguments, "background").unwrap_or(false);
+    let yield_ms = get_u64(arguments, "yield_ms");
     if let Some(result) = require_tool_approval("execute_command", arguments, runtime).await {
         return result;
     }
@@ -65,7 +97,12 @@ pub async fn execute_command(
             &command,
             &runtime.workspace_root,
             &runtime.workspace_policy,
-            timeout_secs,
+            crate::security::CommandExecutionOptions {
+                timeout_secs,
+                pty,
+                background,
+                yield_ms,
+            },
         )
         .await
     {
@@ -134,20 +171,44 @@ pub async fn execute_command(
     runtime.audit.log(audit_entry).await;
 
     if execution.success {
-        ToolResult::ok(truncate_output(&execution.output)).with_metadata(
+        let mut result = ToolResult::ok(truncate_output(&execution.output)).with_metadata(
             "execution_mode",
             match execution.mode {
                 crate::security::CommandExecutionMode::Host => "host",
                 crate::security::CommandExecutionMode::Docker => "docker",
             },
-        )
+        );
+        if let Some(process_id) = execution.process_id {
+            result = result
+                .with_metadata("process_id", process_id)
+                .with_metadata("background", execution.background.to_string());
+        }
+        if let Some(pid) = execution.pid {
+            result = result.with_metadata("pid", pid.to_string());
+        }
+        if execution.pty {
+            result = result.with_metadata("pty", "true");
+        }
+        result
     } else {
-        ToolResult::err(truncate_output(&execution.output)).with_metadata(
+        let mut result = ToolResult::err(truncate_output(&execution.output)).with_metadata(
             "execution_mode",
             match execution.mode {
                 crate::security::CommandExecutionMode::Host => "host",
                 crate::security::CommandExecutionMode::Docker => "docker",
             },
-        )
+        );
+        if let Some(process_id) = execution.process_id {
+            result = result
+                .with_metadata("process_id", process_id)
+                .with_metadata("background", execution.background.to_string());
+        }
+        if let Some(pid) = execution.pid {
+            result = result.with_metadata("pid", pid.to_string());
+        }
+        if execution.pty {
+            result = result.with_metadata("pty", "true");
+        }
+        result
     }
 }

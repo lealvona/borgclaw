@@ -101,6 +101,7 @@ Docker is an optional shell-execution sandbox. It does not replace the WASM plug
 - **Model**: one ephemeral container per command
 - **Defaults**: read-only root filesystem, `tmpfs` `/tmp`, explicit network mode, explicit workspace mount mode
 - **Policy owner**: `SecurityLayer`
+- **PTY behavior**: foreground PTY execution stays on the host path in v1; background command execution is non-PTY and persists process state
 
 ### Configuration
 
@@ -133,6 +134,33 @@ The Docker path stays inside the existing security pipeline:
 7. audit logging
 
 Docker execution inherits the same workspace policy used by file tools, scheduled work, heartbeat tasks, and sub-agents. Extra bind mounts must still be allowed by the workspace policy.
+
+## Command Runtime
+
+`execute_command` now supports:
+
+- foreground host execution
+- foreground PTY execution
+- background non-PTY execution with persisted `processes.json` state
+- shared approval, blocklist, workspace-policy, Docker-routing, and audit behavior across all command paths
+
+Tool arguments:
+
+```json
+{
+  "command": "cargo test -p borgclaw-core",
+  "timeout": 120,
+  "pty": false,
+  "background": true,
+  "yield_ms": 250
+}
+```
+
+Operator surfaces:
+
+- `borgclaw processes list`
+- `borgclaw processes show <id>`
+- `borgclaw processes cancel <id>`
 
 ### Installation
 

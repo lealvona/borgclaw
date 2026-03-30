@@ -141,6 +141,7 @@ Current skill lifecycle status:
 
 - **WASM Sandbox** — Isolated extension execution via wasmtime
 - **Docker Sandbox** — Optional containerized `execute_command` path with explicit image, mount, network, and timeout policy
+- **PTY + Background Exec** — Foreground PTY support plus persisted background command processes with operator inspection/cancel controls
 - **SSRF Protection** — Blocks localhost, private IPs, internal addresses
 - **Command Blocklist** — Regex-based dangerous command blocking
 - **Pairing Codes** — 6-digit channel authentication
@@ -221,7 +222,15 @@ start http://localhost:3000  # Windows
 cargo run --bin borgclaw -- self-test      # Exit 0 on pass
 cargo run --bin borgclaw -- runtime        # Show collective status
 borgclaw providers list                    # Show configured provider profiles
+borgclaw processes list                    # Inspect persisted background command processes
 ./scripts/install-docker-sandbox.sh        # Build the optional Docker sandbox image
+```
+
+### Command Processes
+```bash
+cargo run --bin borgclaw -- processes list
+cargo run --bin borgclaw -- processes show <process-id>
+cargo run --bin borgclaw -- processes cancel <process-id>
 ```
 
 ### Scheduled Processes
