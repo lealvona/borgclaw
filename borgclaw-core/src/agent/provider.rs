@@ -1,5 +1,8 @@
 use super::session::{Message, MessageRole};
-use crate::{config::SecurityConfig, security::SecurityLayer};
+use crate::{
+    config::{AgentConfig, SecurityConfig},
+    security::SecurityLayer,
+};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -120,13 +123,15 @@ impl ProviderFactory {
         );
 
         let provider: Box<dyn ChatProvider> = match config.provider.as_str() {
-            "openai" => Box::new(OpenAiProvider::from_security(security_config).await?),
-            "anthropic" => Box::new(AnthropicProvider::from_security(security_config).await?),
-            "google" => Box::new(GoogleProvider::from_security(security_config).await?),
+            "openai" => Box::new(OpenAiProvider::from_security(config, security_config).await?),
+            "anthropic" => {
+                Box::new(AnthropicProvider::from_security(config, security_config).await?)
+            }
+            "google" => Box::new(GoogleProvider::from_security(config, security_config).await?),
             "ollama" => Box::new(OllamaProvider::default()),
-            "kimi" => Box::new(KimiProvider::from_security(security_config).await?),
-            "minimax" => Box::new(MiniMaxProvider::from_security(security_config).await?),
-            "z" => Box::new(ZProvider::from_security(security_config).await?),
+            "kimi" => Box::new(KimiProvider::from_security(config, security_config).await?),
+            "minimax" => Box::new(MiniMaxProvider::from_security(config, security_config).await?),
+            "z" => Box::new(ZProvider::from_security(config, security_config).await?),
             other => return Err(ProviderError::UnsupportedProvider(other.to_string())),
         };
 
@@ -170,9 +175,12 @@ struct OpenAiProvider {
 }
 
 impl OpenAiProvider {
-    async fn from_security(config: &SecurityConfig) -> Result<Self, ProviderError> {
+    async fn from_security(
+        agent: &AgentConfig,
+        config: &SecurityConfig,
+    ) -> Result<Self, ProviderError> {
         Ok(Self {
-            api_key: resolve_provider_secret(config, "OPENAI_API_KEY").await?,
+            api_key: resolve_provider_secret(agent, config, "OPENAI_API_KEY").await?,
             http: reqwest::Client::new(),
         })
     }
@@ -250,9 +258,12 @@ struct AnthropicProvider {
 }
 
 impl AnthropicProvider {
-    async fn from_security(config: &SecurityConfig) -> Result<Self, ProviderError> {
+    async fn from_security(
+        agent: &AgentConfig,
+        config: &SecurityConfig,
+    ) -> Result<Self, ProviderError> {
         Ok(Self {
-            api_key: resolve_provider_secret(config, "ANTHROPIC_API_KEY").await?,
+            api_key: resolve_provider_secret(agent, config, "ANTHROPIC_API_KEY").await?,
             http: reqwest::Client::new(),
         })
     }
@@ -364,18 +375,43 @@ struct GoogleProvider {
 }
 
 impl GoogleProvider {
-    async fn from_security(config: &SecurityConfig) -> Result<Self, ProviderError> {
+    async fn from_security(
+        agent: &AgentConfig,
+        config: &SecurityConfig,
+    ) -> Result<Self, ProviderError> {
         Ok(Self {
-            api_key: resolve_provider_secret(config, "GOOGLE_API_KEY").await?,
+            api_key: resolve_provider_secret(agent, config, "GOOGLE_API_KEY").await?,
             http: reqwest::Client::new(),
         })
     }
 }
 
 async fn resolve_provider_secret(
+    agent: &AgentConfig,
     config: &SecurityConfig,
     env_key: &'static str,
 ) -> Result<String, ProviderError> {
+    if let Some(profile_id) = agent.provider_profile.as_deref() {
+        if let Some(profile) = SecurityLayer::with_config(config.clone())
+            .get_provider_profile(profile_id)
+            .await
+            .map_err(|e| ProviderError::Request(e.to_string()))?
+        {
+            let env_matches = profile
+                .env_key
+                .as_deref()
+                .map(|value| value == env_key)
+                .unwrap_or(true);
+            if profile.provider == agent.provider && env_matches {
+                if let Some(api_key) = profile.api_key {
+                    if !api_key.trim().is_empty() {
+                        return Ok(api_key);
+                    }
+                }
+            }
+        }
+    }
+
     if let Ok(value) = std::env::var(env_key) {
         if !value.trim().is_empty() {
             return Ok(value);
@@ -619,8 +655,11 @@ macro_rules! openai_compatible_provider {
         }
 
         impl $name {
-            async fn from_security(config: &SecurityConfig) -> Result<Self, ProviderError> {
-                let api_key = resolve_provider_secret(config, $env_key).await?;
+            async fn from_security(
+                agent: &AgentConfig,
+                config: &SecurityConfig,
+            ) -> Result<Self, ProviderError> {
+                let api_key = resolve_provider_secret(agent, config, $env_key).await?;
                 // Allow API base URL override via env var
                 let base_url = Self::resolve_base_url();
                 Ok(Self {
@@ -747,6 +786,7 @@ openai_compatible_provider!(ZProvider, "Z_API_KEY", "https://api.z.ai/api/paas/v
 mod tests {
     use super::*;
     use crate::agent::{Message, MessageRole};
+    use crate::security::ProviderProfile;
 
     #[test]
     fn converts_session_message_to_chat_message() {
@@ -794,6 +834,38 @@ mod tests {
 
         let config = crate::config::AgentConfig {
             provider: "openai".to_string(),
+            ..Default::default()
+        };
+
+        assert!(ProviderFactory::create(&config, &security).await.is_ok());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn provider_factory_reads_selected_provider_profile() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_provider_profile_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let security = SecurityConfig {
+            secrets_path: root.join("secrets.enc"),
+            ..Default::default()
+        };
+        SecurityLayer::with_config(security.clone())
+            .upsert_provider_profile(ProviderProfile {
+                id: "openai-work".to_string(),
+                provider: "openai".to_string(),
+                env_key: Some("OPENAI_API_KEY".to_string()),
+                api_key: Some("profile-key".to_string()),
+                model: Some("gpt-4o".to_string()),
+            })
+            .await
+            .unwrap();
+
+        let config = crate::config::AgentConfig {
+            provider: "openai".to_string(),
+            provider_profile: Some("openai-work".to_string()),
             ..Default::default()
         };
 

@@ -19,11 +19,12 @@ On first run, onboarding will:
 
 1. **Detect state** - Check if config exists
 2. **Prompt for provider** - OpenAI, Anthropic, Google, Ollama
-3. **Enter API key** - Masked input, stored securely
-4. **Select model** - List fetched from provider API
-5. **Configure channels** - Enable Telegram, Signal, Webhook
-6. **Set security options** - WASM sandbox, optional Docker command sandbox, injection defense
-7. **Generate .env** - Environment variables for secrets
+3. **Enter API key** - Masked input, stored securely in the encrypted secret store
+4. **Create a provider profile** - The selected provider, model, and secret become a named provider profile
+5. **Select model** - List fetched from provider API
+6. **Configure channels** - Enable Telegram, Signal, Webhook
+7. **Set security options** - WASM sandbox, optional Docker command sandbox, injection defense
+8. **Generate .env** - Environment variables for secrets
 
 ## Subsequent Runs
 
@@ -128,6 +129,8 @@ BORGCLAW_MODEL=claude-sonnet-4-20250514
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
+Provider credentials do not need to live in `config.toml`. BorgClaw stores provider profiles in the encrypted secret store and keeps only the selected profile id in config.
+
 ## Config Location
 
 | Platform | Path |
@@ -142,6 +145,7 @@ ANTHROPIC_API_KEY=sk-ant-...
 [agent]
 model = "claude-sonnet-4-20250514"
 provider = "anthropic"
+provider_profile = "anthropic-default"
 workspace = ".borgclaw/workspace"
 heartbeat_interval = 30
 rate_limit_rpm = 50  # Optional override (uses provider defaults if unset)
@@ -195,6 +199,31 @@ View configured providers:
 ```bash
 cargo run --bin borgclaw -- init --list-providers
 ```
+
+## Provider Profiles
+
+Named provider profiles separate provider definitions from user credentials. The selected profile is stored in `agent.provider_profile`, and the runtime resolves credentials from that profile before falling back to legacy env-based lookup.
+
+Representative config:
+
+```toml
+[agent]
+provider = "openai"
+provider_profile = "openai-work"
+model = "gpt-4o"
+```
+
+CLI management:
+
+```bash
+borgclaw providers list
+borgclaw providers show openai-work
+borgclaw providers add openai-work openai --model gpt-4o
+borgclaw providers select openai-work
+borgclaw providers delete openai-work
+```
+
+Provider profiles are stored in the encrypted secret store, not as plaintext API keys in `config.toml`.
 
 ## Memory Backends
 

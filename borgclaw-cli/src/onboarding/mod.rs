@@ -6,7 +6,7 @@ use crate::onboarding::colors::{
 };
 use crate::onboarding::providers::{ProviderDef, ProviderRegistry};
 use borgclaw_core::config::{AppConfig, DmPolicy, MemoryBackend};
-use borgclaw_core::security::SecurityLayer;
+use borgclaw_core::security::{ProviderProfile, SecurityLayer};
 use clap::Args;
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Password, Select};
 use serde_json::Value;
@@ -533,8 +533,11 @@ async fn configure_provider_and_model(
                 .interact()
                 .map_err(|e| e.to_string())?;
             store_provider_secret(&config.security, &env_key, &key).await?;
+            upsert_provider_profile(config, provider, Some(key)).await?;
             env_updates.remove(&env_key);
         }
+    } else {
+        upsert_provider_profile(config, provider, None).await?;
     }
     Ok(())
 }
@@ -1833,6 +1836,26 @@ async fn store_provider_secret(
         .store_secret(env_key, value)
         .await
         .map_err(|e| e.to_string())
+}
+
+async fn upsert_provider_profile(
+    config: &mut AppConfig,
+    provider: &ProviderDef,
+    api_key: Option<String>,
+) -> Result<(), String> {
+    let profile_id = format!("{}-default", provider.id);
+    SecurityLayer::with_config(config.security.clone())
+        .upsert_provider_profile(ProviderProfile {
+            id: profile_id.clone(),
+            provider: provider.id.clone(),
+            env_key: provider.api_key_env.clone(),
+            api_key,
+            model: Some(config.agent.model.clone()),
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    config.agent.provider_profile = Some(profile_id);
+    Ok(())
 }
 
 #[cfg(test)]

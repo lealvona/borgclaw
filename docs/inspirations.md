@@ -9,6 +9,12 @@ Status note:
 - Use [Implementation Status](implementation-status.md) as the current source of truth for what remains open.
 - Keep this document focused on upstream implementation ideas, not on narrowing BorgClaw's contract.
 
+Current BorgClaw disposition of major inspiration items:
+- Implemented and verified in the runtime: provider-backed shared routing, structured gateway auth/events, scheduler/heartbeat/sub-agent persistence and recovery, typed workspace policy, unified approval flow for foreground/background tool execution, explicit memory backend selection with PostgreSQL + pgvector, tool-level retry, system prompt date/time injection, archive-backed skill installs, and the typed optional Docker command sandbox.
+- Implemented and still worth iterating on: the Docker sandbox currently covers `execute_command` through one typed `security.docker` policy and one base image. The more advanced OpenClaw-style split-by-context image strategy is still backlog, not missing core functionality.
+- Not yet implemented but explicitly tracked here: multiple identity formats, reasoning/transcript artifact preservation, mem0/OpenMemory-style external memory integration, structured fallback deliverables for failed/stuck jobs, per-channel proxy settings, time-range memory recall filters, PTY/background exec tooling, workspace-layered privacy memory, and broader managed skills lifecycle.
+- Explicitly declined for BorgClaw: AWS Bedrock provider support, Composio integration, and Slack approval UI/buttons.
+
 Use it for two things:
 
 1. Understand which upstream project is the best model for a given BorgClaw subsystem.
@@ -199,7 +205,7 @@ What BorgClaw should copy:
 
 - Make subsystem boundaries explicit in both code and docs, not just implied by module names.
 - Expand security config from "feature flags" to policy objects.
-- Add a provider auth/profile registry instead of only relying on process env.
+- Keep provider auth/profile registry multi-account and encrypted at rest; the remaining follow-up is profile refresh/status ergonomics rather than the base registry.
 - Treat identity format as an interface, not a one-off prompt file.
 - Preserve richer provider transcript artifacts such as reasoning content when tools are involved, instead of flattening every turn to plain text.
 - Keep release and bootstrap paths reproducible and supply-chain-conscious.
@@ -441,12 +447,12 @@ The right move is usually: borrow the contract, not the syntax.
 
 ## Appendix: Docker Sandbox Implementation Focus
 
-This appendix narrows the upstream inspiration into an implementation guide for BorgClaw's still-unimplemented optional Docker sandbox.
+This appendix narrows the upstream inspiration into an implementation guide for BorgClaw's Docker sandbox, including what is already landed and what remains future hardening work.
 
 Status note:
-- BorgClaw currently ships WASM sandboxing as the implemented sandbox contract.
-- The older `docker_sandbox = true` snippet was cut because the repo did not have a real implementation behind it.
-- This appendix is intentionally design-focused. It does not mark Docker sandboxing as implemented.
+- BorgClaw now ships both WASM sandboxing for plugins and an optional typed Docker sandbox for `execute_command`.
+- The older `docker_sandbox = true` snippet remains correctly culled because the implemented contract is the typed `[security.docker]` block instead.
+- This appendix now distinguishes implemented Docker work from follow-on improvements so the repo does not keep describing shipped functionality as missing.
 
 ### What the upstreams imply
 
@@ -473,7 +479,7 @@ IronClaw contribution:
 
 ### Recommended BorgClaw Contract
 
-If BorgClaw revives Docker sandboxing, the contract should look like this:
+The current BorgClaw Docker contract should continue to look like this:
 
 - Keep `wasm_sandbox` as the plugin sandbox.
 - Add a separate Docker execution policy for host-process tools, especially `execute_command` and any future shell-like runtime helpers.
@@ -575,12 +581,14 @@ The repo should eventually version and publish these explicitly, following the O
   - approval behavior in supervised mode
   - background execution inheritance
 
-### What BorgClaw should copy
+### What BorgClaw should copy next
 
-These are still unimplemented inspiration items and should remain tracked until code and tests exist:
-
-- OpenClaw: execution-context-specific sandbox modes with separate images
-- NanoClaw: containerized default for higher-risk remote/background command execution
-- PicoClaw: inherited sandbox/workspace restrictions across main agent, subagent, and heartbeat
+Implemented from this appendix already:
+- PicoClaw: inherited sandbox/workspace restrictions across main agent, subagent, heartbeat, and scheduled command execution through the shared command/runtime path
 - ZeroClaw: typed Docker runtime policy object instead of a boolean switch
 - IronClaw: Docker execution embedded inside one security pipeline, not as a side system
+
+Still-open Docker follow-up items:
+- OpenClaw: execution-context-specific sandbox modes with separate images
+- NanoClaw: containerized default for higher-risk remote/background command execution
+- OpenClaw/NanoClaw: stronger operator-facing runtime split between trusted local sessions and more restricted delegated or remote execution contexts

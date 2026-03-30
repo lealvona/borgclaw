@@ -164,6 +164,8 @@ Current skill lifecycle status:
 | **Z.ai** | 🆕 New | `Z_API_KEY` |
 | Ollama | ✅ Local node | Local |
 
+Provider credentials can also be managed as encrypted named provider profiles. The active profile is referenced from `agent.provider_profile`, which keeps secrets out of `config.toml`.
+
 ### 🔳 Back Face — Runtime
 
 *How the collective operates*
@@ -218,6 +220,7 @@ start http://localhost:3000  # Windows
 ./scripts/doctor.sh                        # Verify all faces
 cargo run --bin borgclaw -- self-test      # Exit 0 on pass
 cargo run --bin borgclaw -- runtime        # Show collective status
+borgclaw providers list                    # Show configured provider profiles
 ./scripts/install-docker-sandbox.sh        # Build the optional Docker sandbox image
 ```
 
