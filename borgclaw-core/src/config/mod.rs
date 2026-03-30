@@ -74,6 +74,16 @@ impl AppConfig {
             }
         }
 
+        for (name, channel) in &self.channels {
+            if let Some(proxy_url) = channel.proxy_url() {
+                if let Err(err) = validate_proxy_url(proxy_url) {
+                    error
+                        .channels
+                        .push(format!("{}: invalid proxy_url ({})", name, err));
+                }
+            }
+        }
+
         if self.heartbeat.check_interval_seconds == 0 {
             error.heartbeat_interval =
                 Some("heartbeat check_interval_seconds must be greater than 0".to_string());
@@ -150,6 +160,7 @@ impl AppConfig {
         }
 
         if error.mcp_servers.is_empty()
+            && error.channels.is_empty()
             && error.soul_path.is_none()
             && error.workspace.is_none()
             && error.rate_limit.is_none()
@@ -234,6 +245,9 @@ pub struct ChannelConfig {
     #[serde(alias = "token")]
     #[serde(skip_serializing)]
     pub credentials: Option<String>,
+    /// Optional outbound HTTP/SOCKS proxy for channels that initiate network traffic
+    #[serde(skip_serializing)]
+    pub proxy_url: Option<String>,
     /// Allowed senders (empty = allow all)
     pub allow_from: Vec<String>,
     /// DM policy: open, pairing, closed
@@ -262,11 +276,113 @@ impl Default for ChannelConfig {
         Self {
             enabled: false,
             credentials: None,
+            proxy_url: None,
             allow_from: vec![],
             dm_policy: DmPolicy::Pairing,
             extra: HashMap::new(),
         }
     }
+}
+
+impl ChannelConfig {
+    pub fn proxy_url(&self) -> Option<&str> {
+        self.proxy_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+}
+
+pub fn proxy_url_uses_placeholder(value: &str) -> bool {
+    value
+        .strip_prefix("${")
+        .and_then(|inner| inner.strip_suffix('}'))
+        .map(|name| !name.trim().is_empty())
+        .unwrap_or(false)
+}
+
+pub fn resolve_proxy_url(value: &str) -> Result<String, String> {
+    if let Some(env_key) = value
+        .strip_prefix("${")
+        .and_then(|inner| inner.strip_suffix('}'))
+    {
+        return std::env::var(env_key)
+            .map_err(|_| format!("proxy env var '{}' is not set", env_key))
+            .map(|resolved| resolved.trim().to_string())
+            .and_then(|resolved| {
+                if resolved.is_empty() {
+                    Err(format!("proxy env var '{}' is empty", env_key))
+                } else {
+                    Ok(resolved)
+                }
+            });
+    }
+
+    Ok(value.trim().to_string())
+}
+
+pub fn validate_proxy_url(value: &str) -> Result<(), String> {
+    if proxy_url_uses_placeholder(value) {
+        return Ok(());
+    }
+
+    validate_resolved_proxy_url(value)
+}
+
+fn validate_resolved_proxy_url(value: &str) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(value).map_err(|err| err.to_string())?;
+    match parsed.scheme() {
+        "http" | "https" | "socks5" | "socks5h" => {}
+        other => {
+            return Err(format!(
+                "unsupported proxy_url scheme '{}'; use http, https, socks5, or socks5h",
+                other
+            ))
+        }
+    }
+
+    if parsed
+        .host_str()
+        .map(|value| value.is_empty())
+        .unwrap_or(true)
+    {
+        return Err("proxy_url must include a host".to_string());
+    }
+
+    Ok(())
+}
+
+pub fn proxy_display_value(value: &str) -> String {
+    if proxy_url_uses_placeholder(value) {
+        return value.to_string();
+    }
+
+    reqwest::Url::parse(value)
+        .ok()
+        .map(|mut url| {
+            let _ = url.set_username("");
+            let _ = url.set_password(None);
+            url.set_path("");
+            url.set_query(None);
+            url.set_fragment(None);
+            url.to_string().trim_end_matches('/').to_string()
+        })
+        .unwrap_or_else(|| "(invalid proxy)".to_string())
+}
+
+pub fn apply_proxy_to_client_builder(
+    builder: reqwest::ClientBuilder,
+    proxy_url: Option<&str>,
+) -> Result<reqwest::ClientBuilder, String> {
+    let Some(proxy_url) = proxy_url else {
+        return Ok(builder);
+    };
+
+    validate_proxy_url(proxy_url)?;
+    let resolved = resolve_proxy_url(proxy_url)?;
+    validate_resolved_proxy_url(&resolved)?;
+    let proxy = reqwest::Proxy::all(&resolved).map_err(|err| err.to_string())?;
+    Ok(builder.proxy(proxy))
 }
 
 /// Security configuration
@@ -1143,6 +1259,7 @@ mod config_support {
     #[derive(Debug, Default)]
     pub struct ValidationError {
         pub mcp_servers: Vec<String>,
+        pub channels: Vec<String>,
         pub soul_path: Option<String>,
         pub workspace: Option<String>,
         pub rate_limit: Option<String>,
@@ -1156,6 +1273,9 @@ mod config_support {
             let mut errors = Vec::new();
             for server in &self.mcp_servers {
                 errors.push(format!("MCP server URL '{}' is not a valid URL", server));
+            }
+            for channel in &self.channels {
+                errors.push(format!("Channel {}", channel));
             }
             if let Some(ref path) = self.soul_path {
                 errors.push(format!("soul_path '{}' does not exist", path));
@@ -1475,6 +1595,7 @@ mod tests {
             [channels.telegram]
             enabled = true
             token = "telegram-token"
+            proxy_url = "socks5h://127.0.0.1:9050"
             dm_policy = "blocked"
 
             [channels.signal]
@@ -1491,6 +1612,10 @@ mod tests {
 
         let telegram = config.channels.get("telegram").unwrap();
         assert_eq!(telegram.credentials.as_deref(), Some("telegram-token"));
+        assert_eq!(
+            telegram.proxy_url.as_deref(),
+            Some("socks5h://127.0.0.1:9050")
+        );
         assert!(matches!(telegram.dm_policy, DmPolicy::Blocked));
 
         let signal = config.channels.get("signal").unwrap();
@@ -1517,6 +1642,48 @@ mod tests {
                 .and_then(|value| value.as_bool()),
             Some(true)
         );
+    }
+
+    #[test]
+    fn config_validation_rejects_invalid_channel_proxy_url() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [channels.telegram]
+            enabled = true
+            token = "telegram-token"
+            proxy_url = "ftp://proxy.invalid"
+            "#,
+        )
+        .unwrap();
+
+        let err = config.validate().unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Channel telegram: invalid proxy_url"));
+    }
+
+    #[test]
+    fn apply_proxy_to_client_builder_accepts_documented_proxy_schemes() {
+        assert!(apply_proxy_to_client_builder(
+            reqwest::Client::builder(),
+            Some("http://127.0.0.1:8080"),
+        )
+        .is_ok());
+        assert!(apply_proxy_to_client_builder(
+            reqwest::Client::builder(),
+            Some("https://127.0.0.1:8443"),
+        )
+        .is_ok());
+        assert!(apply_proxy_to_client_builder(
+            reqwest::Client::builder(),
+            Some("socks5://127.0.0.1:1080"),
+        )
+        .is_ok());
+        assert!(apply_proxy_to_client_builder(
+            reqwest::Client::builder(),
+            Some("socks5h://127.0.0.1:1080"),
+        )
+        .is_ok());
     }
 
     #[test]

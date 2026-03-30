@@ -192,6 +192,8 @@ pub struct ChannelConfig {
     pub enabled: bool,
     /// Bot token / credentials
     pub credentials: Option<String>,
+    /// Optional outbound proxy URL for channels with network egress
+    pub proxy_url: Option<String>,
     /// Allowed users (empty = allow all)
     pub allow_from: Vec<String>,
     /// DM policy
@@ -207,6 +209,7 @@ impl ChannelConfig {
             channel_type,
             enabled: false,
             credentials: None,
+            proxy_url: None,
             allow_from: Vec::new(),
             dm_policy: super::config::DmPolicy::Pairing,
             extra: std::collections::HashMap::new(),
@@ -449,6 +452,7 @@ mod tests {
                 allow_from: Vec::new(),
                 dm_policy: crate::config::DmPolicy::Pairing,
                 credentials: None,
+                proxy_url: None,
                 extra: HashMap::new(),
             },
         );
@@ -520,6 +524,7 @@ mod tests {
                 allow_from: Vec::new(),
                 dm_policy: crate::config::DmPolicy::Open,
                 credentials: None,
+                proxy_url: None,
                 extra: HashMap::new(),
             },
         );

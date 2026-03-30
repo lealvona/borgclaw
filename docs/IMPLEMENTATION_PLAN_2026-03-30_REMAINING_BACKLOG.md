@@ -15,7 +15,8 @@ Status note:
 - PR 8 (`Docker Sandbox Hardening`) is landed.
 - PR 9 (`Skills Lifecycle Completion`) is landed.
 - PR 10 (`Gateway + Onboarding Control Plane`) is landed.
-- PR 11 (`Structured Fallback Deliverables`) is the active tranche.
+- PR 11 (`Structured Fallback Deliverables`) is landed.
+- PR 12 (`Per-Channel Proxy Settings`) is landed.
 
 ## Scope Notes
 
@@ -41,7 +42,7 @@ These items remain useful upstream references, but they are not part of BorgClaw
 | 9 | Skills Lifecycle Completion | complete | Add skill gating, richer discovery/status, and explicit source tiers |
 | 10 | Gateway + Onboarding Control Plane | complete | Expose all new runtime contracts in onboarding, status, doctor, and gateway surfaces |
 | 11 | Structured Fallback Deliverables | complete | Persist and surface structured fallback guidance for failed or stuck background work |
-| 12 | Per-Channel Proxy Settings | pending | Add documented per-channel proxy configuration and runtime wiring |
+| 12 | Per-Channel Proxy Settings | complete | Add explicit proxy wiring, validation, and operator visibility for outbound channel traffic |
 | 13 | Final Audit + Smell Cleanup | pending | Resolve cross-cutting cleanup, fill test gaps, and close the intended backlog |
 
 ## PR 1: Backlog Contract Repair

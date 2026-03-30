@@ -2580,30 +2580,34 @@ async fn channel_status_lines(config: &AppConfig) -> Vec<String> {
 
         let status = match name.as_str() {
             "telegram" => {
-                if channel_credentials_available(config, channel).await {
-                    "ready"
+                if let Some(error) = channel_proxy_error(channel) {
+                    format!("invalid proxy: {}", error)
+                } else if channel_credentials_available(config, channel).await {
+                    "ready".to_string()
                 } else {
-                    "missing token"
+                    "missing token".to_string()
                 }
             }
             "signal" => {
                 if signal_channel_ready(channel) {
-                    "ready"
+                    "ready".to_string()
                 } else if !signal_cli_ready(channel) {
-                    "missing signal-cli"
+                    "missing signal-cli".to_string()
                 } else {
-                    "missing phone_number"
+                    "missing phone_number".to_string()
                 }
             }
             "webhook" => {
-                if webhook_channel_ready(config, channel).await {
-                    "ready"
+                if let Some(error) = channel_proxy_error(channel) {
+                    format!("invalid proxy: {}", error)
+                } else if webhook_channel_ready(config, channel).await {
+                    "ready".to_string()
                 } else {
-                    "missing secret"
+                    "missing secret".to_string()
                 }
             }
-            "websocket" => "ready",
-            _ => "enabled",
+            "websocket" => "ready".to_string(),
+            _ => "enabled".to_string(),
         };
         lines.push(format!("{name}: enabled ({status})"));
     }
@@ -2626,15 +2630,19 @@ async fn channel_doctor_lines(config: &AppConfig) -> Vec<String> {
         }
 
         let line = match name.as_str() {
-            "telegram" => format!(
-                "{} Telegram token {}",
-                marker(channel_credentials_available(config, channel).await),
-                if channel_credentials_available(config, channel).await {
-                    "present"
-                } else {
-                    "missing"
-                }
-            ),
+            "telegram" => match channel_proxy_error(channel) {
+                Some(error) => format!("✗ Telegram proxy invalid ({})", error),
+                None => format!(
+                    "{} Telegram token {}{}",
+                    marker(channel_credentials_available(config, channel).await),
+                    if channel_credentials_available(config, channel).await {
+                        "present"
+                    } else {
+                        "missing"
+                    },
+                    channel_proxy_suffix(channel)
+                ),
+            },
             "signal" => format!(
                 "{} Signal phone={} cli={}",
                 marker(signal_channel_ready(channel)),
@@ -2645,20 +2653,24 @@ async fn channel_doctor_lines(config: &AppConfig) -> Vec<String> {
                     .unwrap_or("missing"),
                 signal_cli_display(channel)
             ),
-            "webhook" => format!(
-                "{} Webhook secret {} on port {}",
-                marker(webhook_channel_ready(config, channel).await),
-                if webhook_channel_ready(config, channel).await {
-                    "configured"
-                } else {
-                    "missing"
-                },
-                channel
-                    .extra
-                    .get("port")
-                    .and_then(|value| value.as_integer())
-                    .unwrap_or(8080)
-            ),
+            "webhook" => match channel_proxy_error(channel) {
+                Some(error) => format!("✗ Webhook proxy invalid ({})", error),
+                None => format!(
+                    "{} Webhook secret {} on port {}{}",
+                    marker(webhook_channel_ready(config, channel).await),
+                    if webhook_channel_ready(config, channel).await {
+                        "configured"
+                    } else {
+                        "missing"
+                    },
+                    channel
+                        .extra
+                        .get("port")
+                        .and_then(|value| value.as_integer())
+                        .unwrap_or(8080),
+                    channel_proxy_suffix(channel)
+                ),
+            },
             "websocket" => format!(
                 "{} WebSocket port {} pairing={}",
                 marker(true),
@@ -4059,6 +4071,25 @@ fn signal_cli_display(channel: &borgclaw_core::config::ChannelConfig) -> &str {
         .get("signal_cli_path")
         .and_then(|value| value.as_str())
         .unwrap_or("signal-cli")
+}
+
+fn channel_proxy_error(channel: &borgclaw_core::config::ChannelConfig) -> Option<String> {
+    channel
+        .proxy_url()
+        .and_then(|proxy_url| borgclaw_core::config::validate_proxy_url(proxy_url).err())
+}
+
+fn channel_proxy_suffix(channel: &borgclaw_core::config::ChannelConfig) -> String {
+    match channel.proxy_url() {
+        Some(proxy_url) if channel_proxy_error(channel).is_none() => {
+            format!(
+                " via {}",
+                borgclaw_core::config::proxy_display_value(proxy_url)
+            )
+        }
+        Some(_) => " with invalid proxy".to_string(),
+        None => String::new(),
+    }
 }
 
 async fn webhook_channel_ready(
@@ -5872,6 +5903,7 @@ mod tests {
         let telegram = config.channels.entry("telegram".to_string()).or_default();
         telegram.enabled = true;
         telegram.credentials = Some("${TELEGRAM_BOT_TOKEN}".to_string());
+        telegram.proxy_url = Some("socks5h://127.0.0.1:9050".to_string());
 
         runtime
             .block_on(
@@ -5882,6 +5914,10 @@ mod tests {
 
         let lines = runtime.block_on(channel_status_lines(&config));
         assert!(lines.iter().any(|line| line == "telegram: enabled (ready)"));
+        let doctor = runtime.block_on(channel_doctor_lines(&config));
+        assert!(doctor
+            .iter()
+            .any(|line| { line == "✓ Telegram token present via socks5h://127.0.0.1:9050" }));
     }
 
     #[test]
@@ -5898,6 +5934,23 @@ mod tests {
         assert!(lines
             .iter()
             .any(|line| line == "✗ Webhook secret missing on port 8080"));
+    }
+
+    #[test]
+    fn webhook_channel_doctor_reports_invalid_proxy() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut config = temp_config();
+        let webhook = config.channels.entry("webhook".to_string()).or_default();
+        webhook.enabled = true;
+        webhook.proxy_url = Some("ftp://proxy.invalid".to_string());
+        webhook
+            .extra
+            .insert("port".to_string(), toml::Value::Integer(8080));
+
+        let lines = runtime.block_on(channel_doctor_lines(&config));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("Webhook proxy invalid")));
     }
 
     #[test]

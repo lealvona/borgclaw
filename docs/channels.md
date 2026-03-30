@@ -37,6 +37,7 @@ Commands:
 [channels.telegram]
 enabled = true
 token = "${TELEGRAM_BOT_TOKEN}"
+proxy_url = "${TELEGRAM_PROXY_URL}"  # optional: http/https/socks5/socks5h
 ```
 
 4. Set environment variable:
@@ -112,6 +113,7 @@ phone_number = "+1234567890"
 enabled = true
 port = 8080
 secret = "${WEBHOOK_SECRET}"
+proxy_url = "${WEBHOOK_PROXY_URL}"   # optional, used for outbound trigger forwarding
 rate_limit_per_minute = 60
 ```
 
@@ -211,6 +213,7 @@ ws.send(JSON.stringify({
 [channels.telegram]
 enabled = true
 token = "${TELEGRAM_BOT_TOKEN}"
+proxy_url = "${TELEGRAM_PROXY_URL}"
 allow_from = ["user123", "user456"]  # Whitelist
 dm_policy = "pairing"
 
@@ -222,6 +225,7 @@ phone_number = "+1234567890"
 enabled = true
 port = 8080
 secret = "${WEBHOOK_SECRET}"
+proxy_url = "${WEBHOOK_PROXY_URL}"
 rate_limit_per_minute = 60
 
 [channels.websocket]
@@ -229,6 +233,22 @@ enabled = true
 port = 3000
 require_pairing = true
 ```
+
+### Per-Channel Proxies
+
+Channels with outbound HTTP traffic can use an explicit `proxy_url`:
+
+- `channels.telegram.proxy_url` applies to Telegram Bot API traffic
+- `channels.webhook.proxy_url` applies to outbound webhook trigger forwarding
+
+Supported schemes:
+
+- `http`
+- `https`
+- `socks5`
+- `socks5h`
+
+Proxy values may be set directly or via environment placeholders such as `${TELEGRAM_PROXY_URL}`.
 
 ## Message Flow
 

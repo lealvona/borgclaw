@@ -292,6 +292,7 @@ require_pairing = true
 enabled = true
 port = 8080
 secret = "${WEBHOOK_SECRET}"
+proxy_url = "${WEBHOOK_PROXY_URL}"
 ```
 
 ### CORS
@@ -329,6 +330,10 @@ secret = "${WEBHOOK_SECRET}"
 ```
 
 Requests must include: `X-Webhook-Secret: your-secret`
+
+### Proxy Visibility
+
+The gateway configuration API redacts raw proxy URLs but reports whether a channel proxy is configured and shows a sanitized display value without embedded credentials. The dashboard currently surfaces webhook proxy status as read-only metadata.
 
 ## Troubleshooting
 

@@ -12,7 +12,7 @@ Status note:
 Current BorgClaw disposition of major inspiration items:
 - Implemented and verified in the runtime: provider-backed shared routing, structured gateway auth/events, scheduler/heartbeat/sub-agent persistence and recovery, typed workspace policy, unified approval flow for foreground/background tool execution, explicit memory backend selection with PostgreSQL + pgvector, tool-level retry, system prompt date/time injection, archive-backed skill installs, and the typed optional Docker command sandbox.
 - Implemented and still worth iterating on: the Docker sandbox now covers `execute_command` through typed `security.docker` policy plus local/remote/background context overrides. Separate base and remote images are shipped, though operators can still choose whether to use image overrides in their config.
-- Not yet implemented but explicitly tracked here: per-channel proxy settings.
+- Not yet implemented but explicitly tracked here: none. The remaining work is final audit and cleanup rather than another inspiration-derived runtime feature.
 - Explicitly declined for BorgClaw: AWS Bedrock provider support, Composio integration, and Slack approval UI/buttons.
 
 Use it for two things:
@@ -100,7 +100,7 @@ Recent upstream movement:
 
 - OpenClaw: Context compaction notifications (notify user when starts/completes)
 - ZeroClaw: Time range filter for memory recall (since/until parameters)
-- ZeroClaw: Per-channel proxy_url support for HTTP/SOCKS5 proxies
+- ZeroClaw: Per-channel proxy_url support for HTTP/SOCKS5 proxies is now implemented for BorgClaw channels with outbound HTTP traffic.
 - TinyClaw: exec tool with PTY support and background execution
 - IronClaw: Workspace layered memory with privacy-based access control
 

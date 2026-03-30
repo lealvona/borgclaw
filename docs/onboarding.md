@@ -175,6 +175,7 @@ check_interval_seconds = 60
 [channels.telegram]
 enabled = true
 token = "${TELEGRAM_BOT_TOKEN}"
+proxy_url = "${TELEGRAM_PROXY_URL}"
 
 [channels.signal]
 enabled = false
@@ -183,7 +184,10 @@ enabled = false
 enabled = true
 port = 8080
 secret = "${WEBHOOK_SECRET}"
+proxy_url = "${WEBHOOK_PROXY_URL}"
 ```
+
+Optional per-channel proxy settings are configured directly in `config.toml` via `proxy_url` on channels with outbound HTTP traffic. BorgClaw currently applies that contract to Telegram Bot API traffic and outbound webhook trigger forwarding.
 
 ## Refresh Models
 
