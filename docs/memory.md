@@ -31,7 +31,9 @@ BorgClaw provides a comprehensive memory system with selectable storage backends
 - **Per-group isolation** - Separate memory per conversation
 - **Importance scoring** - Weighted recall
 - **Access tracking** - Frequency and recency
+- **Time-range recall** - Optional `since` / `until` filters across all built-in backends
 - **Common `Memory` trait** - The runtime uses the same API across SQLite, PostgreSQL, and in-memory modes
+- **History + procedural memory APIs** - Backends expose newest-first history and low-importance procedural memory storage
 
 ### SQLite
 
@@ -62,6 +64,12 @@ connection_string = "postgres://user:pass@localhost/borgclaw"  # postgres only
 embedding_endpoint = "http://127.0.0.1:11434/api/embeddings"   # required for hybrid vector search
 hybrid_search = true
 session_max_entries = 100
+
+[memory.external]
+enabled = true
+endpoint = "http://127.0.0.1:8765"
+mirror_writes = true
+timeout_seconds = 15
 ```
 
 Notes:
@@ -71,6 +79,7 @@ Notes:
 - `embedding_endpoint` enables runtime embedding generation for SQLite hybrid search and PostgreSQL + pgvector hybrid search.
 - PostgreSQL without `embedding_endpoint` still works for text-only persistence and recall.
 - Older configs that only set `vector_provider` still load through compatibility mapping, but `backend` is now the primary contract.
+- `memory.external` is additive: local memory remains authoritative, while the external adapter can augment recall/history and optionally mirror writes.
 
 ### Runtime Requirements
 
@@ -98,7 +107,24 @@ let results = memory.recall(MemoryQuery {
     limit: 10,
     min_score: 0.3,
     group_id: Some("work".to_string()),
+    since: None,
+    until: None,
 }).await?;
+
+// Filtered history
+let history = memory.history(&MemoryQuery {
+    limit: 10,
+    group_id: Some("work".to_string()),
+    since: Some(chrono::Utc::now() - chrono::Duration::days(7)),
+    until: None,
+    ..Default::default()
+}).await?;
+
+// Store procedural memory
+memory.store_procedural(new_procedural_entry(
+    "deployment_workflow",
+    "Run cargo fmt, cargo clippy, and cargo test before PR creation.",
+)).await?;
 
 // List keys
 let keys = memory.keys().await?;
@@ -120,6 +146,58 @@ pub struct MemoryEntry {
     pub access_count: u32,
     pub importance: f32,       // 0.0 - 1.0
     pub group_id: Option<String>,
+}
+```
+
+### External Memory Adapter
+
+`memory.external` lets BorgClaw complement its local backends with an OpenMemory-style HTTP service. The current additive contract is:
+
+- `POST /search` with `query`, `limit`, `min_score`, `group_id`, `since`, `until`
+- `POST /history` with `limit`, `group_id`, `since`, `until`
+- `POST /memories` to mirror normal writes when `mirror_writes = true`
+- `POST /memories/procedural` to mirror procedural-memory writes when `mirror_writes = true`
+
+Expected search response shape:
+
+```json
+{
+  "results": [
+    {
+      "entry": {
+        "id": "mem-123",
+        "key": "deploy",
+        "content": "Staging deploy checklist",
+        "metadata": {"source": "openmemory"},
+        "created_at": "2026-03-30T05:00:00Z",
+        "accessed_at": "2026-03-30T05:00:00Z",
+        "access_count": 0,
+        "importance": 0.5,
+        "group_id": "ops"
+      },
+      "score": 0.82
+    }
+  ]
+}
+```
+
+Expected history response shape:
+
+```json
+{
+  "entries": [
+    {
+      "id": "mem-123",
+      "key": "deploy",
+      "content": "Staging deploy checklist",
+      "metadata": {"source": "openmemory"},
+      "created_at": "2026-03-30T05:00:00Z",
+      "accessed_at": "2026-03-30T05:00:00Z",
+      "access_count": 0,
+      "importance": 0.5,
+      "group_id": "ops"
+    }
+  ]
 }
 ```
 

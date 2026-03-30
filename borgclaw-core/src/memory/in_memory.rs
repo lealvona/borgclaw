@@ -50,7 +50,7 @@ impl Memory for InMemoryMemory {
         let entries = self.entries.read().await;
         let mut results: Vec<MemoryResult> = entries
             .values()
-            .filter(|entry| entry.group_id == query.group_id)
+            .filter(|entry| query.matches_entry(entry))
             .filter_map(|entry| {
                 let score = Self::score(entry, &query.query);
                 (score >= query.min_score).then(|| MemoryResult {
@@ -67,6 +67,20 @@ impl Memory for InMemoryMemory {
         });
         results.truncate(query.limit);
         Ok(results)
+    }
+
+    async fn history(&self, query: &MemoryQuery) -> Result<Vec<MemoryEntry>, MemoryError> {
+        let mut entries: Vec<MemoryEntry> = self
+            .entries
+            .read()
+            .await
+            .values()
+            .filter(|entry| query.matches_entry(entry))
+            .cloned()
+            .collect();
+        entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        entries.truncate(query.limit);
+        Ok(entries)
     }
 
     async fn get(&self, id: &str) -> Result<Option<MemoryEntry>, MemoryError> {
@@ -132,6 +146,7 @@ impl Memory for InMemoryMemory {
 mod tests {
     use super::*;
     use crate::memory::{new_entry, new_entry_for_group};
+    use chrono::{Duration, Utc};
 
     #[tokio::test]
     async fn in_memory_memory_round_trips_entries() {
@@ -163,6 +178,7 @@ mod tests {
                 limit: 10,
                 min_score: 0.0,
                 group_id: None,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -175,5 +191,33 @@ mod tests {
         assert_eq!(public[0].entry.group_id, None);
         assert_eq!(ops.len(), 1);
         assert_eq!(ops[0].entry.group_id.as_deref(), Some("ops"));
+    }
+
+    #[tokio::test]
+    async fn in_memory_memory_history_respects_time_filters() {
+        let memory = InMemoryMemory::new();
+        let now = Utc::now();
+
+        let mut older = new_entry("topic", "older");
+        older.created_at = now - Duration::days(3);
+        older.accessed_at = older.created_at;
+        memory.store(older).await.unwrap();
+
+        let mut newer = new_entry("topic", "newer");
+        newer.created_at = now;
+        newer.accessed_at = newer.created_at;
+        memory.store(newer).await.unwrap();
+
+        let entries = memory
+            .history(&MemoryQuery {
+                limit: 10,
+                since: Some(now - Duration::days(1)),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].content, "newer");
     }
 }

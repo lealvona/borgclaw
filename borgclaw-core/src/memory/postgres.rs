@@ -197,6 +197,8 @@ impl PostgresMemory {
         }
 
         let pool = self.pool().await?;
+        let since = query.since.map(|value| value.to_rfc3339());
+        let until = query.until.map(|value| value.to_rfc3339());
         let rows: Vec<PgRankedMemoryRow> = if let Some(group_id) = &query.group_id {
             sqlx::query_as::<_, PgRankedMemoryRow>(
                 r#"
@@ -206,12 +208,16 @@ impl PostgresMemory {
                 FROM memories
                 WHERE group_id = $1
                   AND search_vector @@ websearch_to_tsquery('english', $2)
+                  AND ($3::timestamptz IS NULL OR created_at >= $3::timestamptz)
+                  AND ($4::timestamptz IS NULL OR created_at <= $4::timestamptz)
                 ORDER BY score DESC, importance DESC, accessed_at DESC
-                LIMIT $3
+                LIMIT $5
                 "#,
             )
             .bind(group_id)
             .bind(trimmed)
+            .bind(&since)
+            .bind(&until)
             .bind(query.limit as i64)
             .fetch_all(&pool)
             .await
@@ -224,11 +230,15 @@ impl PostgresMemory {
                 FROM memories
                 WHERE group_id IS NULL
                   AND search_vector @@ websearch_to_tsquery('english', $1)
+                  AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
+                  AND ($3::timestamptz IS NULL OR created_at <= $3::timestamptz)
                 ORDER BY score DESC, importance DESC, accessed_at DESC
-                LIMIT $2
+                LIMIT $4
                 "#,
             )
             .bind(trimmed)
+            .bind(&since)
+            .bind(&until)
             .bind(query.limit as i64)
             .fetch_all(&pool)
             .await
@@ -253,6 +263,8 @@ impl PostgresMemory {
 
         let pool = self.pool().await?;
         let query_vector = vector_literal(query_embedding);
+        let since = query.since.map(|value| value.to_rfc3339());
+        let until = query.until.map(|value| value.to_rfc3339());
         let rows: Vec<PgRankedMemoryRow> = if let Some(group_id) = &query.group_id {
             sqlx::query_as::<_, PgRankedMemoryRow>(
                 r#"
@@ -262,12 +274,16 @@ impl PostgresMemory {
                 FROM memory_embeddings me
                 JOIN memories m ON m.id = me.memory_id
                 WHERE m.group_id = $1
+                  AND ($3::timestamptz IS NULL OR m.created_at >= $3::timestamptz)
+                  AND ($4::timestamptz IS NULL OR m.created_at <= $4::timestamptz)
                 ORDER BY me.embedding <=> $2::vector
-                LIMIT $3
+                LIMIT $5
                 "#,
             )
             .bind(group_id)
             .bind(&query_vector)
+            .bind(&since)
+            .bind(&until)
             .bind(query.limit as i64)
             .fetch_all(&pool)
             .await
@@ -280,11 +296,15 @@ impl PostgresMemory {
                 FROM memory_embeddings me
                 JOIN memories m ON m.id = me.memory_id
                 WHERE m.group_id IS NULL
+                  AND ($2::timestamptz IS NULL OR m.created_at >= $2::timestamptz)
+                  AND ($3::timestamptz IS NULL OR m.created_at <= $3::timestamptz)
                 ORDER BY me.embedding <=> $1::vector
-                LIMIT $2
+                LIMIT $4
                 "#,
             )
             .bind(&query_vector)
+            .bind(&since)
+            .bind(&until)
             .bind(query.limit as i64)
             .fetch_all(&pool)
             .await
@@ -295,6 +315,56 @@ impl PostgresMemory {
             .into_iter()
             .map(PgRankedMemoryRow::into_memory_result)
             .filter(|result| result.score >= query.min_score)
+            .collect())
+    }
+
+    async fn history_entries(&self, query: &MemoryQuery) -> Result<Vec<MemoryEntry>, MemoryError> {
+        let pool = self.pool().await?;
+        let since = query.since.map(|value| value.to_rfc3339());
+        let until = query.until.map(|value| value.to_rfc3339());
+        let rows: Vec<PgMemoryRow> = if let Some(group_id) = &query.group_id {
+            sqlx::query_as::<_, PgMemoryRow>(
+                r#"
+                SELECT id, key, content, metadata::text AS metadata, created_at::text AS created_at,
+                       accessed_at::text AS accessed_at, access_count, importance, group_id
+                FROM memories
+                WHERE group_id = $1
+                  AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
+                  AND ($3::timestamptz IS NULL OR created_at <= $3::timestamptz)
+                ORDER BY created_at DESC
+                LIMIT $4
+                "#,
+            )
+            .bind(group_id)
+            .bind(&since)
+            .bind(&until)
+            .bind(query.limit as i64)
+            .fetch_all(&pool)
+            .await
+        } else {
+            sqlx::query_as::<_, PgMemoryRow>(
+                r#"
+                SELECT id, key, content, metadata::text AS metadata, created_at::text AS created_at,
+                       accessed_at::text AS accessed_at, access_count, importance, group_id
+                FROM memories
+                WHERE group_id IS NULL
+                  AND ($1::timestamptz IS NULL OR created_at >= $1::timestamptz)
+                  AND ($2::timestamptz IS NULL OR created_at <= $2::timestamptz)
+                ORDER BY created_at DESC
+                LIMIT $3
+                "#,
+            )
+            .bind(&since)
+            .bind(&until)
+            .bind(query.limit as i64)
+            .fetch_all(&pool)
+            .await
+        }
+        .map_err(|e| MemoryError::QueryError(e.to_string()))?;
+
+        Ok(rows
+            .into_iter()
+            .map(PgMemoryRow::into_memory_entry)
             .collect())
     }
 }
@@ -367,6 +437,10 @@ impl Memory for PostgresMemory {
         }
 
         Ok(text_results)
+    }
+
+    async fn history(&self, query: &MemoryQuery) -> Result<Vec<MemoryEntry>, MemoryError> {
+        self.history_entries(query).await
     }
 
     async fn get(&self, id: &str) -> Result<Option<MemoryEntry>, MemoryError> {

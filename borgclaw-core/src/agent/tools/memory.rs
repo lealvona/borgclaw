@@ -1,8 +1,12 @@
 use super::{
-    get_required_string, get_u64, optional_group_id, PropertySchema, Tool, ToolResult, ToolRuntime,
-    ToolSchema,
+    get_required_string, get_string, get_u64, optional_group_id, PropertySchema, Tool, ToolResult,
+    ToolRuntime, ToolSchema,
 };
-use crate::memory::{new_entry, new_entry_for_group, MemoryQuery};
+use crate::memory::{
+    new_entry, new_entry_for_group, new_procedural_entry, new_procedural_entry_for_group,
+    MemoryQuery,
+};
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
 pub fn register(tools: &mut Vec<Tool>) {
@@ -54,11 +58,93 @@ pub fn register(tools: &mut Vec<Tool>) {
                             enum_values: None,
                         },
                     ),
+                    (
+                        "since".to_string(),
+                        PropertySchema {
+                            prop_type: "string".to_string(),
+                            description: Some("Optional RFC3339 lower time bound".to_string()),
+                            default: None,
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "until".to_string(),
+                        PropertySchema {
+                            prop_type: "string".to_string(),
+                            description: Some("Optional RFC3339 upper time bound".to_string()),
+                            default: None,
+                            enum_values: None,
+                        },
+                    ),
                 ]
                 .into(),
                 vec!["query".to_string()],
             ))
             .with_tags(vec!["memory".to_string()]),
+        Tool::new("memory_history", "List memory history newest-first")
+            .with_schema(ToolSchema::object(
+                [
+                    (
+                        "limit".to_string(),
+                        PropertySchema {
+                            prop_type: "number".to_string(),
+                            description: Some("Max entries".to_string()),
+                            default: Some(serde_json::json!(10)),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "since".to_string(),
+                        PropertySchema {
+                            prop_type: "string".to_string(),
+                            description: Some("Optional RFC3339 lower time bound".to_string()),
+                            default: None,
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "until".to_string(),
+                        PropertySchema {
+                            prop_type: "string".to_string(),
+                            description: Some("Optional RFC3339 upper time bound".to_string()),
+                            default: None,
+                            enum_values: None,
+                        },
+                    ),
+                ]
+                .into(),
+                Vec::new(),
+            ))
+            .with_tags(vec!["memory".to_string()]),
+        Tool::new(
+            "memory_store_procedural",
+            "Store a procedural long-term memory",
+        )
+        .with_schema(ToolSchema::object(
+            [
+                (
+                    "key".to_string(),
+                    PropertySchema {
+                        prop_type: "string".to_string(),
+                        description: Some("Memory key".to_string()),
+                        default: None,
+                        enum_values: None,
+                    },
+                ),
+                (
+                    "value".to_string(),
+                    PropertySchema {
+                        prop_type: "string".to_string(),
+                        description: Some("Procedural memory content".to_string()),
+                        default: None,
+                        enum_values: None,
+                    },
+                ),
+            ]
+            .into(),
+            vec!["key".to_string(), "value".to_string()],
+        ))
+        .with_tags(vec!["memory".to_string()]),
         Tool::new("memory_delete", "Delete a memory entry by id")
             .with_schema(ToolSchema::object(
                 [(
@@ -201,6 +287,14 @@ pub async fn memory_recall(
     };
     let limit = get_u64(arguments, "limit").unwrap_or(5) as usize;
     let group_id = optional_group_id(arguments, runtime);
+    let since = match parse_optional_rfc3339(arguments, "since") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let until = match parse_optional_rfc3339(arguments, "until") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
 
     match runtime
         .memory
@@ -209,6 +303,8 @@ pub async fn memory_recall(
             limit,
             min_score: 0.0,
             group_id: group_id.clone(),
+            since,
+            until,
         })
         .await
     {
@@ -227,6 +323,88 @@ pub async fn memory_recall(
                     .collect::<Vec<_>>()
                     .join("\n"),
             );
+            if let Some(group_id) = group_id {
+                result = result.with_metadata("group_id", group_id);
+            }
+            result
+        }
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+pub async fn memory_history(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let limit = get_u64(arguments, "limit").unwrap_or(10) as usize;
+    let group_id = optional_group_id(arguments, runtime);
+    let since = match parse_optional_rfc3339(arguments, "since") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let until = match parse_optional_rfc3339(arguments, "until") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+
+    match runtime
+        .memory
+        .history(&MemoryQuery {
+            limit,
+            group_id: group_id.clone(),
+            since,
+            until,
+            ..Default::default()
+        })
+        .await
+    {
+        Ok(entries) if entries.is_empty() => ToolResult::ok("no memory history"),
+        Ok(entries) => {
+            let mut result = ToolResult::ok(
+                entries
+                    .into_iter()
+                    .map(|entry| {
+                        format!(
+                            "{} | {}: {}",
+                            entry.created_at.to_rfc3339(),
+                            entry.key,
+                            entry.content
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
+            if let Some(group_id) = group_id {
+                result = result.with_metadata("group_id", group_id);
+            }
+            result
+        }
+        Err(err) => ToolResult::err(err.to_string()),
+    }
+}
+
+pub async fn memory_store_procedural(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let key = match get_required_string(arguments, "key") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let value = match get_required_string(arguments, "value") {
+        Ok(value) => value,
+        Err(err) => return ToolResult::err(err),
+    };
+    let group_id = optional_group_id(arguments, runtime);
+
+    let entry = match group_id.clone() {
+        Some(group_id) => new_procedural_entry_for_group(key, value, group_id),
+        None => new_procedural_entry(key, value),
+    };
+
+    match runtime.memory.store_procedural(entry).await {
+        Ok(()) => {
+            let mut result = ToolResult::ok("stored procedural memory");
             if let Some(group_id) = group_id {
                 result = result.with_metadata("group_id", group_id);
             }
@@ -355,6 +533,7 @@ pub async fn solution_find(
             limit,
             min_score: 0.0,
             group_id: Some("solutions".to_string()),
+            ..Default::default()
         })
         .await
     {
@@ -374,4 +553,17 @@ pub async fn solution_find(
         }
         Err(err) => ToolResult::err(err.to_string()),
     }
+}
+
+fn parse_optional_rfc3339(
+    arguments: &HashMap<String, serde_json::Value>,
+    key: &str,
+) -> Result<Option<DateTime<Utc>>, String> {
+    get_string(arguments, key)
+        .map(|value| {
+            DateTime::parse_from_rfc3339(&value)
+                .map(|parsed| parsed.with_timezone(&Utc))
+                .map_err(|_| format!("invalid RFC3339 datetime for '{}'", key))
+        })
+        .transpose()
 }

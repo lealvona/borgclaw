@@ -230,7 +230,11 @@ pub fn parse_tool_command(input: &str, tools: &[Tool]) -> Option<ToolCall> {
 pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult {
     let result = match call.name.as_str() {
         "memory_store" => memory::memory_store(&call.arguments, runtime).await,
+        "memory_store_procedural" => {
+            memory::memory_store_procedural(&call.arguments, runtime).await
+        }
         "memory_recall" => memory::memory_recall(&call.arguments, runtime).await,
+        "memory_history" => memory::memory_history(&call.arguments, runtime).await,
         "memory_delete" => memory::memory_delete(&call.arguments, runtime).await,
         "memory_keys" => memory::memory_keys(runtime).await,
         "memory_groups" => memory::memory_groups(runtime).await,
@@ -2049,6 +2053,7 @@ file_write = ["/etc"]
                 limit: 5,
                 min_score: 0.0,
                 group_id: None,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -2059,6 +2064,7 @@ file_write = ["/etc"]
                 limit: 5,
                 min_score: 0.0,
                 group_id: Some("group-a".to_string()),
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -2219,6 +2225,7 @@ file_write = ["/etc"]
                 limit: 5,
                 min_score: 0.0,
                 group_id: None,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -2348,6 +2355,7 @@ file_write = ["/etc"]
                 limit: 5,
                 min_score: 0.0,
                 group_id: None,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -2824,6 +2832,7 @@ for line in sys.stdin:
                 limit: 5,
                 min_score: 0.0,
                 group_id: Some("group-scheduled".to_string()),
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -2834,6 +2843,7 @@ for line in sys.stdin:
                 limit: 5,
                 min_score: 0.0,
                 group_id: None,
+                ..Default::default()
             })
             .await
             .unwrap();
