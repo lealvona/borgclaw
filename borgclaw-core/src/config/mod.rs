@@ -37,6 +37,7 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
+    #[allow(clippy::result_large_err)]
     pub fn validate(&self) -> Result<(), config_support::ValidationError> {
         let mut error = config_support::ValidationError::default();
 
@@ -90,12 +91,28 @@ impl AppConfig {
             );
         }
 
+        if self.security.docker.enabled {
+            if self.security.docker.image.trim().is_empty() {
+                error.security = Some(
+                    "security.docker.image is required when security.docker.enabled = true"
+                        .to_string(),
+                );
+            } else if self.security.docker.timeout_seconds == 0 {
+                error.security =
+                    Some("security.docker.timeout_seconds must be greater than 0".to_string());
+            } else if self.security.docker.memory_limit_mb == 0 {
+                error.security =
+                    Some("security.docker.memory_limit_mb must be greater than 0".to_string());
+            }
+        }
+
         if error.mcp_servers.is_empty()
             && error.soul_path.is_none()
             && error.workspace.is_none()
             && error.rate_limit.is_none()
             && error.heartbeat_interval.is_none()
             && error.memory.is_none()
+            && error.security.is_none()
         {
             Ok(())
         } else {
@@ -229,6 +246,8 @@ pub struct SecurityConfig {
     pub vault: VaultConfig,
     /// Workspace file/path policy
     pub workspace: WorkspacePolicyConfig,
+    /// Optional Docker sandbox for shell command execution
+    pub docker: DockerSandboxConfig,
     /// Enable SSRF protection
     pub ssrf_protection: bool,
     /// SSRF allowlist - additional hosts to allow (regex patterns)
@@ -304,11 +323,67 @@ impl Default for SecurityConfig {
             secrets_path: PathBuf::from(".borgclaw/secrets.enc"),
             vault: VaultConfig::default(),
             workspace: WorkspacePolicyConfig::default(),
+            docker: DockerSandboxConfig::default(),
             ssrf_protection: true,
             ssrf_allowlist: Vec::new(),
             ssrf_blocklist: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DockerSandboxConfig {
+    pub enabled: bool,
+    pub image: String,
+    pub network: DockerNetworkPolicy,
+    pub workspace_mount: DockerWorkspaceMount,
+    pub read_only_rootfs: bool,
+    pub tmpfs: bool,
+    pub memory_limit_mb: u32,
+    pub cpu_limit: Option<String>,
+    pub timeout_seconds: u64,
+    pub allowed_tools: Vec<String>,
+    pub allowed_roots: Vec<PathBuf>,
+    pub extra_env_allowlist: Vec<String>,
+}
+
+impl Default for DockerSandboxConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            image: "borgclaw-sandbox:base".to_string(),
+            network: DockerNetworkPolicy::None,
+            workspace_mount: DockerWorkspaceMount::ReadOnly,
+            read_only_rootfs: true,
+            tmpfs: true,
+            memory_limit_mb: 512,
+            cpu_limit: Some("1.0".to_string()),
+            timeout_seconds: 120,
+            allowed_tools: vec!["execute_command".to_string()],
+            allowed_roots: Vec::new(),
+            extra_env_allowlist: vec!["PATH".to_string(), "HOME".to_string()],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DockerNetworkPolicy {
+    #[default]
+    None,
+    Bridge,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DockerWorkspaceMount {
+    #[default]
+    #[serde(rename = "ro")]
+    ReadOnly,
+    #[serde(rename = "rw")]
+    ReadWrite,
+    #[serde(rename = "off")]
+    Off,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -889,6 +964,7 @@ mod config_support {
         pub rate_limit: Option<String>,
         pub heartbeat_interval: Option<String>,
         pub memory: Option<String>,
+        pub security: Option<String>,
     }
 
     impl std::fmt::Display for ValidationError {
@@ -910,6 +986,9 @@ mod config_support {
                 errors.push(msg.clone());
             }
             if let Some(ref msg) = self.memory {
+                errors.push(msg.clone());
+            }
+            if let Some(ref msg) = self.security {
                 errors.push(msg.clone());
             }
             write!(f, "{}", errors.join("; "))
@@ -980,6 +1059,20 @@ mod tests {
             workspace_only = false
             allowed_roots = ["/tmp", "/var/tmp"]
             forbidden_paths = ["secrets", "/etc"]
+
+            [security.docker]
+            enabled = true
+            image = "borgclaw-sandbox:base"
+            network = "bridge"
+            workspace_mount = "rw"
+            read_only_rootfs = true
+            tmpfs = true
+            memory_limit_mb = 768
+            cpu_limit = "1.5"
+            timeout_seconds = 90
+            allowed_tools = ["execute_command"]
+            allowed_roots = ["/tmp"]
+            extra_env_allowlist = ["PATH", "HOME", "LANG"]
             "#,
         )
         .unwrap();
@@ -992,6 +1085,23 @@ mod tests {
         assert_eq!(
             config.security.workspace.forbidden_paths,
             vec![PathBuf::from("secrets"), PathBuf::from("/etc")]
+        );
+        assert!(config.security.docker.enabled);
+        assert_eq!(config.security.docker.image, "borgclaw-sandbox:base");
+        assert_eq!(config.security.docker.network, DockerNetworkPolicy::Bridge);
+        assert_eq!(
+            config.security.docker.workspace_mount,
+            DockerWorkspaceMount::ReadWrite
+        );
+        assert_eq!(config.security.docker.memory_limit_mb, 768);
+        assert_eq!(config.security.docker.cpu_limit.as_deref(), Some("1.5"));
+        assert_eq!(
+            config.security.docker.allowed_roots,
+            vec![PathBuf::from("/tmp")]
+        );
+        assert_eq!(
+            config.security.docker.extra_env_allowlist,
+            vec!["PATH", "HOME", "LANG"]
         );
     }
 
@@ -1275,6 +1385,18 @@ mod tests {
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert!(error.heartbeat_interval.is_some());
+    }
+
+    #[test]
+    fn config_validation_rejects_enabled_docker_without_image() {
+        let mut config = AppConfig::default();
+        config.security.docker.enabled = true;
+        config.security.docker.image.clear();
+
+        let result = config.validate();
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.security.is_some());
     }
 
     #[test]

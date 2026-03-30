@@ -399,8 +399,10 @@ mod tests {
 
     #[test]
     fn configured_embedding_provider_uses_http_provider_when_endpoint_present() {
-        let mut config = MemoryConfig::default();
-        config.embedding_endpoint = Some("http://127.0.0.1:9000/embed".to_string());
+        let config = MemoryConfig {
+            embedding_endpoint: Some("http://127.0.0.1:9000/embed".to_string()),
+            ..Default::default()
+        };
 
         assert!(hybrid_search_runtime_enabled(&config));
     }

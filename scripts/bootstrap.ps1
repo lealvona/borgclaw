@@ -99,8 +99,9 @@ Write-Host ""
 Write-Host "[borgclaw] Memory runtimes:" -ForegroundColor Yellow
 if (Get-Command "docker" -ErrorAction SilentlyContinue) {
     Write-Host "  PostgreSQL + pgvector runtime: .\scripts\install-pgvector.ps1" -ForegroundColor Gray
+    Write-Host "  Docker command sandbox image: .\scripts\install-docker-sandbox.ps1" -ForegroundColor Gray
 } else {
-    Write-Host "  Docker not found; pgvector convenience runtime installer requires Docker" -ForegroundColor Yellow
+    Write-Host "  Docker not found; pgvector and Docker sandbox helper installers require Docker" -ForegroundColor Yellow
 }
 if (Get-Command "ollama" -ErrorAction SilentlyContinue) {
     Write-Host "  ✓ Ollama: Installed" -ForegroundColor Green

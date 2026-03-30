@@ -2,6 +2,10 @@
 
 BorgClaw implements defense-in-depth security with multiple protective layers.
 
+The current sandbox contract has two layers:
+- **WASM sandbox** for plugins and other untrusted extension code
+- **Optional Docker sandbox** for `execute_command` when operators want containerized shell execution
+
 ## Security Layers
 
 ```
@@ -85,6 +89,58 @@ sandbox.register_module("plugin", wasm_bytes).await?;
 
 // Execute with isolation
 let result = sandbox.execute("plugin", "function", input).await?;
+```
+
+## Docker Command Sandbox
+
+### Overview
+
+Docker is an optional shell-execution sandbox. It does not replace the WASM plugin sandbox.
+
+- **Scope**: `execute_command`
+- **Model**: one ephemeral container per command
+- **Defaults**: read-only root filesystem, `tmpfs` `/tmp`, explicit network mode, explicit workspace mount mode
+- **Policy owner**: `SecurityLayer`
+
+### Configuration
+
+```toml
+[security.docker]
+enabled = false
+image = "borgclaw-sandbox:base"
+network = "none"          # "none" or "bridge"
+workspace_mount = "ro"    # "ro", "rw", or "off"
+read_only_rootfs = true
+tmpfs = true
+memory_limit_mb = 512
+cpu_limit = "1.0"
+timeout_seconds = 120
+allowed_tools = ["execute_command"]
+allowed_roots = []
+extra_env_allowlist = ["PATH", "HOME"]
+```
+
+### Runtime Behavior
+
+The Docker path stays inside the existing security pipeline:
+
+1. command blocklist / allowlist
+2. approval gates
+3. workspace policy
+4. Docker invocation construction
+5. execution
+6. leak redaction
+7. audit logging
+
+Docker execution inherits the same workspace policy used by file tools, scheduled work, heartbeat tasks, and sub-agents. Extra bind mounts must still be allowed by the workspace policy.
+
+### Installation
+
+Build the default sandbox image with:
+
+```bash
+./scripts/install-docker-sandbox.sh      # Linux/macOS
+.\scripts\install-docker-sandbox.ps1     # Windows
 ```
 
 ## Secrets Management

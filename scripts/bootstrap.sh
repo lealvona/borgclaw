@@ -115,8 +115,9 @@ echo ""
 echo "[borgclaw] Checking memory runtimes..."
 if command -v docker &> /dev/null; then
     echo "  PostgreSQL + pgvector runtime: ./scripts/install-pgvector.sh"
+    echo "  Docker command sandbox image: ./scripts/install-docker-sandbox.sh"
 else
-    echo "  Docker not found; pgvector convenience runtime installer requires Docker"
+    echo "  Docker not found; pgvector and Docker sandbox helper installers require Docker"
 fi
 
 if command -v ollama &> /dev/null; then

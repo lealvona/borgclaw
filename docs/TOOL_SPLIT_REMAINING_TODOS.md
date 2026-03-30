@@ -2,6 +2,8 @@
 
 > Created: 2026-03-29
 > Resume point after merged tranches for `TICKET-087` and early `TICKET-086`.
+>
+> Historical note: the remaining tranche-5 commit/push/PR boxes and the listed clippy blockers were cleared in later March 29 follow-up work. This file is kept only as the historical execution ledger for the tool split.
 
 ## Current State
 

@@ -22,7 +22,7 @@ On first run, onboarding will:
 3. **Enter API key** - Masked input, stored securely
 4. **Select model** - List fetched from provider API
 5. **Configure channels** - Enable Telegram, Signal, Webhook
-6. **Set security options** - WASM sandbox, injection defense
+6. **Set security options** - WASM sandbox, optional Docker command sandbox, injection defense
 7. **Generate .env** - Environment variables for secrets
 
 ## Subsequent Runs
@@ -55,7 +55,7 @@ cargo run --bin borgclaw -- init --component channel --chapter signal --action d
 
 Available components:
 - `channel` - telegram, signal, webhook, websocket
-- `sandbox` - wasm
+- `sandbox` - wasm, docker
 - `memory` - sqlite, postgres, vector (`vector` is the legacy component chapter for the in-memory mode)
 - `provider` - openai, anthropic, google, ollama
 
@@ -150,6 +150,13 @@ rate_limit_rpm = 50  # Optional override (uses provider defaults if unset)
 wasm_sandbox = true
 prompt_injection_defense = true
 
+[security.docker]
+enabled = false
+image = "borgclaw-sandbox:base"
+network = "none"
+workspace_mount = "ro"
+timeout_seconds = 120
+
 [memory]
 backend = "sqlite"
 hybrid_search = true
@@ -213,3 +220,4 @@ If you leave the embedding endpoint blank during onboarding, PostgreSQL runs in 
 Helper scripts:
 - `./scripts/install-pgvector.sh` or `.\scripts\install-pgvector.ps1` provisions a local pgvector-ready PostgreSQL runtime
 - `./scripts/install-ollama.sh` or `.\scripts\install-ollama.ps1` installs Ollama and pulls a recommended embeddings model
+- `./scripts/install-docker-sandbox.sh` or `.\scripts\install-docker-sandbox.ps1` builds the default Docker command-sandbox image

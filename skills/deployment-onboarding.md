@@ -106,6 +106,13 @@ wasm_sandbox = true           # Enable WASM sandboxing
 command_blocklist = true      # Block dangerous commands
 secrets_encryption = true     # Encrypt stored secrets
 
+[security.docker]
+enabled = false               # Optional Docker sandbox for execute_command
+image = "borgclaw-sandbox:base"
+network = "none"
+workspace_mount = "ro"
+timeout_seconds = 120
+
 [memory]
 backend = "sqlite"
 database_path = ".borgclaw/memory"

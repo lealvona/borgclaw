@@ -35,7 +35,7 @@ Every face absorbs a different capability. Together, they form something greater
 | ⬆️ **Top** | Channels | Telegram, Signal, Webhooks, CLI, WebSocket |
 | ⬇️ **Bottom** | Memory | SQLite, PostgreSQL + pgvector, in-memory, contexts, patterns |
 | ⬅️ **Left** | Skills | GitHub, Google, Browser, STT/TTS, Images |
-| ➡️ **Right** | Security | WASM sandbox, SSRF, vault, injection defense |
+| ➡️ **Right** | Security | WASM sandbox, optional Docker command sandbox, SSRF, vault, injection defense |
 | 🔲 **Front** | Providers | OpenAI, Anthropic, Google, Kimi, MiniMax, Z.ai, Ollama |
 | 🔳 **Back** | Runtime | Scheduler, heartbeat, sub-agents, recovery |
 
@@ -75,7 +75,7 @@ BorgClaw is structured as a hypercube—six faces surrounding a unified core. Ea
 
 **⬅️ Left Face — Skills** extends capability through integrations: GitHub, Google Workspace, browser automation, speech, images, and more. Each skill is a specialized appendage the collective can deploy at will.
 
-**➡️ Right Face — Security** guards every interaction. WASM sandboxing, SSRF protection, secret management, and injection defense form an impermeable barrier around the core.
+**➡️ Right Face — Security** guards every interaction. WASM sandboxing, the optional Docker command sandbox, SSRF protection, secret management, and injection defense form an impermeable barrier around the core.
 
 **🔲 Front Face — Neural Processors** (LLM Providers) powers cognition. OpenAI, Anthropic, Google, Kimi, MiniMax, Z.ai, and Ollama all plug into the same reasoning engine, selectable per task.
 
@@ -140,6 +140,7 @@ Current skill lifecycle status:
 *How the collective protects itself*
 
 - **WASM Sandbox** — Isolated extension execution via wasmtime
+- **Docker Sandbox** — Optional containerized `execute_command` path with explicit image, mount, network, and timeout policy
 - **SSRF Protection** — Blocks localhost, private IPs, internal addresses
 - **Command Blocklist** — Regex-based dangerous command blocking
 - **Pairing Codes** — 6-digit channel authentication
@@ -217,6 +218,7 @@ start http://localhost:3000  # Windows
 ./scripts/doctor.sh                        # Verify all faces
 cargo run --bin borgclaw -- self-test      # Exit 0 on pass
 cargo run --bin borgclaw -- runtime        # Show collective status
+./scripts/install-docker-sandbox.sh        # Build the optional Docker sandbox image
 ```
 
 ### Scheduled Processes
@@ -296,6 +298,13 @@ heartbeat_interval = 30
 [security]
 wasm_sandbox = true
 prompt_injection_defense = true
+
+[security.docker]
+enabled = false
+image = "borgclaw-sandbox:base"
+network = "none"
+workspace_mount = "ro"
+timeout_seconds = 120
 
 [memory]
 hybrid_search = true
