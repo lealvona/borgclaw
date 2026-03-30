@@ -12,7 +12,7 @@ Status note:
 Current BorgClaw disposition of major inspiration items:
 - Implemented and verified in the runtime: provider-backed shared routing, structured gateway auth/events, scheduler/heartbeat/sub-agent persistence and recovery, typed workspace policy, unified approval flow for foreground/background tool execution, explicit memory backend selection with PostgreSQL + pgvector, tool-level retry, system prompt date/time injection, archive-backed skill installs, and the typed optional Docker command sandbox.
 - Implemented and still worth iterating on: the Docker sandbox now covers `execute_command` through typed `security.docker` policy plus local/remote/background context overrides. Separate base and remote images are shipped, though operators can still choose whether to use image overrides in their config.
-- Not yet implemented but explicitly tracked here: structured fallback deliverables for failed/stuck jobs and per-channel proxy settings.
+- Not yet implemented but explicitly tracked here: per-channel proxy settings.
 - Explicitly declined for BorgClaw: AWS Bedrock provider support, Composio integration, and Slack approval UI/buttons.
 
 Use it for two things:
@@ -210,7 +210,7 @@ What BorgClaw should copy:
 - Preserve richer provider transcript artifacts such as reasoning content when tools are involved, instead of flattening every turn to plain text.
 - Keep release and bootstrap paths reproducible and supply-chain-conscious.
 - Consider mem0/OpenMemory-style external memory backend integration with history(), recall_filtered(), store_procedural() patterns.
-- Add structured fallback deliverables for failed/stuck jobs (ZeroClaw pattern).
+- Structured fallback deliverables for failed/stuck jobs are now implemented across persisted scheduler, heartbeat, and sub-agent state, with operator-facing detail output in the CLI.
 
 Best matches for current BorgClaw gaps:
 

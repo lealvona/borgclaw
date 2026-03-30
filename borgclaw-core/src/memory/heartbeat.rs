@@ -156,6 +156,8 @@ pub struct HeartbeatResult {
     pub duration_ms: u64,
     pub timestamp: DateTime<Utc>,
     pub data: Option<serde_json::Value>,
+    #[serde(default)]
+    pub fallback: Option<crate::fallback::FallbackDeliverable>,
 }
 
 impl HeartbeatResult {
@@ -167,17 +169,28 @@ impl HeartbeatResult {
             duration_ms: 0,
             timestamp: Utc::now(),
             data: None,
+            fallback: None,
         }
     }
 
     pub fn failure(task_id: impl Into<String>, message: impl Into<String>) -> Self {
+        let task_id = task_id.into();
+        let message = message.into();
         Self {
-            task_id: task_id.into(),
+            task_id: task_id.clone(),
             success: false,
-            message: message.into(),
+            message: message.clone(),
             duration_ms: 0,
             timestamp: Utc::now(),
             data: None,
+            fallback: Some(
+                crate::fallback::background_failure_deliverable(
+                    "failed",
+                    &format!("heartbeat task {}", task_id),
+                    message,
+                )
+                .with_context("task_id", task_id),
+            ),
         }
     }
 
@@ -195,7 +208,7 @@ impl HeartbeatResult {
 #[derive(Debug, Clone)]
 pub enum HeartbeatEvent {
     TaskTriggered(String),
-    TaskCompleted(String, HeartbeatResult),
+    TaskCompleted(String, Box<HeartbeatResult>),
     TaskFailed(String, String),
     EngineStarted,
     EngineStopped,
@@ -468,7 +481,7 @@ impl HeartbeatEngine {
                     .sender
                     .send(HeartbeatEvent::TaskCompleted(
                         task_id.clone(),
-                        result.clone(),
+                        Box::new(result.clone()),
                     ))
                     .await;
             } else {
@@ -865,6 +878,12 @@ mod tests {
         assert!(!task.enabled);
         assert!(task.next_run.is_none());
         assert!(task.dead_lettered_at.is_some());
+        let fallback = second.fallback.as_ref().unwrap();
+        assert_eq!(fallback.failure_kind, "failed");
+        assert_eq!(
+            fallback.context.get("task_id").map(String::as_str),
+            Some(id.as_str())
+        );
     }
 
     #[tokio::test]

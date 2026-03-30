@@ -12,7 +12,10 @@ Status note:
 - PR 5 (`Memory Query Extensions + External Adapter`) is landed.
 - PR 6 (`Workspace-Layered Memory Privacy`) is landed.
 - PR 7 (`PTY + Background Command Runtime`) is landed.
-- PR 8 (`Docker Sandbox Hardening`) is the active tranche.
+- PR 8 (`Docker Sandbox Hardening`) is landed.
+- PR 9 (`Skills Lifecycle Completion`) is landed.
+- PR 10 (`Gateway + Onboarding Control Plane`) is landed.
+- PR 11 (`Structured Fallback Deliverables`) is the active tranche.
 
 ## Scope Notes
 
@@ -36,8 +39,10 @@ These items remain useful upstream references, but they are not part of BorgClaw
 | 7 | PTY + Background Command Runtime | complete | Extend `execute_command` with PTY/background execution and persisted process state |
 | 8 | Docker Sandbox Hardening | complete | Add split sandbox modes and stricter defaults for remote/background execution |
 | 9 | Skills Lifecycle Completion | complete | Add skill gating, richer discovery/status, and explicit source tiers |
-| 10 | Gateway + Onboarding Control Plane | in progress | Expose all new runtime contracts in onboarding, status, doctor, and gateway surfaces |
-| 11 | Final Audit + Smell Cleanup | pending | Resolve cross-cutting cleanup, fill test gaps, and close the intended backlog |
+| 10 | Gateway + Onboarding Control Plane | complete | Expose all new runtime contracts in onboarding, status, doctor, and gateway surfaces |
+| 11 | Structured Fallback Deliverables | complete | Persist and surface structured fallback guidance for failed or stuck background work |
+| 12 | Per-Channel Proxy Settings | pending | Add documented per-channel proxy configuration and runtime wiring |
+| 13 | Final Audit + Smell Cleanup | pending | Resolve cross-cutting cleanup, fill test gaps, and close the intended backlog |
 
 ## PR 1: Backlog Contract Repair
 
@@ -153,7 +158,31 @@ Required changes:
 Acceptance:
 - Gateway and onboarding expose the full feature surface without introducing a second implementation path.
 
-## PR 11: Final Audit And Cleanup
+## PR 11: Structured Fallback Deliverables
+
+Required changes:
+- Add a structured fallback deliverable type for failed or stuck background work.
+- Persist fallback deliverables in scheduler, heartbeat, and sub-agent state.
+- Surface fallback summaries, suggested actions, and context in operator-facing CLI detail views.
+- Add regression coverage for persisted fallback visibility and failure-state round-trips.
+
+Acceptance:
+- Failed background work produces a machine-readable fallback deliverable instead of only a flat error string.
+- Operators can inspect fallback details through the documented status/detail surfaces.
+
+## PR 12: Per-Channel Proxy Settings
+
+Required changes:
+- Add documented proxy settings to channel config where transport-specific outbound HTTP access exists.
+- Support explicit per-channel `proxy_url` wiring instead of only global process-level proxy behavior.
+- Validate supported proxy schemes and keep backward compatibility for channels without proxy config.
+- Surface proxy readiness in doctor/status output without leaking secrets.
+
+Acceptance:
+- Supported channels can route outbound traffic through explicit per-channel proxy config.
+- The docs and operator surfaces reflect the per-channel proxy contract accurately.
+
+## PR 13: Final Audit And Cleanup
 
 Required changes:
 - Run the full strict verification suite.

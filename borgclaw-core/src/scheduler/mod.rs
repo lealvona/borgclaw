@@ -363,12 +363,27 @@ impl Scheduler {
                                 }
                             }
                         };
+                        let fallback = error.as_ref().map(|message| {
+                            let failure_kind = if message.to_lowercase().contains("timed out") {
+                                "timeout"
+                            } else {
+                                "failed"
+                            };
+                            crate::fallback::background_failure_deliverable(
+                                failure_kind,
+                                &format!("scheduler job {}", stored.name),
+                                message.clone(),
+                            )
+                            .with_context("job_id", stored.id.clone())
+                            .with_context("action", stored.action.clone())
+                        });
                         stored.run_history.push(JobRun {
                             started_at,
                             finished_at,
                             status,
                             error,
                             retry_scheduled,
+                            fallback,
                         });
                         if stored.run_history.len() > 20 {
                             let excess = stored.run_history.len() - 20;
@@ -761,6 +776,12 @@ mod tests {
         assert_eq!(stored.run_history.len(), 2);
         assert_eq!(stored.run_history[0].retry_scheduled, Some(1));
         assert!(stored.run_history[1].retry_scheduled.is_none());
+        let fallback = stored.run_history[1].fallback.as_ref().unwrap();
+        assert_eq!(fallback.failure_kind, "failed");
+        assert_eq!(
+            fallback.context.get("job_id").map(String::as_str),
+            Some(id.as_str())
+        );
     }
 
     #[tokio::test]

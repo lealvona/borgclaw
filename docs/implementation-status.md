@@ -111,7 +111,7 @@ Audit note:
 
 ## Temporary Limitations
 
-- Inspiration backlog still open by design: structured fallback deliverables for failed/stuck jobs and per-channel proxy settings.
+- Inspiration backlog still open by design: per-channel proxy settings.
 - Explicitly declined and not planned: AWS Bedrock provider support, Composio integration, and Slack approval UI/buttons.
 - The repo treats the remaining items as tracked follow-up features, not as implemented functionality. See [inspirations.md](inspirations.md) and [IMPLEMENTATION_PLAN_2026-03-30_REMAINING_BACKLOG](IMPLEMENTATION_PLAN_2026-03-30_REMAINING_BACKLOG.md) for the execution backlog.
 

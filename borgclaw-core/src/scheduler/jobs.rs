@@ -72,6 +72,9 @@ pub struct JobRun {
     pub error: Option<String>,
     /// Retry number scheduled after this run when present
     pub retry_scheduled: Option<u32>,
+    /// Structured operator-facing fallback deliverable for failed/stuck work
+    #[serde(default)]
+    pub fallback: Option<crate::fallback::FallbackDeliverable>,
 }
 
 /// Job trigger types
@@ -286,6 +289,7 @@ mod tests {
             status: JobStatus::Completed,
             error: None,
             retry_scheduled: None,
+            fallback: None,
         };
 
         assert_eq!(run.status, JobStatus::Completed);
@@ -302,6 +306,7 @@ mod tests {
             status: JobStatus::Failed,
             error: Some("Connection timeout".to_string()),
             retry_scheduled: Some(1),
+            fallback: None,
         };
 
         assert_eq!(run.status, JobStatus::Failed);

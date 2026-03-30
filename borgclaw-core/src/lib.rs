@@ -7,6 +7,7 @@ pub mod agent;
 pub mod channel;
 pub mod config;
 pub mod constants;
+pub mod fallback;
 pub mod mcp;
 pub mod memory;
 pub mod scheduler;
@@ -18,6 +19,7 @@ pub use constants::*;
 pub use agent::{builtin_tools, Agent, AgentEvent, SimpleAgent, Tool, ToolResult};
 pub use channel::{Channel, ChannelSender};
 pub use config::{AppConfig, ChannelConfig, SecurityConfig};
+pub use fallback::FallbackDeliverable;
 pub use memory::{Memory, MemoryEntry};
 pub use scheduler::{Job, Scheduler, SchedulerTrait};
 pub use security::{
