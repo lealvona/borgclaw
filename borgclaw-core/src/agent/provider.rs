@@ -1,4 +1,4 @@
-use super::session::{Message, MessageRole};
+use super::session::{Message, MessageRole, TranscriptArtifacts};
 use crate::{
     config::{AgentConfig, SecurityConfig},
     security::SecurityLayer,
@@ -38,9 +38,37 @@ pub struct ProviderRequest {
     pub messages: Vec<ChatMessage>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProviderResponse {
+    pub text: String,
+    #[serde(default)]
+    pub artifacts: TranscriptArtifacts,
+}
+
+impl ProviderResponse {
+    pub fn text(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            artifacts: TranscriptArtifacts::default(),
+        }
+    }
+
+    fn from_text_with_think_blocks(text: String, provider_name: &'static str) -> Self {
+        let mut provider_metadata = std::collections::HashMap::new();
+        provider_metadata.insert("provider".to_string(), provider_name.to_string());
+        Self {
+            artifacts: TranscriptArtifacts {
+                reasoning: extract_think_blocks(&text),
+                provider_metadata,
+            },
+            text,
+        }
+    }
+}
+
 #[async_trait]
 pub trait ChatProvider: Send + Sync {
-    async fn complete(&self, request: &ProviderRequest) -> Result<String, ProviderError>;
+    async fn complete(&self, request: &ProviderRequest) -> Result<ProviderResponse, ProviderError>;
 }
 
 struct RateLimitedProvider {
@@ -83,7 +111,7 @@ impl RateLimiter {
 
 #[async_trait]
 impl ChatProvider for RateLimitedProvider {
-    async fn complete(&self, request: &ProviderRequest) -> Result<String, ProviderError> {
+    async fn complete(&self, request: &ProviderRequest) -> Result<ProviderResponse, ProviderError> {
         const MAX_RETRIES: u32 = 3;
         let mut backoff_ms = 1000;
 
@@ -188,7 +216,7 @@ impl OpenAiProvider {
 
 #[async_trait]
 impl ChatProvider for OpenAiProvider {
-    async fn complete(&self, request: &ProviderRequest) -> Result<String, ProviderError> {
+    async fn complete(&self, request: &ProviderRequest) -> Result<ProviderResponse, ProviderError> {
         #[derive(Serialize)]
         struct Body<'a> {
             model: &'a str,
@@ -247,7 +275,7 @@ impl ChatProvider for OpenAiProvider {
         body.choices
             .into_iter()
             .next()
-            .map(|choice| choice.message.content)
+            .map(|choice| ProviderResponse::text(choice.message.content))
             .ok_or_else(|| ProviderError::Parse("missing choice".to_string()))
     }
 }
@@ -271,7 +299,7 @@ impl AnthropicProvider {
 
 #[async_trait]
 impl ChatProvider for AnthropicProvider {
-    async fn complete(&self, request: &ProviderRequest) -> Result<String, ProviderError> {
+    async fn complete(&self, request: &ProviderRequest) -> Result<ProviderResponse, ProviderError> {
         #[derive(Serialize)]
         struct Body<'a> {
             model: &'a str,
@@ -364,7 +392,7 @@ impl ChatProvider for AnthropicProvider {
         if text.is_empty() {
             Err(ProviderError::Parse("missing text block".to_string()))
         } else {
-            Ok(text)
+            Ok(ProviderResponse::text(text))
         }
     }
 }
@@ -426,7 +454,7 @@ async fn resolve_provider_secret(
 
 #[async_trait]
 impl ChatProvider for GoogleProvider {
-    async fn complete(&self, request: &ProviderRequest) -> Result<String, ProviderError> {
+    async fn complete(&self, request: &ProviderRequest) -> Result<ProviderResponse, ProviderError> {
         #[derive(Serialize)]
         struct Body<'a> {
             contents: Vec<Content<'a>>,
@@ -546,15 +574,17 @@ impl ChatProvider for GoogleProvider {
         body.candidates
             .and_then(|candidates| candidates.into_iter().next())
             .map(|candidate| {
-                candidate
-                    .content
-                    .parts
-                    .into_iter()
-                    .filter_map(|part| part.text)
-                    .collect::<Vec<_>>()
-                    .join("\n")
+                ProviderResponse::text(
+                    candidate
+                        .content
+                        .parts
+                        .into_iter()
+                        .filter_map(|part| part.text)
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                )
             })
-            .filter(|text| !text.is_empty())
+            .filter(|response| !response.text.is_empty())
             .ok_or_else(|| ProviderError::Parse("missing candidate text".to_string()))
     }
 }
@@ -576,7 +606,7 @@ impl Default for OllamaProvider {
 
 #[async_trait]
 impl ChatProvider for OllamaProvider {
-    async fn complete(&self, request: &ProviderRequest) -> Result<String, ProviderError> {
+    async fn complete(&self, request: &ProviderRequest) -> Result<ProviderResponse, ProviderError> {
         #[derive(Serialize)]
         struct Body<'a> {
             model: &'a str,
@@ -638,7 +668,7 @@ impl ChatProvider for OllamaProvider {
             .await
             .map_err(|e| ProviderError::Parse(e.to_string()))?;
 
-        Ok(body.message.content)
+        Ok(ProviderResponse::text(body.message.content))
     }
 }
 
@@ -714,7 +744,10 @@ macro_rules! openai_compatible_provider {
 
         #[async_trait]
         impl ChatProvider for $name {
-            async fn complete(&self, request: &ProviderRequest) -> Result<String, ProviderError> {
+            async fn complete(
+                &self,
+                request: &ProviderRequest,
+            ) -> Result<ProviderResponse, ProviderError> {
                 tracing::info!(
                     "{} request: model={}, temperature={}, max_tokens={}",
                     stringify!($name),
@@ -774,7 +807,12 @@ macro_rules! openai_compatible_provider {
                 body.choices
                     .into_iter()
                     .next()
-                    .map(|choice| choice.message.content)
+                    .map(|choice| {
+                        ProviderResponse::from_text_with_think_blocks(
+                            choice.message.content,
+                            stringify!($name),
+                        )
+                    })
                     .ok_or_else(|| ProviderError::Parse("missing choice".to_string()))
             }
         }
@@ -796,6 +834,29 @@ openai_compatible_provider!(
 );
 openai_compatible_provider!(ZProvider, "Z_API_KEY", "https://api.z.ai/api/paas/v4", None);
 
+fn extract_think_blocks(text: &str) -> Option<String> {
+    let mut cursor = text;
+    let mut blocks = Vec::new();
+
+    while let Some(start) = cursor.find("<think>") {
+        let after_start = &cursor[start + "<think>".len()..];
+        let Some(end) = after_start.find("</think>") else {
+            break;
+        };
+        let segment = after_start[..end].trim();
+        if !segment.is_empty() {
+            blocks.push(segment.to_string());
+        }
+        cursor = &after_start[end + "</think>".len()..];
+    }
+
+    if blocks.is_empty() {
+        None
+    } else {
+        Some(blocks.join("\n\n"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -810,6 +871,7 @@ mod tests {
             content: "hello".to_string(),
             timestamp: chrono::Utc::now(),
             tool_calls: Vec::new(),
+            artifacts: TranscriptArtifacts::default(),
         };
 
         let chat = ChatMessage::from(&message);
@@ -914,6 +976,25 @@ mod tests {
         assert_eq!(
             body["messages"][1]["content"],
             "<think>reasoning</think>Hello"
+        );
+    }
+
+    #[test]
+    fn provider_response_extracts_think_blocks_into_artifacts() {
+        let response = ProviderResponse::from_text_with_think_blocks(
+            "<think>internal</think>Visible".to_string(),
+            "MiniMaxProvider",
+        );
+
+        assert_eq!(response.text, "<think>internal</think>Visible");
+        assert_eq!(response.artifacts.reasoning.as_deref(), Some("internal"));
+        assert_eq!(
+            response
+                .artifacts
+                .provider_metadata
+                .get("provider")
+                .map(String::as_str),
+            Some("MiniMaxProvider")
         );
     }
 }

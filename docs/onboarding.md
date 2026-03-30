@@ -146,6 +146,7 @@ Provider credentials do not need to live in `config.toml`. BorgClaw stores provi
 model = "claude-sonnet-4-20250514"
 provider = "anthropic"
 provider_profile = "anthropic-default"
+identity_format = "markdown"
 workspace = ".borgclaw/workspace"
 heartbeat_interval = 30
 rate_limit_rpm = 50  # Optional override (uses provider defaults if unset)
@@ -224,6 +225,35 @@ borgclaw providers delete openai-work
 ```
 
 Provider profiles are stored in the encrypted secret store, not as plaintext API keys in `config.toml`.
+
+## Identity Documents
+
+BorgClaw supports two identity-document formats for `agent.soul_path`:
+
+- `markdown` for the existing raw prompt-file contract
+- `aieos` for structured JSON identity documents
+
+Representative AIEOS config:
+
+```toml
+[agent]
+soul_path = "IDENTITY.json"
+identity_format = "aieos"
+```
+
+Representative AIEOS file:
+
+```json
+{
+  "name": "BorgClaw Unit",
+  "role": "Precision operator",
+  "summary": "You coordinate complex work.",
+  "instructions": ["Stay concise", "Use tools only when needed"],
+  "guardrails": ["Do not leak secrets"]
+}
+```
+
+If `identity_format = "auto"`, BorgClaw treats `.json` identity files as AIEOS and other files as markdown.
 
 ## Memory Backends
 

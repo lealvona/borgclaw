@@ -139,6 +139,8 @@ pub struct AgentConfig {
     pub provider: String,
     /// Optional named provider profile selection
     pub provider_profile: Option<String>,
+    /// Identity document format for `soul_path`
+    pub identity_format: IdentityFormat,
     /// Max tokens per response
     pub max_tokens: u32,
     /// Temperature setting
@@ -159,6 +161,7 @@ impl Default for AgentConfig {
             model: "claude-sonnet-4-20250514".to_string(),
             provider: "anthropic".to_string(),
             provider_profile: None,
+            identity_format: IdentityFormat::Auto,
             max_tokens: 4096,
             temperature: 0.7,
             soul_path: None,
@@ -167,6 +170,15 @@ impl Default for AgentConfig {
             rate_limit_rpm: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum IdentityFormat {
+    #[default]
+    Auto,
+    Markdown,
+    Aieos,
 }
 
 /// Channel configuration
@@ -1486,6 +1498,7 @@ mod tests {
             [agent]
             provider = "minimax"
             provider_profile = "work"
+            identity_format = "aieos"
             model = "MiniMax-M2.7"
             max_tokens = 4096
             temperature = 0.7
@@ -1495,6 +1508,7 @@ mod tests {
 
         assert_eq!(config.agent.provider, "minimax");
         assert_eq!(config.agent.provider_profile.as_deref(), Some("work"));
+        assert_eq!(config.agent.identity_format, IdentityFormat::Aieos);
         assert_eq!(config.agent.model, "MiniMax-M2.7");
         assert_eq!(config.agent.max_tokens, 4096);
         assert_eq!(config.agent.temperature, 0.7);

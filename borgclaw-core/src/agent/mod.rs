@@ -1,12 +1,14 @@
 //! Agent core module - handles agent loop, tools, and session management
 
+mod identity;
 mod provider;
 mod session;
 mod subagent;
 mod tools;
 
-pub use provider::{ChatMessage, ChatProvider, ProviderFactory, ProviderRequest};
-pub use session::{Message, MessageRole, Session, SessionId};
+use identity::IdentityLoader;
+pub use provider::{ChatMessage, ChatProvider, ProviderFactory, ProviderRequest, ProviderResponse};
+pub use session::{Message, MessageRole, Session, SessionId, TranscriptArtifacts};
 pub use subagent::{
     MemoryAccessType, SubAgentBuilder, SubAgentCoordinator, SubAgentError, SubAgentResult,
     SubAgentStatus, SubAgentTask, TaskPriority, TaskStatus,
@@ -198,11 +200,8 @@ impl SimpleAgent {
     /// 4. Current time
     fn system_prompt(&self) -> String {
         // Get base prompt from file if available, otherwise use default
-        let base_identity = if let Some(path) = self.config.soul_path.as_ref() {
-            std::fs::read_to_string(path).unwrap_or_else(|_| self.default_identity())
-        } else {
-            self.default_identity()
-        };
+        let default_identity = self.default_identity();
+        let base_identity = IdentityLoader::load(&self.config, &default_identity);
 
         // Build tools section
         let tools_section = self.build_tools_section();
@@ -397,6 +396,7 @@ You are autonomous, helpful, and capable of complex multi-step tasks.",
         provider
             .complete(&request)
             .await
+            .map(|response| response.text)
             .map_err(|e| AgentError::ProviderError(e.to_string()))
     }
 
@@ -428,10 +428,11 @@ You are autonomous, helpful, and capable of complex multi-step tasks.",
 
             // Get response from provider
             let provider = self.ensure_provider().await?;
-            let response_text = provider
+            let response = provider
                 .complete(&request)
                 .await
                 .map_err(|e| AgentError::ProviderError(e.to_string()))?;
+            let response_text = response.text.clone();
 
             // Check if response contains tool commands
             if let Some(tool_call) = parse_tool_command(&response_text, &self.tools) {
@@ -445,6 +446,7 @@ You are autonomous, helpful, and capable of complex multi-step tasks.",
                     self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
                 session.add_message(
                     Message::assistant(response_text.clone())
+                        .with_artifacts(response.artifacts.clone())
                         .with_tool_call(tool_call.clone().with_result(tool_result.clone())),
                 );
 
@@ -463,7 +465,9 @@ You are autonomous, helpful, and capable of complex multi-step tasks.",
                 // No tool call, this is the final response
                 let session =
                     self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
-                session.add_message(Message::assistant(response_text.clone()));
+                session.add_message(
+                    Message::assistant(response_text.clone()).with_artifacts(response.artifacts),
+                );
 
                 return Ok(AgentResponse {
                     text: response_text,
@@ -830,6 +834,50 @@ mod tests {
         // Should fall back to default identity
         assert!(prompt.contains("BorgClaw"));
         assert!(prompt.contains("AVAILABLE TOOLS"));
+    }
+
+    #[test]
+    fn system_prompt_supports_aieos_identity_documents() {
+        use crate::config::AgentConfig;
+        use crate::config::{
+            IdentityFormat, McpConfig, MemoryConfig, SecurityConfig, SkillsConfig,
+        };
+
+        let temp_dir = std::env::temp_dir().join(format!("borgclaw_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let soul_path = temp_dir.join("identity.json");
+        std::fs::write(
+            &soul_path,
+            r#"{
+                "name": "BorgClaw Unit",
+                "role": "Precision operator",
+                "instructions": ["Stay concise", "Use tools only when needed"]
+            }"#,
+        )
+        .unwrap();
+
+        let config = AgentConfig {
+            soul_path: Some(soul_path),
+            identity_format: IdentityFormat::Aieos,
+            ..Default::default()
+        };
+
+        let agent = SimpleAgent::new(
+            config,
+            Some(MemoryConfig::default()),
+            None,
+            None,
+            Some(SkillsConfig::default()),
+            Some(McpConfig::default()),
+            Some(SecurityConfig::default()),
+        );
+        let prompt = agent.system_prompt();
+
+        assert!(prompt.contains("Identity: BorgClaw Unit"));
+        assert!(prompt.contains("Role: Precision operator"));
+        assert!(prompt.contains("- Stay concise"));
+
+        let _ = std::fs::remove_dir_all(temp_dir);
     }
 
     #[test]

@@ -17,6 +17,7 @@ Audit note:
 | Area | Status | Notes |
 |---|---|---|
 | Provider-backed agent runtime | `complete` | Shared routed provider execution is landed, including encrypted named provider profile selection through `agent.provider_profile`. |
+| Identity formats + transcript artifacts | `complete` | Markdown and AIEOS identity documents are supported, and assistant session messages can preserve structured reasoning/provider artifacts without changing visible channel text. |
 | Shared channel routing | `complete` | CLI, gateway, webhook, and channel policy flow through the shared router. |
 | WebSocket gateway auth/events | `complete` | Auth, pairing, error, heartbeat, and control-plane events are implemented. |
 | Memory backends + group isolation | `complete` | SQLite, PostgreSQL + pgvector, and in-memory backends share metadata round-trip, isolation, recall, and compaction-facing runtime integration. |
@@ -106,7 +107,7 @@ Audit note:
 
 ## Temporary Limitations
 
-- Inspiration backlog still open by design: multiple identity formats, richer reasoning/transcript artifact preservation, mem0/OpenMemory-style external memory integration, structured fallback deliverables for failed/stuck jobs, per-channel proxy settings, time-range memory recall filters, PTY/background exec tooling, workspace-layered privacy memory, and broader managed skills lifecycle.
+- Inspiration backlog still open by design: mem0/OpenMemory-style external memory integration, structured fallback deliverables for failed/stuck jobs, per-channel proxy settings, time-range memory recall filters, PTY/background exec tooling, workspace-layered privacy memory, and broader managed skills lifecycle.
 - Docker sandbox v1 is complete for `execute_command`, but follow-on hardening from the inspiration set remains open: split sandbox images by execution context and stricter default isolation for higher-risk remote/background command execution.
 - Explicitly declined and not planned: AWS Bedrock provider support, Composio integration, and Slack approval UI/buttons.
 - The repo treats the remaining items as tracked follow-up features, not as implemented functionality. See [inspirations.md](inspirations.md) and [IMPLEMENTATION_PLAN_2026-03-30_REMAINING_BACKLOG](IMPLEMENTATION_PLAN_2026-03-30_REMAINING_BACKLOG.md) for the execution backlog.
