@@ -463,8 +463,9 @@ You are autonomous, helpful, and capable of complex multi-step tasks.",
                 continue;
             } else {
                 // No tool call, this is the final response
-                // Strip <think> blocks from text for user display (preserved in artifacts)
+                // Strip <think> and tool call blocks from text for user display
                 let clean_text = strip_think_blocks(&response_text);
+                let clean_text = strip_tool_call_blocks(&clean_text);
                 let session =
                     self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
                 session.add_message(
@@ -666,6 +667,61 @@ fn strip_think_blocks(text: &str) -> String {
 
     // Add any remaining content after the last think block
     result.push_str(cursor);
+
+    // Trim leading/trailing whitespace that may result from removal
+    result.trim().to_string()
+}
+
+/// Strip tool call blocks from text.
+/// Removes <tool_call>...</tool_call>, <minimax:tool_call>...</minimax:tool_call>,
+/// and [TOOL_CALL]...[/TOOL_CALL] blocks.
+fn strip_tool_call_blocks(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut cursor = text;
+    
+    // Handle XML tags and [TOOL_CALL] variants
+    let patterns = [
+        ("<tool_call>", "</tool_call>"), 
+        ("<minimax:tool_call>", "</minimax:tool_call>"),
+        ("[TOOL_CALL]", "[/TOOL_CALL]")
+    ];
+
+    'outer: while !cursor.is_empty() {
+        // Find the earliest opening tag
+        let mut earliest_start = None;
+        let mut earliest_end_tag = "";
+        
+        for (open_tag, close_tag) in &patterns {
+            if let Some(pos) = cursor.find(open_tag) {
+                if earliest_start.map_or(true, |earliest| pos < earliest) {
+                    earliest_start = Some(pos);
+                    earliest_end_tag = close_tag;
+                }
+            }
+        }
+        
+        match earliest_start {
+            Some(start) => {
+                // Add content before the tool call block
+                result.push_str(&cursor[..start]);
+                
+                // Find the end of the tool call block
+                let after_start = &cursor[start..];
+                if let Some(end) = after_start.find(earliest_end_tag) {
+                    // Skip the entire tool call block including tags
+                    cursor = &after_start[end + earliest_end_tag.len()..];
+                } else {
+                    // No closing tag found, stop processing
+                    break 'outer;
+                }
+            }
+            None => {
+                // No more tool call blocks found
+                result.push_str(cursor);
+                break;
+            }
+        }
+    }
 
     // Trim leading/trailing whitespace that may result from removal
     result.trim().to_string()
@@ -990,5 +1046,35 @@ mod tests {
     fn strip_think_blocks_preserves_whitespace_outside() {
         let text = "  <think>thinking</think>  response  ";
         assert_eq!(strip_think_blocks(text), "response");
+    }
+
+    #[test]
+    fn strip_tool_call_blocks_removes_xml_wrappers() {
+        let text = "<tool_call>\n- /read_file {\"path\": \"test.txt\"}\n</tool_call>\nHere is the file content";
+        assert_eq!(strip_tool_call_blocks(text), "Here is the file content");
+    }
+
+    #[test]
+    fn strip_tool_call_blocks_removes_minimax_wrappers() {
+        let text = "<minimax:tool_call>\n- /list_directory {\"path\": \".\"}\n</minimax:tool_call>\nDirectory listing:";
+        assert_eq!(strip_tool_call_blocks(text), "Directory listing:");
+    }
+
+    #[test]
+    fn strip_tool_call_blocks_handles_multiple() {
+        let text = "<tool_call>/tool1 {}</tool_call>Result 1<minimax:tool_call>/tool2 {}</minimax:tool_call>Result 2";
+        assert_eq!(strip_tool_call_blocks(text), "Result 1Result 2");
+    }
+
+    #[test]
+    fn strip_tool_call_blocks_handles_no_blocks() {
+        let text = "Just a normal response";
+        assert_eq!(strip_tool_call_blocks(text), text);
+    }
+
+    #[test]
+    fn strip_tool_call_blocks_removes_bracket_wrappers() {
+        let text = "[TOOL_CALL]\n{tool => \"execute_command\", args => {}}\n[/TOOL_CALL]\nCommand executed successfully";
+        assert_eq!(strip_tool_call_blocks(text), "Command executed successfully");
     }
 }

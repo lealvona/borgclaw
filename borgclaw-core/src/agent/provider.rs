@@ -200,6 +200,7 @@ pub enum ProviderError {
 struct OpenAiProvider {
     api_key: String,
     http: reqwest::Client,
+    base_url: String,
 }
 
 impl OpenAiProvider {
@@ -210,7 +211,16 @@ impl OpenAiProvider {
         Ok(Self {
             api_key: resolve_provider_secret(agent, config, "OPENAI_API_KEY").await?,
             http: reqwest::Client::new(),
+            base_url: Self::resolve_base_url(),
         })
+    }
+
+    fn resolve_base_url() -> String {
+        std::env::var("OPENAI_API_BASE")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| "https://api.openai.com/v1".to_string())
     }
 }
 
@@ -240,9 +250,10 @@ impl ChatProvider for OpenAiProvider {
             content: String,
         }
 
+        let url = format!("{}/chat/completions", self.base_url);
         let response = self
             .http
-            .post("https://api.openai.com/v1/chat/completions")
+            .post(&url)
             .bearer_auth(&self.api_key)
             .json(&Body {
                 model: &request.model,
@@ -275,7 +286,12 @@ impl ChatProvider for OpenAiProvider {
         body.choices
             .into_iter()
             .next()
-            .map(|choice| ProviderResponse::text(choice.message.content))
+            .map(|choice| {
+                ProviderResponse::from_text_with_think_blocks(
+                    choice.message.content,
+                    "openai",
+                )
+            })
             .ok_or_else(|| ProviderError::Parse("missing choice".to_string()))
     }
 }
@@ -283,6 +299,7 @@ impl ChatProvider for OpenAiProvider {
 struct AnthropicProvider {
     api_key: String,
     http: reqwest::Client,
+    base_url: String,
 }
 
 impl AnthropicProvider {
@@ -293,7 +310,16 @@ impl AnthropicProvider {
         Ok(Self {
             api_key: resolve_provider_secret(agent, config, "ANTHROPIC_API_KEY").await?,
             http: reqwest::Client::new(),
+            base_url: Self::resolve_base_url(),
         })
+    }
+
+    fn resolve_base_url() -> String {
+        std::env::var("ANTHROPIC_API_BASE")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| "https://api.anthropic.com/v1".to_string())
     }
 }
 
@@ -347,9 +373,10 @@ impl ChatProvider for AnthropicProvider {
             ));
         }
 
+        let url = format!("{}/messages", self.base_url);
         let response = self
             .http
-            .post("https://api.anthropic.com/v1/messages")
+            .post(&url)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
             .json(&Body {
@@ -392,7 +419,10 @@ impl ChatProvider for AnthropicProvider {
         if text.is_empty() {
             Err(ProviderError::Parse("missing text block".to_string()))
         } else {
-            Ok(ProviderResponse::text(text))
+            Ok(ProviderResponse::from_text_with_think_blocks(
+                text,
+                "anthropic",
+            ))
         }
     }
 }
@@ -400,6 +430,7 @@ impl ChatProvider for AnthropicProvider {
 struct GoogleProvider {
     api_key: String,
     http: reqwest::Client,
+    base_url: String,
 }
 
 impl GoogleProvider {
@@ -410,7 +441,16 @@ impl GoogleProvider {
         Ok(Self {
             api_key: resolve_provider_secret(agent, config, "GOOGLE_API_KEY").await?,
             http: reqwest::Client::new(),
+            base_url: Self::resolve_base_url(),
         })
+    }
+
+    fn resolve_base_url() -> String {
+        std::env::var("GOOGLE_API_BASE")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| "https://generativelanguage.googleapis.com/v1beta".to_string())
     }
 }
 
@@ -527,13 +567,13 @@ impl ChatProvider for GoogleProvider {
         }
 
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-            request.model, self.api_key
+            "{}/models/{}:generateContent?key={}",
+            self.base_url, request.model, self.api_key
         );
 
         let response = self
             .http
-            .post(url)
+            .post(&url)
             .json(&Body {
                 contents,
                 generation_config: GenerationConfig {
@@ -571,21 +611,25 @@ impl ChatProvider for GoogleProvider {
             .await
             .map_err(|e| ProviderError::Parse(e.to_string()))?;
 
-        body.candidates
+        let text = body
+            .candidates
             .and_then(|candidates| candidates.into_iter().next())
             .map(|candidate| {
-                ProviderResponse::text(
-                    candidate
-                        .content
-                        .parts
-                        .into_iter()
-                        .filter_map(|part| part.text)
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                )
+                candidate
+                    .content
+                    .parts
+                    .into_iter()
+                    .filter_map(|part| part.text)
+                    .collect::<Vec<_>>()
+                    .join("\n")
             })
-            .filter(|response| !response.text.is_empty())
-            .ok_or_else(|| ProviderError::Parse("missing candidate text".to_string()))
+            .filter(|text| !text.is_empty())
+            .ok_or_else(|| ProviderError::Parse("missing candidate text".to_string()))?;
+
+        Ok(ProviderResponse::from_text_with_think_blocks(
+            text,
+            "google",
+        ))
     }
 }
 
@@ -598,9 +642,20 @@ impl Default for OllamaProvider {
     fn default() -> Self {
         Self {
             http: reqwest::Client::new(),
-            base_url: std::env::var("OLLAMA_BASE_URL")
-                .unwrap_or_else(|_| "http://localhost:11434".to_string()),
+            base_url: Self::resolve_base_url(),
         }
+    }
+}
+
+impl OllamaProvider {
+    fn resolve_base_url() -> String {
+        // Prefer OLLAMA_API_BASE for consistency, fall back to OLLAMA_BASE_URL for backward compat
+        std::env::var("OLLAMA_API_BASE")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| std::env::var("OLLAMA_BASE_URL").ok().filter(|s| !s.is_empty()))
+            .map(|s| s.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| "http://localhost:11434".to_string())
     }
 }
 
@@ -668,7 +723,10 @@ impl ChatProvider for OllamaProvider {
             .await
             .map_err(|e| ProviderError::Parse(e.to_string()))?;
 
-        Ok(ProviderResponse::text(body.message.content))
+        Ok(ProviderResponse::from_text_with_think_blocks(
+            body.message.content,
+            "ollama",
+        ))
     }
 }
 
@@ -1187,6 +1245,66 @@ mod tests {
                 .get("provider")
                 .map(String::as_str),
             Some("MiniMaxProvider")
+        );
+    }
+
+    #[test]
+    fn all_providers_support_api_base_env_var() {
+        // Verify all providers have consistent API base URL resolution pattern
+        // OpenAI
+        std::env::set_var("OPENAI_API_BASE", "https://custom.openai.com/v1");
+        assert_eq!(
+            OpenAiProvider::resolve_base_url(),
+            "https://custom.openai.com/v1"
+        );
+        std::env::remove_var("OPENAI_API_BASE");
+        assert_eq!(
+            OpenAiProvider::resolve_base_url(),
+            "https://api.openai.com/v1"
+        );
+
+        // Anthropic
+        std::env::set_var("ANTHROPIC_API_BASE", "https://custom.anthropic.com/v1");
+        assert_eq!(
+            AnthropicProvider::resolve_base_url(),
+            "https://custom.anthropic.com/v1"
+        );
+        std::env::remove_var("ANTHROPIC_API_BASE");
+        assert_eq!(
+            AnthropicProvider::resolve_base_url(),
+            "https://api.anthropic.com/v1"
+        );
+
+        // Google
+        std::env::set_var("GOOGLE_API_BASE", "https://custom.google.com/v1");
+        assert_eq!(
+            GoogleProvider::resolve_base_url(),
+            "https://custom.google.com/v1"
+        );
+        std::env::remove_var("GOOGLE_API_BASE");
+        assert_eq!(
+            GoogleProvider::resolve_base_url(),
+            "https://generativelanguage.googleapis.com/v1beta"
+        );
+
+        // Ollama (supports both OLLAMA_API_BASE and OLLAMA_BASE_URL)
+        std::env::set_var("OLLAMA_API_BASE", "http://custom.ollama:11434");
+        assert_eq!(
+            OllamaProvider::resolve_base_url(),
+            "http://custom.ollama:11434"
+        );
+        std::env::remove_var("OLLAMA_API_BASE");
+        
+        std::env::set_var("OLLAMA_BASE_URL", "http://fallback.ollama:11434");
+        assert_eq!(
+            OllamaProvider::resolve_base_url(),
+            "http://fallback.ollama:11434"
+        );
+        std::env::remove_var("OLLAMA_BASE_URL");
+        
+        assert_eq!(
+            OllamaProvider::resolve_base_url(),
+            "http://localhost:11434"
         );
     }
 }
