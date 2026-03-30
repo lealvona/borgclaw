@@ -20,7 +20,10 @@ function Test-Tool {
             "rustc" { rustc --version 2>$null }
             "cargo" { cargo --version 2>$null }
             "node" { node --version 2>$null }
+            "docker" { docker --version 2>$null }
             "git" { git --version 2>$null }
+            "psql" { psql --version 2>$null }
+            "ollama" { ollama --version 2>$null }
             "bw" { (bw --version 2>$null | Select-Object -First 1) }
             "op" { op --version 2>$null }
             "signal-cli" { signal-cli --version 2>$null }
@@ -62,6 +65,9 @@ if (-not (Test-Tool "git" "Git version control" $true)) { $errors++ }
 Write-Host ""
 Write-Host "=== Optional Tools ===" -ForegroundColor White
 Test-Tool "node" "Node.js (for Playwright)" | Out-Null
+Test-Tool "docker" "Docker (for pgvector runtime)" | Out-Null
+Test-Tool "psql" "PostgreSQL client" | Out-Null
+Test-Tool "ollama" "Ollama (embeddings runtime)" | Out-Null
 Test-Tool "signal-cli" "Signal CLI (for Signal channel)" | Out-Null
 Test-Tool "bw" "Bitwarden CLI (vault)" | Out-Null
 Test-Tool "op" "1Password CLI (vault)" | Out-Null
@@ -110,6 +116,18 @@ if (Test-Path ".local\tools\whisper.cpp") {
     Write-Host "✓ whisper.cpp: installed" -ForegroundColor Green
 } else {
     Write-Host "○ whisper.cpp: not installed (run .\scripts\install-whisper.ps1)" -ForegroundColor Yellow
+}
+
+if (Get-Command "docker" -ErrorAction SilentlyContinue) {
+    Write-Host "✓ pgvector runtime installer available (run .\scripts\install-pgvector.ps1)" -ForegroundColor Green
+} else {
+    Write-Host "○ pgvector runtime not installable via helper script until Docker is available" -ForegroundColor Yellow
+}
+
+if (Get-Command "ollama" -ErrorAction SilentlyContinue) {
+    Write-Host "✓ Ollama embeddings runtime: installed" -ForegroundColor Green
+} else {
+    Write-Host "○ Ollama embeddings runtime: not installed (run .\scripts\install-ollama.ps1)" -ForegroundColor Yellow
 }
 
 Write-Host ""

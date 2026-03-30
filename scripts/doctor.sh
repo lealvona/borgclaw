@@ -19,7 +19,10 @@ check_command() {
             rustc) version="$(rustc --version 2>/dev/null || echo 'unknown')" ;;
             cargo) version="$(cargo --version 2>/dev/null || echo 'unknown')" ;;
             node) version="$(node --version 2>/dev/null || echo 'unknown')" ;;
+            docker) version="$(docker --version 2>/dev/null || echo 'unknown')" ;;
             git) version="$(git --version 2>/dev/null || echo 'unknown')" ;;
+            psql) version="$(psql --version 2>/dev/null || echo 'unknown')" ;;
+            ollama) version="$(ollama --version 2>/dev/null || echo 'unknown')" ;;
             bw) version="$(bw --version 2>/dev/null | head -1 || echo 'unknown')" ;;
             op) version="$(op --version 2>/dev/null || echo 'unknown')" ;;
             signal-cli) version="$(signal-cli --version 2>/dev/null || echo 'unknown')" ;;
@@ -61,6 +64,9 @@ check_command git "Git version control" true || ERRORS=$((ERRORS + 1))
 echo ""
 echo "=== Optional Tools ==="
 check_command node "Node.js (for Playwright)"
+check_command docker "Docker (for pgvector runtime)"
+check_command psql "PostgreSQL client"
+check_command ollama "Ollama (embeddings runtime)"
 check_command signal-cli "Signal CLI (for Signal channel)"
 check_command bw "Bitwarden CLI (vault)"
 check_command op "1Password CLI (vault)"
@@ -108,6 +114,18 @@ if [ -d ".local/tools/whisper.cpp" ]; then
     echo -e "\033[0;32m✓\033[0m whisper.cpp: installed"
 else
     echo -e "\033[0;33m○\033[0m whisper.cpp: not installed (run ./scripts/install-whisper.sh)"
+fi
+
+if command -v docker >/dev/null 2>&1; then
+    echo -e "\033[0;32m✓\033[0m pgvector runtime installer available (run ./scripts/install-pgvector.sh)"
+else
+    echo -e "\033[0;33m○\033[0m pgvector runtime not installable via helper script until Docker is available"
+fi
+
+if command -v ollama >/dev/null 2>&1; then
+    echo -e "\033[0;32m✓\033[0m Ollama embeddings runtime: installed"
+else
+    echo -e "\033[0;33m○\033[0m Ollama embeddings runtime: not installed (run ./scripts/install-ollama.sh)"
 fi
 
 echo ""

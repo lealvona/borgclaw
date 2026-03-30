@@ -55,6 +55,9 @@ echo "  cargo: $(cargo --version)"
 echo ""
 echo "[borgclaw] Optional tools:"
 check_command node || true
+check_command docker || true
+check_command psql || true
+check_command ollama || true
 check_command signal-cli || true
 check_command bw || true
 check_command op || true
@@ -106,6 +109,20 @@ else
         echo "[borgclaw] Node.js detected. Install Playwright?"
         echo "  ./scripts/install-playwright.sh"
     fi
+fi
+
+echo ""
+echo "[borgclaw] Checking memory runtimes..."
+if command -v docker &> /dev/null; then
+    echo "  PostgreSQL + pgvector runtime: ./scripts/install-pgvector.sh"
+else
+    echo "  Docker not found; pgvector convenience runtime installer requires Docker"
+fi
+
+if command -v ollama &> /dev/null; then
+    echo -e "\033[0;32m✓\033[0m Ollama: Installed"
+else
+    echo "  Embeddings runtime (recommended for hybrid search): ./scripts/install-ollama.sh"
 fi
 
 # Check for secrets/encryption setup

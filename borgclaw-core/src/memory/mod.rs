@@ -195,9 +195,15 @@ impl EmbeddingProvider for NoOpEmbeddingProvider {
 }
 
 pub async fn create_memory_backend(config: &MemoryConfig) -> Result<Arc<dyn Memory>, MemoryError> {
+    let embedding_provider = configured_embedding_provider(config);
+    let hybrid_search = hybrid_search_runtime_enabled(config);
+
     match config.effective_backend() {
         MemoryBackend::Sqlite => {
-            let memory = Arc::new(SqliteMemory::new(config.database_path.clone()));
+            let memory = Arc::new(
+                SqliteMemory::new(config.database_path.clone())
+                    .with_embedding_provider(embedding_provider.clone(), hybrid_search),
+            );
             memory.init().await?;
             Ok(memory)
         }
@@ -207,12 +213,33 @@ pub async fn create_memory_backend(config: &MemoryConfig) -> Result<Arc<dyn Memo
                     "memory.connection_string is required for postgres backend".to_string(),
                 )
             })?;
-            let memory = Arc::new(PostgresMemory::new(connection_string));
+            let memory = Arc::new(
+                PostgresMemory::new(connection_string)
+                    .with_embedding_provider(embedding_provider, hybrid_search),
+            );
             memory.init().await?;
             Ok(memory)
         }
         MemoryBackend::Memory => Ok(Arc::new(InMemoryMemory::new())),
     }
+}
+
+fn configured_embedding_provider(config: &MemoryConfig) -> Arc<dyn EmbeddingProvider> {
+    if let Some(endpoint) = config.embedding_endpoint.as_deref() {
+        if !endpoint.trim().is_empty() {
+            return Arc::new(HttpEmbeddingProvider::new(endpoint.to_string()));
+        }
+    }
+
+    Arc::new(NoOpEmbeddingProvider)
+}
+
+fn hybrid_search_runtime_enabled(config: &MemoryConfig) -> bool {
+    config.hybrid_search
+        && config
+            .embedding_endpoint
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
 }
 
 /// Create a new memory entry
@@ -368,6 +395,26 @@ mod tests {
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn configured_embedding_provider_uses_http_provider_when_endpoint_present() {
+        let mut config = MemoryConfig::default();
+        config.embedding_endpoint = Some("http://127.0.0.1:9000/embed".to_string());
+
+        assert!(hybrid_search_runtime_enabled(&config));
+    }
+
+    #[test]
+    fn configured_embedding_provider_defaults_to_noop_without_endpoint() {
+        let config = MemoryConfig::default();
+
+        let provider = configured_embedding_provider(&config);
+
+        assert!(!hybrid_search_runtime_enabled(&config));
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let result = runtime.block_on(provider.embed("any text")).unwrap();
+        assert!(result.is_empty());
     }
 
     #[test]

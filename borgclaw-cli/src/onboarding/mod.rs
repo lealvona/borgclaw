@@ -778,7 +778,7 @@ fn configure_memory(
     }
     let choices = vec![
         "SQLite + FTS5 (default)",
-        "PostgreSQL (native backend)",
+        "PostgreSQL + pgvector",
         "In-memory only",
     ];
     let idx = Select::with_theme(theme)
@@ -792,6 +792,8 @@ fn configure_memory(
             config.memory.backend = MemoryBackend::Postgres;
             config.memory.vector_provider = "postgres".to_string();
             config.memory.connection_string = Some(build_postgres_connection(theme)?);
+            config.memory.embedding_endpoint = prompt_embedding_endpoint(theme)?;
+            config.memory.hybrid_search = config.memory.embedding_endpoint.is_some();
             config
                 .memory
                 .database_path
@@ -812,6 +814,7 @@ fn configure_memory(
             config.memory.backend = MemoryBackend::Memory;
             config.memory.vector_provider = "memory".to_string();
             config.memory.connection_string = None;
+            config.memory.embedding_endpoint = None;
         }
         _ => {
             config.memory.backend = MemoryBackend::Sqlite;
@@ -1421,6 +1424,7 @@ fn apply_component_action(
                     config.memory.backend = MemoryBackend::Memory;
                     config.memory.hybrid_search = false;
                     config.memory.vector_provider = "memory".to_string();
+                    config.memory.embedding_endpoint = None;
                 }
                 ("memory", "vector") => {
                     config.memory.backend = MemoryBackend::Sqlite;
@@ -1429,6 +1433,7 @@ fn apply_component_action(
                 ("memory", "postgres") => {
                     config.memory.backend = MemoryBackend::Sqlite;
                     config.memory.connection_string = None;
+                    config.memory.embedding_endpoint = None;
                     config.memory.vector_provider = "sqlite".to_string();
                 }
                 ("provider", provider) if config.agent.provider == provider => {
@@ -1476,6 +1481,7 @@ fn apply_component_action(
                     config.memory.hybrid_search = false;
                     config.memory.vector_provider = "memory".to_string();
                     config.memory.connection_string = None;
+                    config.memory.embedding_endpoint = None;
                 }
                 ("memory", "postgres") => {
                     config.memory.backend = MemoryBackend::Postgres;
@@ -1484,6 +1490,11 @@ fn apply_component_action(
                         config.memory.connection_string =
                             Some("postgres://postgres:@localhost:5432/borgclaw".to_string());
                     }
+                    if config.memory.embedding_endpoint.is_none() {
+                        config.memory.embedding_endpoint =
+                            Some("http://127.0.0.1:11434/api/embeddings".to_string());
+                    }
+                    config.memory.hybrid_search = config.memory.embedding_endpoint.is_some();
                 }
                 ("provider", provider) => {
                     config.agent.provider = provider.to_string();
@@ -1616,6 +1627,28 @@ fn build_postgres_connection(theme: &ColorfulTheme) -> Result<String, String> {
         "postgres://{}:{}@{}:{}/{}",
         user, pass, host, port, db
     ))
+}
+
+fn prompt_embedding_endpoint(theme: &ColorfulTheme) -> Result<Option<String>, String> {
+    println!(
+        "{}",
+        paint(
+            INFO,
+            "Hybrid pgvector search needs an embedding HTTP endpoint that returns {\"embedding\": [...]}."
+        )
+    );
+    let value: String = Input::with_theme(theme)
+        .with_prompt("Embedding endpoint (leave blank for text-only PostgreSQL)")
+        .allow_empty(true)
+        .interact_text()
+        .map_err(|e| e.to_string())?;
+
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(trimmed.to_string()))
+    }
 }
 
 fn read_env_file(path: &PathBuf) -> HashMap<String, String> {

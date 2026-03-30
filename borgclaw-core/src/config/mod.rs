@@ -395,6 +395,8 @@ pub struct MemoryConfig {
     pub database_path: PathBuf,
     /// PostgreSQL connection string for the postgres backend
     pub connection_string: Option<String>,
+    /// HTTP embedding endpoint used for hybrid search
+    pub embedding_endpoint: Option<String>,
     /// Enable hybrid search
     pub hybrid_search: bool,
     /// Vector store provider
@@ -416,6 +418,7 @@ impl Default for MemoryConfig {
             backend: MemoryBackend::Sqlite,
             database_path: PathBuf::from(".borgclaw/memory"),
             connection_string: None,
+            embedding_endpoint: None,
             hybrid_search: true,
             vector_provider: "sqlite".to_string(),
             embedding_model: "sentence-transformers/all-MiniLM-L6-v2".to_string(),
@@ -1053,6 +1056,7 @@ mod tests {
             config.memory.database_path,
             PathBuf::from(".local/data/memory.db")
         );
+        assert!(config.memory.embedding_endpoint.is_none());
         assert!(config.memory.hybrid_search);
         assert_eq!(config.memory.session_max_entries, 100);
         assert_eq!(config.memory.session_keep_recent, 20);
@@ -1077,6 +1081,27 @@ mod tests {
             PathBuf::from(".borgclaw/memory")
         );
         assert_eq!(config.memory.session_max_entries, 50);
+    }
+
+    #[test]
+    fn memory_config_parses_embedding_endpoint_for_pgvector() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [memory]
+            backend = "postgres"
+            connection_string = "postgres://localhost/borgclaw"
+            embedding_endpoint = "http://127.0.0.1:9000/embed"
+            hybrid_search = true
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.memory.effective_backend(), MemoryBackend::Postgres);
+        assert_eq!(
+            config.memory.embedding_endpoint.as_deref(),
+            Some("http://127.0.0.1:9000/embed")
+        );
+        assert!(config.memory.hybrid_search);
     }
 
     #[test]

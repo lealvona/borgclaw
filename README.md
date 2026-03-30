@@ -33,7 +33,7 @@ Every face absorbs a different capability. Together, they form something greater
 | Face | Dimension | What We Absorb |
 |:----:|:----------|:---------------|
 | ⬆️ **Top** | Channels | Telegram, Signal, Webhooks, CLI, WebSocket |
-| ⬇️ **Bottom** | Memory | SQLite, PostgreSQL, in-memory, contexts, patterns |
+| ⬇️ **Bottom** | Memory | SQLite, PostgreSQL + pgvector, in-memory, contexts, patterns |
 | ⬅️ **Left** | Skills | GitHub, Google, Browser, STT/TTS, Images |
 | ➡️ **Right** | Security | WASM sandbox, SSRF, vault, injection defense |
 | 🔲 **Front** | Providers | OpenAI, Anthropic, Google, Kimi, MiniMax, Z.ai, Ollama |
@@ -103,8 +103,8 @@ Every channel becomes an extension of the same mind:
 
 Shared consciousness across all interactions:
 
-- **Backend Selection** — SQLite by default, with PostgreSQL and in-memory modes available
-- **Hybrid Search** — Full-text recall with optional embedding-assisted ranking
+- **Backend Selection** — SQLite by default, with PostgreSQL + pgvector and in-memory modes available
+- **Hybrid Search** — Full-text recall with embedding-assisted ranking when an embedding endpoint is configured
 - **Per-Group Isolation** — Separate contexts per collective node
 - **Session Auto-Compaction** — Configurable context window management
 - **Solution Patterns** — Knowledge propagation across the collective
@@ -326,6 +326,18 @@ secret = "${WEBHOOK_SECRET}"
 ```bash
 ./scripts/install-playwright.sh    # Linux/macOS
 .\scripts\install-playwright.ps1   # Windows
+```
+
+### PostgreSQL + pgvector (Memory Runtime)
+```bash
+./scripts/install-pgvector.sh    # Linux/macOS
+.\scripts\install-pgvector.ps1   # Windows
+```
+
+### Ollama (Embeddings Runtime)
+```bash
+./scripts/install-ollama.sh    # Linux/macOS
+.\scripts\install-ollama.ps1   # Windows
 ```
 
 ### Whisper.cpp (Local STT)
