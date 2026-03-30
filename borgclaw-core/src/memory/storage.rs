@@ -200,6 +200,10 @@ impl Memory for SqliteMemory {
         self.recall_fts(query).await
     }
 
+    async fn history(&self, query: &MemoryQuery) -> Result<Vec<MemoryEntry>, MemoryError> {
+        self.history_entries(query).await
+    }
+
     async fn get(&self, id: &str) -> Result<Option<MemoryEntry>, MemoryError> {
         self.get(id).await
     }
@@ -235,6 +239,8 @@ impl SqliteMemory {
         let pool = conn
             .as_ref()
             .ok_or_else(|| MemoryError::StorageError("Not initialized".to_string()))?;
+        let since = query.since.map(|value| value.to_rfc3339());
+        let until = query.until.map(|value| value.to_rfc3339());
 
         let rows = if let Some(group_id) = &query.group_id {
             sqlx::query_as::<_, MemoryRow>(
@@ -243,12 +249,18 @@ impl SqliteMemory {
                 FROM memories m
                 JOIN memories_fts fts ON m.rowid = fts.rowid
                 WHERE memories_fts MATCH ? AND m.group_id = ?
+                  AND (? IS NULL OR m.created_at >= ?)
+                  AND (? IS NULL OR m.created_at <= ?)
                 ORDER BY bm25(memories_fts)
                 LIMIT ?
                 "#,
             )
             .bind(&query.query)
             .bind(group_id)
+            .bind(&since)
+            .bind(&since)
+            .bind(&until)
+            .bind(&until)
             .bind(query.limit as i64)
             .fetch_all(pool)
             .await
@@ -259,11 +271,17 @@ impl SqliteMemory {
                 FROM memories m
                 JOIN memories_fts fts ON m.rowid = fts.rowid
                 WHERE memories_fts MATCH ? AND m.group_id IS NULL
+                  AND (? IS NULL OR m.created_at >= ?)
+                  AND (? IS NULL OR m.created_at <= ?)
                 ORDER BY bm25(memories_fts)
                 LIMIT ?
                 "#,
             )
             .bind(&query.query)
+            .bind(&since)
+            .bind(&since)
+            .bind(&until)
+            .bind(&until)
             .bind(query.limit as i64)
             .fetch_all(pool)
             .await
@@ -283,6 +301,59 @@ impl SqliteMemory {
             .collect();
 
         Ok(results)
+    }
+
+    async fn history_entries(&self, query: &MemoryQuery) -> Result<Vec<MemoryEntry>, MemoryError> {
+        let conn = self.conn.read().await;
+        let pool = conn
+            .as_ref()
+            .ok_or_else(|| MemoryError::StorageError("Not initialized".to_string()))?;
+        let since = query.since.map(|value| value.to_rfc3339());
+        let until = query.until.map(|value| value.to_rfc3339());
+
+        let rows = if let Some(group_id) = &query.group_id {
+            sqlx::query_as::<_, MemoryRow>(
+                r#"
+                SELECT id, key, content, metadata, created_at, accessed_at, access_count, importance, group_id
+                FROM memories
+                WHERE group_id = ?
+                  AND (? IS NULL OR created_at >= ?)
+                  AND (? IS NULL OR created_at <= ?)
+                ORDER BY created_at DESC
+                LIMIT ?
+                "#,
+            )
+            .bind(group_id)
+            .bind(&since)
+            .bind(&since)
+            .bind(&until)
+            .bind(&until)
+            .bind(query.limit as i64)
+            .fetch_all(pool)
+            .await
+        } else {
+            sqlx::query_as::<_, MemoryRow>(
+                r#"
+                SELECT id, key, content, metadata, created_at, accessed_at, access_count, importance, group_id
+                FROM memories
+                WHERE group_id IS NULL
+                  AND (? IS NULL OR created_at >= ?)
+                  AND (? IS NULL OR created_at <= ?)
+                ORDER BY created_at DESC
+                LIMIT ?
+                "#,
+            )
+            .bind(&since)
+            .bind(&since)
+            .bind(&until)
+            .bind(&until)
+            .bind(query.limit as i64)
+            .fetch_all(pool)
+            .await
+        }
+        .map_err(|e| MemoryError::QueryError(e.to_string()))?;
+
+        Ok(rows.into_iter().map(MemoryRow::into_memory_entry).collect())
     }
 
     async fn recall_hybrid(&self, query: &MemoryQuery) -> Result<Vec<MemoryResult>, MemoryError> {
@@ -410,6 +481,8 @@ impl SqliteMemory {
             .as_ref()
             .ok_or_else(|| MemoryError::StorageError("Not initialized".to_string()))?;
 
+        let since = query.since.map(|value| value.to_rfc3339());
+        let until = query.until.map(|value| value.to_rfc3339());
         let rows: Vec<(String,)> = if let Some(group_id) = &query.group_id {
             sqlx::query_as(
                 r#"
@@ -417,18 +490,33 @@ impl SqliteMemory {
                 FROM memory_embeddings me
                 JOIN memories m ON me.memory_id = m.id
                 WHERE m.group_id = ?
+                  AND (? IS NULL OR m.created_at >= ?)
+                  AND (? IS NULL OR m.created_at <= ?)
                 "#,
             )
             .bind(group_id)
+            .bind(&since)
+            .bind(&since)
+            .bind(&until)
+            .bind(&until)
             .fetch_all(pool)
             .await
             .map_err(|e| MemoryError::QueryError(e.to_string()))?
         } else {
             sqlx::query_as(
                 r#"
-                SELECT memory_id FROM memory_embeddings
+                SELECT me.memory_id
+                FROM memory_embeddings me
+                JOIN memories m ON me.memory_id = m.id
+                WHERE m.group_id IS NULL
+                  AND (? IS NULL OR m.created_at >= ?)
+                  AND (? IS NULL OR m.created_at <= ?)
                 "#,
             )
+            .bind(&since)
+            .bind(&since)
+            .bind(&until)
+            .bind(&until)
             .fetch_all(pool)
             .await
             .map_err(|e| MemoryError::QueryError(e.to_string()))?
@@ -565,6 +653,7 @@ mod tests {
     use super::*;
     use crate::memory::{new_entry, new_entry_for_group, Memory, MemoryQuery};
     use async_trait::async_trait;
+    use chrono::{Duration, Utc};
 
     #[tokio::test]
     async fn recall_round_trips_metadata_and_group() {
@@ -585,6 +674,7 @@ mod tests {
                 limit: 5,
                 min_score: 0.0,
                 group_id: Some("work".to_string()),
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -620,6 +710,7 @@ mod tests {
                 limit: 5,
                 min_score: 0.0,
                 group_id: None,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -629,6 +720,7 @@ mod tests {
                 limit: 5,
                 min_score: 0.0,
                 group_id: Some("ops".to_string()),
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -674,6 +766,7 @@ mod tests {
                 limit: 5,
                 min_score: 0.0,
                 group_id: None,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -713,6 +806,7 @@ mod tests {
                 limit: 5,
                 min_score: 0.0,
                 group_id: None,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -720,6 +814,38 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
         assert_eq!(results.len(), 1);
         assert!(results[0].entry.content.contains("specific unique keyword"));
+    }
+
+    #[tokio::test]
+    async fn sqlite_history_respects_since_filter() {
+        let root =
+            std::env::temp_dir().join(format!("borgclaw_history_test_{}", uuid::Uuid::new_v4()));
+        let memory = SqliteMemory::new(root.clone());
+        memory.init().await.unwrap();
+        let now = Utc::now();
+
+        let mut older = new_entry("topic", "older note");
+        older.created_at = now - Duration::days(5);
+        older.accessed_at = older.created_at;
+        memory.store(older).await.unwrap();
+
+        let mut newer = new_entry("topic", "newer note");
+        newer.created_at = now;
+        newer.accessed_at = newer.created_at;
+        memory.store(newer).await.unwrap();
+
+        let entries = memory
+            .history(&MemoryQuery {
+                limit: 10,
+                since: Some(now - Duration::days(1)),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].content, "newer note");
     }
 
     #[test]

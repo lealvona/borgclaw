@@ -91,6 +91,20 @@ impl AppConfig {
             );
         }
 
+        if self.memory.external.enabled
+            && self
+                .memory
+                .external
+                .endpoint
+                .as_deref()
+                .map_or(true, |value| value.trim().is_empty())
+        {
+            error.memory = Some(
+                "memory.external.endpoint is required when memory.external.enabled = true"
+                    .to_string(),
+            );
+        }
+
         if self.security.docker.enabled {
             if self.security.docker.image.trim().is_empty() {
                 error.security = Some(
@@ -500,6 +514,8 @@ pub struct MemoryConfig {
     pub session_keep_recent: usize,
     /// Whether important context should be preserved during compaction
     pub session_keep_important: bool,
+    /// Optional external OpenMemory-style adapter
+    pub external: ExternalMemoryConfig,
 }
 
 impl Default for MemoryConfig {
@@ -515,6 +531,7 @@ impl Default for MemoryConfig {
             session_max_entries: 100,
             session_keep_recent: 20,
             session_keep_important: true,
+            external: ExternalMemoryConfig::default(),
         }
     }
 }
@@ -539,6 +556,31 @@ pub enum MemoryBackend {
     Sqlite,
     Postgres,
     Memory,
+}
+
+/// Optional external memory adapter configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExternalMemoryConfig {
+    /// Enable additive external memory integration
+    pub enabled: bool,
+    /// Base endpoint for the external memory service
+    pub endpoint: Option<String>,
+    /// Mirror writes to the external adapter
+    pub mirror_writes: bool,
+    /// Request timeout in seconds
+    pub timeout_seconds: u64,
+}
+
+impl Default for ExternalMemoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: None,
+            mirror_writes: true,
+            timeout_seconds: 15,
+        }
+    }
 }
 
 /// Heartbeat configuration
@@ -1227,6 +1269,28 @@ mod tests {
             Some("http://127.0.0.1:9000/embed")
         );
         assert!(config.memory.hybrid_search);
+    }
+
+    #[test]
+    fn memory_config_parses_external_adapter_contract() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [memory.external]
+            enabled = true
+            endpoint = "http://127.0.0.1:8765"
+            mirror_writes = false
+            timeout_seconds = 30
+            "#,
+        )
+        .unwrap();
+
+        assert!(config.memory.external.enabled);
+        assert_eq!(
+            config.memory.external.endpoint.as_deref(),
+            Some("http://127.0.0.1:8765")
+        );
+        assert!(!config.memory.external.mirror_writes);
+        assert_eq!(config.memory.external.timeout_seconds, 30);
     }
 
     #[test]

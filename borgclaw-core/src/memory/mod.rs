@@ -1,5 +1,6 @@
 //! Memory module - hybrid vector + keyword search with per-group isolation
 
+mod external;
 mod heartbeat;
 mod in_memory;
 mod postgres;
@@ -7,6 +8,7 @@ mod session;
 mod solution;
 mod storage;
 
+pub use external::ExternalMemoryAdapter;
 pub use heartbeat::{HeartbeatEngine, HeartbeatResult, HeartbeatTask};
 pub use in_memory::InMemoryMemory;
 pub use postgres::PostgresMemory;
@@ -55,6 +57,10 @@ pub struct MemoryQuery {
     pub min_score: f32,
     /// Filter by group ID
     pub group_id: Option<String>,
+    /// Filter to entries created at or after this instant
+    pub since: Option<DateTime<Utc>>,
+    /// Filter to entries created at or before this instant
+    pub until: Option<DateTime<Utc>>,
 }
 
 impl Default for MemoryQuery {
@@ -64,6 +70,8 @@ impl Default for MemoryQuery {
             limit: 5,
             min_score: 0.5,
             group_id: None,
+            since: None,
+            until: None,
         }
     }
 }
@@ -75,6 +83,19 @@ impl MemoryQuery {
             group_id: Some(group_id.into()),
             ..Default::default()
         }
+    }
+
+    pub fn matches_entry(&self, entry: &MemoryEntry) -> bool {
+        if entry.group_id != self.group_id {
+            return false;
+        }
+        if self.since.is_some_and(|since| entry.created_at < since) {
+            return false;
+        }
+        if self.until.is_some_and(|until| entry.created_at > until) {
+            return false;
+        }
+        true
     }
 }
 
@@ -93,6 +114,9 @@ pub trait Memory: Send + Sync {
 
     /// Recall memories
     async fn recall(&self, query: &MemoryQuery) -> Result<Vec<MemoryResult>, MemoryError>;
+
+    /// List memory history ordered newest first
+    async fn history(&self, query: &MemoryQuery) -> Result<Vec<MemoryEntry>, MemoryError>;
 
     /// Get a specific memory
     async fn get(&self, id: &str) -> Result<Option<MemoryEntry>, MemoryError>;
@@ -114,6 +138,11 @@ pub trait Memory: Send + Sync {
 
     /// Get all group IDs
     async fn groups(&self) -> Result<Vec<String>, MemoryError>;
+
+    /// Store a procedural memory entry.
+    async fn store_procedural(&self, entry: MemoryEntry) -> Result<(), MemoryError> {
+        self.store(entry).await
+    }
 }
 
 /// Memory errors
@@ -198,14 +227,14 @@ pub async fn create_memory_backend(config: &MemoryConfig) -> Result<Arc<dyn Memo
     let embedding_provider = configured_embedding_provider(config);
     let hybrid_search = hybrid_search_runtime_enabled(config);
 
-    match config.effective_backend() {
+    let backend: Arc<dyn Memory> = match config.effective_backend() {
         MemoryBackend::Sqlite => {
             let memory = Arc::new(
                 SqliteMemory::new(config.database_path.clone())
                     .with_embedding_provider(embedding_provider.clone(), hybrid_search),
             );
             memory.init().await?;
-            Ok(memory)
+            memory
         }
         MemoryBackend::Postgres => {
             let connection_string = config.connection_string.clone().ok_or_else(|| {
@@ -218,9 +247,16 @@ pub async fn create_memory_backend(config: &MemoryConfig) -> Result<Arc<dyn Memo
                     .with_embedding_provider(embedding_provider, hybrid_search),
             );
             memory.init().await?;
-            Ok(memory)
+            memory
         }
-        MemoryBackend::Memory => Ok(Arc::new(InMemoryMemory::new())),
+        MemoryBackend::Memory => Arc::new(InMemoryMemory::new()),
+    };
+
+    if config.external.enabled {
+        let adapter = ExternalMemoryAdapter::new(config)?;
+        Ok(Arc::new(external::CompositeMemory::new(backend, adapter)))
+    } else {
+        Ok(backend)
     }
 }
 
@@ -269,6 +305,27 @@ pub fn new_entry_for_group(
     entry
 }
 
+/// Create a low-importance procedural memory entry.
+pub fn new_procedural_entry(key: impl Into<String>, content: impl Into<String>) -> MemoryEntry {
+    let mut entry = new_entry(key, content);
+    entry.importance = 0.3;
+    entry
+        .metadata
+        .insert("memory_kind".to_string(), "procedural".to_string());
+    entry
+}
+
+/// Create a procedural memory entry for a group.
+pub fn new_procedural_entry_for_group(
+    key: impl Into<String>,
+    content: impl Into<String>,
+    group_id: impl Into<String>,
+) -> MemoryEntry {
+    let mut entry = new_procedural_entry(key, content);
+    entry.group_id = Some(group_id.into());
+    entry
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,6 +337,8 @@ mod tests {
         assert_eq!(query.limit, 5);
         assert_eq!(query.min_score, 0.5);
         assert!(query.group_id.is_none());
+        assert!(query.since.is_none());
+        assert!(query.until.is_none());
     }
 
     #[test]
@@ -298,6 +357,8 @@ mod tests {
             limit: 10,
             min_score: 0.8,
             group_id: Some("custom-group".to_string()),
+            since: None,
+            until: None,
         };
 
         assert_eq!(query.query, "custom");
@@ -331,6 +392,17 @@ mod tests {
         assert_eq!(entry.group_id, Some("my-group".to_string()));
         assert!(entry.metadata.is_empty());
         assert_eq!(entry.access_count, 0);
+    }
+
+    #[test]
+    fn new_procedural_entry_marks_entry_as_procedural() {
+        let entry = new_procedural_entry("workflow", "run tests first");
+
+        assert_eq!(
+            entry.metadata.get("memory_kind").map(String::as_str),
+            Some("procedural")
+        );
+        assert_eq!(entry.importance, 0.3);
     }
 
     #[test]
