@@ -26,7 +26,7 @@ Audit note:
 | Scheduler | `complete` | Execution loop, timeout/concurrency policy, retries/dead-letter behavior, persisted job state, bounded run history, restart-recovery coverage, catch-up/recovery semantics, and full operator CRUD (list, show, create, delete, pause, resume) are all landed. |
 | Sub-agent coordinator | `complete` | Spawn/status/result flow, concurrency limits, cancellation precedence, memory policy enforcement, parent-context inheritance, persisted task snapshots, retry/dead-letter behavior, workspace policy enforcement, and audit logging are all landed. |
 | Security config contract | `complete` | Documented TOML shape parses and core enforcement exists. |
-| Docker command sandbox | `complete` | Typed `security.docker` config, shared command routing, diagnostics, installer helpers, and command-runtime integration are landed. |
+| Docker command sandbox | `complete` | Typed `security.docker` config, shared command routing, context-specific hardening for local/remote/background execution, diagnostics, installer helpers, and command-runtime integration are landed. |
 | Secret storage + vault | `complete` | Encrypted secrets, vault clients (Bitwarden, 1Password), CLI commands (list, set, delete, check), and onboarding/auth UX are complete. |
 | Skill registry lifecycle | `complete` | Local directory install, local `.tar.gz` install, GitHub-backed listing, archive-backed GitHub repo/registry installs, remote archive install-by-URL, packaging, publishing, inspection, version compatibility, and direct manifest installs with explicit `files:` support, adjacent `SKILL.files.json` sidecar discovery, or manifest-directory discovery are implemented. |
 | MCP client | `complete` | Documented transports (Stdio, SSE, WebSocket) and client API are aligned. |
@@ -109,7 +109,6 @@ Audit note:
 ## Temporary Limitations
 
 - Inspiration backlog still open by design: structured fallback deliverables for failed/stuck jobs, per-channel proxy settings, and broader managed skills lifecycle.
-- Docker sandbox v1 is complete for `execute_command`, but follow-on hardening from the inspiration set remains open: split sandbox images by execution context and stricter default isolation for higher-risk remote/background command execution.
 - Explicitly declined and not planned: AWS Bedrock provider support, Composio integration, and Slack approval UI/buttons.
 - The repo treats the remaining items as tracked follow-up features, not as implemented functionality. See [inspirations.md](inspirations.md) and [IMPLEMENTATION_PLAN_2026-03-30_REMAINING_BACKLOG](IMPLEMENTATION_PLAN_2026-03-30_REMAINING_BACKLOG.md) for the execution backlog.
 

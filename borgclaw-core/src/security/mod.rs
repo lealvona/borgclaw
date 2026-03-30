@@ -649,8 +649,56 @@ impl SecurityLayer {
                 .any(|name| name == tool_name)
     }
 
-    pub fn effective_command_execution_mode(&self, tool_name: &str) -> CommandExecutionMode {
-        if self.docker_enabled_for_tool(tool_name) {
+    fn resolved_docker_config(
+        &self,
+        tool_name: &str,
+        context: CommandExecutionContext,
+    ) -> Option<DockerSandboxConfig> {
+        if !self.docker_enabled_for_tool(tool_name) {
+            return None;
+        }
+
+        let mut config = self.config.docker.clone();
+        let override_config = match context {
+            CommandExecutionContext::LocalInteractive => &self.config.docker.contexts.local,
+            CommandExecutionContext::RemoteInteractive => &self.config.docker.contexts.remote,
+            CommandExecutionContext::Background => &self.config.docker.contexts.background,
+        };
+
+        if let Some(image) = &override_config.image {
+            config.image = image.clone();
+        }
+        if let Some(network) = override_config.network {
+            config.network = network;
+        }
+        if let Some(workspace_mount) = override_config.workspace_mount {
+            config.workspace_mount = workspace_mount;
+        }
+        if let Some(read_only_rootfs) = override_config.read_only_rootfs {
+            config.read_only_rootfs = read_only_rootfs;
+        }
+        if let Some(tmpfs) = override_config.tmpfs {
+            config.tmpfs = tmpfs;
+        }
+        if let Some(memory_limit_mb) = override_config.memory_limit_mb {
+            config.memory_limit_mb = memory_limit_mb.max(1);
+        }
+        if let Some(cpu_limit) = &override_config.cpu_limit {
+            config.cpu_limit = Some(cpu_limit.clone());
+        }
+        if let Some(timeout_seconds) = override_config.timeout_seconds {
+            config.timeout_seconds = timeout_seconds.max(1);
+        }
+
+        Some(config)
+    }
+
+    pub fn effective_command_execution_mode(
+        &self,
+        tool_name: &str,
+        context: CommandExecutionContext,
+    ) -> CommandExecutionMode {
+        if self.resolved_docker_config(tool_name, context).is_some() {
             CommandExecutionMode::Docker
         } else {
             CommandExecutionMode::Host
@@ -865,7 +913,12 @@ impl SecurityLayer {
             .timeout_secs
             .max(1)
             .min(self.config.docker.timeout_seconds.max(1));
-        let execution_mode = self.effective_command_execution_mode(tool_name);
+        let resolved_docker_config = self.resolved_docker_config(tool_name, options.context);
+        let execution_mode = if resolved_docker_config.is_some() {
+            CommandExecutionMode::Docker
+        } else {
+            CommandExecutionMode::Host
+        };
 
         if options.background {
             if options.pty {
@@ -874,7 +927,7 @@ impl SecurityLayer {
                 ));
             }
             return execute_background_command(BackgroundCommandRequest {
-                docker_config: &self.config.docker,
+                docker_config: resolved_docker_config.as_ref(),
                 execution_mode,
                 command,
                 workspace_root,
@@ -904,7 +957,11 @@ impl SecurityLayer {
 
         if execution_mode == CommandExecutionMode::Docker {
             execute_docker_command(
-                &self.config.docker,
+                resolved_docker_config.as_ref().ok_or_else(|| {
+                    SecurityError::ExecutionError(
+                        "docker execution selected without resolved docker config".to_string(),
+                    )
+                })?,
                 command,
                 workspace_root,
                 workspace_policy,
@@ -1065,6 +1122,7 @@ pub struct CommandExecutionOptions {
     pub pty: bool,
     pub background: bool,
     pub yield_ms: Option<u64>,
+    pub context: CommandExecutionContext,
 }
 
 impl Default for CommandExecutionOptions {
@@ -1074,8 +1132,16 @@ impl Default for CommandExecutionOptions {
             pty: false,
             background: false,
             yield_ms: None,
+            context: CommandExecutionContext::LocalInteractive,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandExecutionContext {
+    LocalInteractive,
+    RemoteInteractive,
+    Background,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1308,8 +1374,13 @@ async fn execute_background_command(
                 .map_err(|err| SecurityError::ExecutionError(err.to_string()))?
         }
         CommandExecutionMode::Docker => {
+            let docker_config = request.docker_config.ok_or_else(|| {
+                SecurityError::ExecutionError(
+                    "docker execution selected without resolved docker config".to_string(),
+                )
+            })?;
             let invocation = build_docker_invocation(
-                request.docker_config,
+                docker_config,
                 request.workspace_root,
                 request.workspace_policy,
                 request.command,
@@ -1326,7 +1397,8 @@ async fn execute_background_command(
 
     let pid = child.id();
     let image = (request.execution_mode == CommandExecutionMode::Docker)
-        .then(|| request.docker_config.image.clone());
+        .then(|| request.docker_config.map(|config| config.image.clone()))
+        .flatten();
     let image_for_task = image.clone();
 
     let running_record = CommandProcessRecord {
@@ -1467,7 +1539,7 @@ async fn execute_background_command(
 
 #[derive(Clone)]
 struct BackgroundCommandRequest<'a> {
-    docker_config: &'a DockerSandboxConfig,
+    docker_config: Option<&'a DockerSandboxConfig>,
     execution_mode: CommandExecutionMode,
     command: &'a str,
     workspace_root: &'a Path,
@@ -1767,12 +1839,61 @@ mod tests {
         });
 
         assert_eq!(
-            security.effective_command_execution_mode("execute_command"),
+            security.effective_command_execution_mode(
+                "execute_command",
+                CommandExecutionContext::LocalInteractive
+            ),
             CommandExecutionMode::Docker
         );
         assert_eq!(
-            security.effective_command_execution_mode("read_file"),
+            security.effective_command_execution_mode(
+                "read_file",
+                CommandExecutionContext::LocalInteractive
+            ),
             CommandExecutionMode::Host
+        );
+    }
+
+    #[test]
+    fn docker_context_overrides_harden_remote_and_background_execution() {
+        let security = SecurityLayer::with_config(SecurityConfig {
+            docker: crate::config::DockerSandboxConfig {
+                enabled: true,
+                image: "borgclaw-sandbox:base".to_string(),
+                network: crate::config::DockerNetworkPolicy::Bridge,
+                workspace_mount: crate::config::DockerWorkspaceMount::ReadWrite,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+        let local = security
+            .resolved_docker_config("execute_command", CommandExecutionContext::LocalInteractive)
+            .unwrap();
+        let remote = security
+            .resolved_docker_config(
+                "execute_command",
+                CommandExecutionContext::RemoteInteractive,
+            )
+            .unwrap();
+        let background = security
+            .resolved_docker_config("execute_command", CommandExecutionContext::Background)
+            .unwrap();
+
+        assert_eq!(local.network, crate::config::DockerNetworkPolicy::Bridge);
+        assert_eq!(
+            local.workspace_mount,
+            crate::config::DockerWorkspaceMount::ReadWrite
+        );
+        assert_eq!(remote.network, crate::config::DockerNetworkPolicy::None);
+        assert_eq!(
+            remote.workspace_mount,
+            crate::config::DockerWorkspaceMount::ReadOnly
+        );
+        assert_eq!(background.network, crate::config::DockerNetworkPolicy::None);
+        assert_eq!(
+            background.workspace_mount,
+            crate::config::DockerWorkspaceMount::ReadOnly
         );
     }
 
@@ -1858,6 +1979,7 @@ mod tests {
                     pty: true,
                     background: false,
                     yield_ms: None,
+                    context: CommandExecutionContext::LocalInteractive,
                 },
             )
             .await
@@ -1888,6 +2010,7 @@ mod tests {
                     pty: false,
                     background: true,
                     yield_ms: Some(500),
+                    context: CommandExecutionContext::Background,
                 },
             )
             .await
@@ -1925,6 +2048,7 @@ mod tests {
                     pty: true,
                     background: true,
                     yield_ms: None,
+                    context: CommandExecutionContext::Background,
                 },
             )
             .await

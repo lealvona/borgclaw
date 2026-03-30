@@ -86,6 +86,7 @@ pub async fn execute_command(
     let pty = get_bool(arguments, "pty").unwrap_or(false);
     let background = get_bool(arguments, "background").unwrap_or(false);
     let yield_ms = get_u64(arguments, "yield_ms");
+    let context = command_execution_context(runtime, background);
     if let Some(result) = require_tool_approval("execute_command", arguments, runtime).await {
         return result;
     }
@@ -102,6 +103,7 @@ pub async fn execute_command(
                 pty,
                 background,
                 yield_ms,
+                context,
             },
         )
         .await
@@ -211,4 +213,28 @@ pub async fn execute_command(
         }
         result
     }
+}
+
+fn command_execution_context(
+    runtime: &ToolRuntime,
+    background: bool,
+) -> crate::security::CommandExecutionContext {
+    if background {
+        return crate::security::CommandExecutionContext::Background;
+    }
+
+    if let Some(invocation) = &runtime.invocation {
+        if invocation.metadata.contains_key("heartbeat_task_id")
+            || invocation.sender.channel == "scheduler"
+            || invocation.sender.channel == "subagent"
+        {
+            return crate::security::CommandExecutionContext::Background;
+        }
+        if invocation.sender.channel == "cli" {
+            return crate::security::CommandExecutionContext::LocalInteractive;
+        }
+        return crate::security::CommandExecutionContext::RemoteInteractive;
+    }
+
+    crate::security::CommandExecutionContext::LocalInteractive
 }

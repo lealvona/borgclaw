@@ -119,6 +119,18 @@ timeout_seconds = 120
 allowed_tools = ["execute_command"]
 allowed_roots = []
 extra_env_allowlist = ["PATH", "HOME"]
+
+[security.docker.contexts.remote]
+image = "borgclaw-sandbox:remote"   # optional override
+network = "none"
+workspace_mount = "ro"
+timeout_seconds = 90
+
+[security.docker.contexts.background]
+image = "borgclaw-sandbox:remote"   # optional override
+network = "none"
+workspace_mount = "ro"
+timeout_seconds = 90
 ```
 
 ### Runtime Behavior
@@ -134,6 +146,12 @@ The Docker path stays inside the existing security pipeline:
 7. audit logging
 
 Docker execution inherits the same workspace policy used by file tools, scheduled work, heartbeat tasks, and sub-agents. Extra bind mounts must still be allowed by the workspace policy.
+
+Context policy notes:
+
+- `local` inherits the base `security.docker` policy unless explicitly overridden.
+- `remote` and `background` default to stricter inherited settings even when the base policy is looser.
+- Context overrides are policy deltas, not a separate sandbox system.
 
 ## Command Runtime
 
@@ -170,6 +188,11 @@ Build the default sandbox image with:
 ./scripts/install-docker-sandbox.sh      # Linux/macOS
 .\scripts\install-docker-sandbox.ps1     # Windows
 ```
+
+The installer builds both:
+
+- `borgclaw-sandbox:base`
+- `borgclaw-sandbox:remote`
 
 ## Secrets Management
 
