@@ -9,6 +9,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Service token constant - key for stored hash
+pub const SERVICE_TOKEN_HASH_KEY: &str = "borgclaw_service_token_hash";
+/// Service token file name
+pub const SERVICE_TOKEN_FILE: &str = ".service_token";
+
 #[derive(Debug, Clone)]
 pub struct SecretStoreConfig {
     pub encryption_enabled: bool,
@@ -78,6 +83,50 @@ impl SecretStore {
             .iter()
             .map(|(k, v)| (format!("BC_SECRET_{}", k.to_uppercase()), v.clone()))
             .collect()
+    }
+
+    /// Verify a service token against the stored hash
+    pub async fn verify_service_token(&self, token: &str) -> bool {
+        let secrets = self.secrets.read().await;
+        match secrets.get(SERVICE_TOKEN_HASH_KEY) {
+            Some(stored_hash) => {
+                let computed_hash = Self::hash_token(token);
+                computed_hash == *stored_hash
+            }
+            None => false,
+        }
+    }
+
+    /// Generate and store a new service token
+    /// Returns the token (which should be written to the service token file)
+    pub async fn rotate_service_token(&self) -> Result<String, super::SecurityError> {
+        let token = Self::generate_service_token();
+        let hash = Self::hash_token(&token);
+        self.store(SERVICE_TOKEN_HASH_KEY, &hash).await?;
+        Ok(token)
+    }
+
+    /// Generate a cryptographically secure service token
+    fn generate_service_token() -> String {
+        let bytes: [u8; 32] = rand::random();
+        hex::encode(bytes)
+    }
+
+    /// Hash a token using SHA-256
+    fn hash_token(token: &str) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(token.as_bytes());
+        hex::encode(hasher.finalize())
+    }
+
+    /// Get the path for the service token file
+    pub fn service_token_path(&self) -> Option<PathBuf> {
+        self.config.secrets_path.as_ref().map(|path| {
+            path.parent()
+                .map(|p| p.join(SERVICE_TOKEN_FILE))
+                .unwrap_or_else(|| PathBuf::from(SERVICE_TOKEN_FILE))
+        })
     }
 }
 
@@ -222,5 +271,70 @@ mod tests {
             Some("secret-value")
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn service_token_verification_works() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_service_token_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("secrets.enc");
+        let store = SecretStore::with_config(SecretStoreConfig {
+            encryption_enabled: false,
+            secrets_path: Some(path),
+        });
+
+        // Generate a token
+        let token = store.rotate_service_token().await.unwrap();
+
+        // Verify the token works
+        assert!(store.verify_service_token(&token).await);
+
+        // Verify wrong token fails
+        assert!(!store.verify_service_token("wrong-token").await);
+
+        // Verify after rotation, old token fails
+        let old_token = token;
+        let new_token = store.rotate_service_token().await.unwrap();
+        assert!(!store.verify_service_token(&old_token).await);
+        assert!(store.verify_service_token(&new_token).await);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn service_token_generation_produces_valid_hex() {
+        let token = SecretStore::generate_service_token();
+        // Should be 64 hex characters (32 bytes)
+        assert_eq!(token.len(), 64);
+        // Should be valid hex
+        assert!(hex::decode(&token).is_ok());
+    }
+
+    #[test]
+    fn service_token_hashing_is_consistent() {
+        let token = "test-token-123";
+        let hash1 = SecretStore::hash_token(token);
+        let hash2 = SecretStore::hash_token(token);
+        assert_eq!(hash1, hash2);
+        // Hash should be different from original
+        assert_ne!(hash1, token);
+        // Should be valid hex (SHA-256 = 32 bytes = 64 hex chars)
+        assert_eq!(hash1.len(), 64);
+    }
+
+    #[test]
+    fn service_token_path_derived_from_secrets_path() {
+        let store = SecretStore::with_config(SecretStoreConfig {
+            encryption_enabled: false,
+            secrets_path: Some(PathBuf::from("/home/user/.borgclaw/secrets.enc")),
+        });
+        let token_path = store.service_token_path();
+        assert_eq!(
+            token_path,
+            Some(PathBuf::from("/home/user/.borgclaw/.service_token"))
+        );
     }
 }
