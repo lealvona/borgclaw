@@ -24,6 +24,7 @@ use colored::Colorize;
 use dialoguer::Password;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::time::Duration;
 use tracing::{error, info};
 
 /// Load .env file if it exists
@@ -519,12 +520,13 @@ async fn repl(config: AppConfig, _config_path: PathBuf) {
             ReplCommand::Message => {}
         }
 
+        let sender_id = cli_sender_id();
         // Create message
         let message = InboundMessage {
             channel: ChannelType::cli(),
-            sender: Sender::new("cli").with_name("User"),
+            sender: Sender::new(sender_id.clone()).with_name(cli_sender_name()),
             content: MessagePayload::text(input),
-            group_id: Some("cli".to_string()),
+            group_id: Some(sender_id),
             timestamp: chrono::Utc::now(),
             raw: serde_json::Value::Null,
         };
@@ -533,6 +535,7 @@ async fn repl(config: AppConfig, _config_path: PathBuf) {
             Ok(outcome) => {
                 let text = process_response_text(&outcome.response.text);
                 println!("{}", text);
+                wait_for_cli_google_oauth_completion(&config, &outcome.response.metadata).await;
             }
             Err(err) => {
                 eprintln!("{} {}", "✗ Error:".red(), err);
@@ -690,19 +693,82 @@ fn print_history(history: &[String]) {
 
 async fn send_message(config: AppConfig, message: String) {
     let router = MessageRouter::from_config(&config);
+    let sender_id = cli_sender_id();
     let inbound = InboundMessage {
         channel: ChannelType::cli(),
-        sender: Sender::new("cli").with_name("User"),
+        sender: Sender::new(sender_id.clone()).with_name(cli_sender_name()),
         content: MessagePayload::text(message),
-        group_id: Some("cli".to_string()),
+        group_id: Some(sender_id),
         timestamp: chrono::Utc::now(),
         raw: serde_json::Value::Null,
     };
 
     match router.route(inbound).await {
-        Ok(outcome) => println!("{}", outcome.response.text),
+        Ok(outcome) => {
+            println!("{}", outcome.response.text);
+            wait_for_cli_google_oauth_completion(&config, &outcome.response.metadata).await;
+        }
         Err(err) => println!("Error: {}", err),
     }
+}
+
+fn cli_sender_id() -> String {
+    std::env::var("USER")
+        .ok()
+        .or_else(|| std::env::var("LOGNAME").ok())
+        .or_else(|| std::env::var("USERNAME").ok())
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("cli:{value}"))
+        .unwrap_or_else(|| "cli".to_string())
+}
+
+fn cli_sender_name() -> String {
+    cli_sender_id()
+        .strip_prefix("cli:")
+        .unwrap_or("User")
+        .to_string()
+}
+
+async fn wait_for_cli_google_oauth_completion(
+    config: &AppConfig,
+    metadata: &std::collections::HashMap<String, String>,
+) {
+    if metadata.get("google_oauth_channel").map(String::as_str) != Some("cli") {
+        return;
+    }
+
+    let Some(oauth_state) = metadata.get("google_oauth_state").cloned() else {
+        return;
+    };
+
+    let store =
+        borgclaw_core::skills::OAuthCompletionStore::from_google_config(&config.skills.google);
+    println!();
+    println!(
+        "{} Waiting for Google OAuth completion in your browser...",
+        "…".cyan()
+    );
+
+    let started = tokio::time::Instant::now();
+    let timeout = Duration::from_secs(600);
+    while started.elapsed() < timeout {
+        if let Some(completion) = store.take(&oauth_state).await {
+            println!();
+            if completion.success {
+                println!("{} {}", "✓".green(), completion.message);
+            } else {
+                println!("{} {}", "✗".red(), completion.message);
+            }
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(750)).await;
+    }
+
+    println!();
+    println!(
+        "{} Timed out waiting for Google OAuth completion. Re-run your request or complete the browser flow and then retry the Google command.",
+        "!".yellow()
+    );
 }
 
 async fn config_action(path: &PathBuf, mut config: AppConfig, action: ConfigAction) {

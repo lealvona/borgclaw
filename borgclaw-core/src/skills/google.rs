@@ -70,6 +70,44 @@ pub struct OAuthState {
     pub group_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OAuthPrincipal {
+    pub channel: String,
+    pub user_id: String,
+    pub group_id: Option<String>,
+}
+
+impl OAuthPrincipal {
+    pub fn new(
+        channel: impl Into<String>,
+        user_id: impl Into<String>,
+        group_id: Option<String>,
+    ) -> Self {
+        Self {
+            channel: channel.into(),
+            user_id: user_id.into(),
+            group_id,
+        }
+    }
+
+    pub fn from_oauth_state(state: &OAuthState) -> Self {
+        Self::new(
+            state.channel.clone(),
+            state.user_id.clone(),
+            state.group_id.clone(),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OAuthCompletion {
+    pub session_id: String,
+    pub channel: String,
+    pub success: bool,
+    pub message: String,
+    pub completed_at: DateTime<Utc>,
+}
+
 /// Pending OAuth requests store
 #[derive(Clone)]
 pub struct OAuthPendingStore {
@@ -125,6 +163,52 @@ impl OAuthPendingStore {
 }
 
 impl Default for OAuthPendingStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone)]
+pub struct OAuthCompletionStore {
+    entries: Arc<RwLock<std::collections::HashMap<String, OAuthCompletion>>>,
+    path: Option<PathBuf>,
+}
+
+impl OAuthCompletionStore {
+    pub fn new() -> Self {
+        Self {
+            entries: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            path: None,
+        }
+    }
+
+    pub fn with_path(path: PathBuf) -> Self {
+        let entries = load_oauth_completions(&path);
+        Self {
+            entries: Arc::new(RwLock::new(entries)),
+            path: Some(path),
+        }
+    }
+
+    pub fn from_google_config(config: &GoogleOAuthConfig) -> Self {
+        Self::with_path(completion_store_path_for_token(&config.token_path))
+    }
+
+    pub async fn insert(&self, state: String, completion: OAuthCompletion) {
+        let mut entries = self.entries.write().await;
+        entries.insert(state, completion);
+        persist_oauth_completions(self.path.as_ref(), &entries);
+    }
+
+    pub async fn take(&self, state: &str) -> Option<OAuthCompletion> {
+        let mut entries = self.entries.write().await;
+        let removed = entries.remove(state);
+        persist_oauth_completions(self.path.as_ref(), &entries);
+        removed
+    }
+}
+
+impl Default for OAuthCompletionStore {
     fn default() -> Self {
         Self::new()
     }
@@ -342,7 +426,69 @@ fn pending_store_path_for_token(token_path: &std::path::Path) -> PathBuf {
     path
 }
 
+fn completion_store_path_for_token(token_path: &std::path::Path) -> PathBuf {
+    let mut path = token_path.to_path_buf();
+    let file_name = token_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| format!("{name}.oauth-completions.json"))
+        .unwrap_or_else(|| "google_token.json.oauth-completions.json".to_string());
+    path.set_file_name(file_name);
+    path
+}
+
+pub fn scoped_token_path(token_path: &std::path::Path, principal: &OAuthPrincipal) -> PathBuf {
+    let mut path = token_path.to_path_buf();
+    let file_stem = token_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("google_token");
+    let extension = token_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("json");
+    let scope = [
+        sanitize_scope_segment(&principal.channel),
+        sanitize_scope_segment(&principal.user_id),
+        principal
+            .group_id
+            .as_deref()
+            .map(sanitize_scope_segment)
+            .unwrap_or_else(|| "dm".to_string()),
+    ]
+    .join("__");
+    path.set_file_name(format!("{file_stem}.{scope}.{extension}"));
+    path
+}
+
+fn sanitize_scope_segment(segment: &str) -> String {
+    let sanitized: String = segment
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if sanitized.is_empty() {
+        "unknown".to_string()
+    } else {
+        sanitized
+    }
+}
+
 fn load_pending_requests(path: &std::path::Path) -> std::collections::HashMap<String, OAuthState> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_default()
+}
+
+fn load_oauth_completions(
+    path: &std::path::Path,
+) -> std::collections::HashMap<String, OAuthCompletion> {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|content| serde_json::from_str(&content).ok())
@@ -367,6 +513,28 @@ fn persist_pending_requests(
     }
 
     if let Ok(content) = serde_json::to_string_pretty(requests) {
+        let _ = std::fs::write(path, content);
+    }
+}
+
+fn persist_oauth_completions(
+    path: Option<&PathBuf>,
+    entries: &std::collections::HashMap<String, OAuthCompletion>,
+) {
+    let Some(path) = path else {
+        return;
+    };
+
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    if entries.is_empty() {
+        let _ = std::fs::remove_file(path);
+        return;
+    }
+
+    if let Ok(content) = serde_json::to_string_pretty(entries) {
         let _ = std::fs::write(path, content);
     }
 }
@@ -1649,6 +1817,58 @@ mod tests {
             ..Default::default()
         });
         assert!(reloaded_again.get("state-1").await.is_none());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scoped_token_path_isolated_by_principal() {
+        let base = PathBuf::from(".local/data/google_token.json");
+        let alice = OAuthPrincipal::new("cli", "cli:alice", Some("cli:alice".to_string()));
+        let bob = OAuthPrincipal::new("cli", "cli:bob", Some("cli:bob".to_string()));
+
+        let alice_path = scoped_token_path(&base, &alice);
+        let bob_path = scoped_token_path(&base, &bob);
+
+        assert_ne!(alice_path, bob_path);
+        assert!(alice_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap()
+            .contains("cli__cli_alice__cli_alice"));
+    }
+
+    #[tokio::test]
+    async fn oauth_completion_store_round_trips_entries() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_google_oauth_completion_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let token_path = root.join("google_token.json");
+        let store =
+            OAuthCompletionStore::with_path(root.join("google_token.json.oauth-completions.json"));
+        store
+            .insert(
+                "session-1".to_string(),
+                OAuthCompletion {
+                    session_id: "session-1".to_string(),
+                    channel: "cli".to_string(),
+                    success: true,
+                    message: "done".to_string(),
+                    completed_at: Utc::now(),
+                },
+            )
+            .await;
+
+        let reloaded = OAuthCompletionStore::from_google_config(&GoogleOAuthConfig {
+            token_path,
+            ..Default::default()
+        });
+        let completion = reloaded.take("session-1").await.unwrap();
+        assert_eq!(completion.channel, "cli");
+        assert!(completion.success);
 
         std::fs::remove_dir_all(root).unwrap();
     }

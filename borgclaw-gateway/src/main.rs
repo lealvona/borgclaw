@@ -260,6 +260,19 @@ async fn oauth_callback_handler(
 
     // Handle OAuth errors
     if let Some(err) = error {
+        if let Some(oauth_state_str) = oauth_state_str.as_ref() {
+            if let Some(oauth_state) = gateway_state.oauth_pending.get(oauth_state_str).await {
+                persist_oauth_completion(
+                    &gateway_state,
+                    oauth_state_str,
+                    &oauth_state,
+                    false,
+                    &format!("Google authentication failed: {}", err),
+                )
+                .await;
+                gateway_state.oauth_pending.remove(oauth_state_str).await;
+            }
+        }
         return (
             StatusCode::BAD_REQUEST,
             axum::response::Html(format!(
@@ -344,7 +357,11 @@ async fn oauth_callback_handler(
         );
     }
 
-    let google_client = GoogleClient::new(google_config.clone());
+    let principal = borgclaw_core::skills::OAuthPrincipal::from_oauth_state(&oauth_state);
+    let mut scoped_google_config = google_config.clone();
+    scoped_google_config.token_path =
+        borgclaw_core::skills::scoped_token_path(&google_config.token_path, &principal);
+    let google_client = GoogleClient::new(scoped_google_config.clone());
 
     // Exchange the authorization code for tokens
     match google_client.auth().exchange_code(&code).await {
@@ -354,7 +371,9 @@ async fn oauth_callback_handler(
                 oauth_state.user_id, oauth_state.session_id
             );
 
-            if let Err(err) = notify_oauth_completion(&gateway_state, &oauth_state).await {
+            if let Err(err) =
+                notify_oauth_completion(&gateway_state, &oauth_state_str, &oauth_state).await
+            {
                 warn!(
                     "OAuth completed but channel notification failed for session {}: {}",
                     oauth_state.session_id, err
@@ -385,6 +404,14 @@ async fn oauth_callback_handler(
         }
         Err(err) => {
             error!("OAuth token exchange failed: {}", err);
+            persist_oauth_completion(
+                &gateway_state,
+                &oauth_state_str,
+                &oauth_state,
+                false,
+                &format!("Failed to complete Google authentication: {}", err),
+            )
+            .await;
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 axum::response::Html(format!(
@@ -406,9 +433,11 @@ async fn oauth_callback_handler(
 
 async fn notify_oauth_completion(
     gateway_state: &GatewayState,
+    oauth_state_key: &str,
     oauth_state: &borgclaw_core::skills::OAuthState,
 ) -> Result<(), String> {
     let message = "Google authentication completed successfully. You can return to BorgClaw and continue using Google tools.";
+    persist_oauth_completion(gateway_state, oauth_state_key, oauth_state, true, message).await;
 
     match oauth_state.channel.as_str() {
         "telegram" => send_telegram_oauth_notification(gateway_state, oauth_state, message).await,
@@ -424,6 +453,30 @@ async fn notify_oauth_completion(
             Ok(())
         }
     }
+}
+
+async fn persist_oauth_completion(
+    gateway_state: &GatewayState,
+    oauth_state_key: &str,
+    oauth_state: &borgclaw_core::skills::OAuthState,
+    success: bool,
+    message: &str,
+) {
+    let store = borgclaw_core::skills::OAuthCompletionStore::from_google_config(
+        &gateway_state.config.skills.google,
+    );
+    store
+        .insert(
+            oauth_state_key.to_string(),
+            borgclaw_core::skills::OAuthCompletion {
+                session_id: oauth_state.session_id.clone(),
+                channel: oauth_state.channel.clone(),
+                success,
+                message: message.to_string(),
+                completed_at: chrono::Utc::now(),
+            },
+        )
+        .await;
 }
 
 async fn send_session_oauth_notification(
@@ -5012,7 +5065,9 @@ mod tests {
             group_id: None,
         };
 
-        notify_oauth_completion(&state, &oauth_state).await.unwrap();
+        notify_oauth_completion(&state, "state-1", &oauth_state)
+            .await
+            .unwrap();
 
         let event = outbound_rx.recv().await.unwrap();
         assert_eq!(event["type"], "oauth_complete");

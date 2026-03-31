@@ -468,6 +468,22 @@ You are autonomous, helpful, and capable of complex multi-step tasks.",
                     self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
                 session.add_message(Message::system(result_message));
 
+                if tool_result
+                    .metadata
+                    .get("response_mode")
+                    .map(String::as_str)
+                    == Some("direct")
+                {
+                    let direct_text = tool_result.output.clone();
+                    let direct_metadata = tool_result.metadata.clone();
+                    return Ok(AgentResponse {
+                        text: direct_text,
+                        tool_calls: vec![tool_call.with_result(tool_result.clone())],
+                        session_updates: HashMap::new(),
+                        metadata: direct_metadata,
+                    });
+                }
+
                 // Continue the loop to get the LLM's response to the tool result
                 continue;
             } else {

@@ -790,6 +790,14 @@ pub(super) fn google_client(runtime: &ToolRuntime) -> GoogleClient {
     let mut config = runtime.skills.google.clone();
     config.client_id = resolve_env_reference(&config.client_id);
     config.client_secret = resolve_env_reference(&config.client_secret);
+    if let Some(invocation) = runtime.invocation.as_ref() {
+        let principal = crate::skills::OAuthPrincipal::new(
+            invocation.sender.channel.clone(),
+            invocation.sender.id.clone(),
+            invocation.metadata.get("group_id").cloned(),
+        );
+        config.token_path = crate::skills::scoped_token_path(&config.token_path, &principal);
+    }
     GoogleClient::new(config)
 }
 

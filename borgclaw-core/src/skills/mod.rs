@@ -18,8 +18,9 @@ pub use browser::{
 };
 pub use github::{GitHubClient, GitHubConfig, GitHubSafety, OperationType, RepoAccess};
 pub use google::{
-    CalendarClient, CalendarEvent, DriveClient, GmailClient, GoogleAuth, GoogleClient,
-    GoogleOAuthConfig, OAuthPendingStore, OAuthState,
+    scoped_token_path, CalendarClient, CalendarEvent, DriveClient, GmailClient, GoogleAuth,
+    GoogleClient, GoogleOAuthConfig, OAuthCompletion, OAuthCompletionStore, OAuthPendingStore,
+    OAuthPrincipal, OAuthState,
 };
 pub use image::{ImageBackend, ImageClient, ImageFormat, ImageParams, ImageResult};
 pub use plugin::{PluginManifest, PluginRegistry, WasmPermission};
