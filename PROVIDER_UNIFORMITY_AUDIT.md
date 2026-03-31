@@ -1,7 +1,7 @@
 # Provider Uniformity Audit
 
 **Date:** 2026-03-30  
-**Version:** 0.16.0
+**Version:** 0.17.0
 
 ## Summary
 

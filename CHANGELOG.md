@@ -7,6 +7,20 @@
 
 ## Unreleased
 
+## 0.17.0 - 2026-03-31
+
+### Features
+
+- **Google OAuth callback hardening** — Pending OAuth state now persists alongside the configured Google token path so the gateway callback can recover request state across process boundaries instead of depending on an in-memory runtime.
+- **Telegram OAuth completion notifications** — Successful Google OAuth callbacks now send a direct completion message back to Telegram-originated flows while the browser success page remains the fallback for other channels.
+- **Provider/parser uniformity cleanup** — Provider and tool-path drift was cleaned up under the stricter workspace `fmt` and `clippy -D warnings` baseline.
+
+### Documentation
+
+- Added a full `HANDOFF.md` covering recent PRs, current architecture, testing commands, environment variables, and the next-agent guide.
+- Reconciled `ROADMAP.md`, `docs/implementation-status.md`, `docs/gateway.md`, `docs/inspirations.md`, and the March 30 implementation plans with the actual landed runtime state.
+- Marked the remaining OAuth gaps explicitly: non-Telegram in-band completion delivery and per-user Google token scoping are still follow-up work, not hidden behind "complete" status language.
+
 ## 0.16.0 - 2026-03-30
 
 ### Infrastructure

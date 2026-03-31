@@ -1,7 +1,7 @@
 # BorgClaw Codebase Handoff
 
 **Date:** 2026-03-31  
-**Version:** 0.16.0  
+**Version:** 0.17.0  
 **Status:** All tests passing (490+ tests)
 
 ---
