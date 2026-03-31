@@ -271,12 +271,12 @@ select_provider() {
         read -r provider_choice
         
         case "$provider_choice" in
-            1) PROVIDER="anthropic"; API_KEY_NAME="ANTHROPIC_API_KEY"; break ;;
-            2) PROVIDER="openai"; API_KEY_NAME="OPENAI_API_KEY"; break ;;
-            3) PROVIDER="google"; API_KEY_NAME="GOOGLE_API_KEY"; break ;;
-            4) PROVIDER="kimi"; API_KEY_NAME="KIMI_API_KEY"; break ;;
-            5) PROVIDER="minimax"; API_KEY_NAME="MINIMAX_API_KEY"; break ;;
-            6) PROVIDER="z"; API_KEY_NAME="Z_API_KEY"; break ;;
+            1) PROVIDER="anthropic"; API_KEY_NAME="ANTHROPIC_API_KEY"; MODEL="claude-sonnet-4-20250514"; break ;;
+            2) PROVIDER="openai"; API_KEY_NAME="OPENAI_API_KEY"; MODEL="gpt-4o"; break ;;
+            3) PROVIDER="google"; API_KEY_NAME="GOOGLE_API_KEY"; MODEL="gemini-2.5-pro"; break ;;
+            4) PROVIDER="kimi"; API_KEY_NAME="KIMI_API_KEY"; MODEL="kimi-k2.5"; break ;;
+            5) PROVIDER="minimax"; API_KEY_NAME="MINIMAX_API_KEY"; MODEL="MiniMax-M2.7"; break ;;
+            6) PROVIDER="z"; API_KEY_NAME="Z_API_KEY"; MODEL="glm-4.7"; break ;;
             *) error "Invalid choice. Please enter 1-6." ;;
         esac
     done
@@ -287,9 +287,24 @@ select_provider() {
 # Check if provider already configured
 CONFIG_FILE="${HOME}/.config/borgclaw/config.toml"
 EXISTING_PROVIDER=""
+EXISTING_MODEL=""
 if [ -f "$CONFIG_FILE" ]; then
     EXISTING_PROVIDER=$(grep -E '^provider\s*=' "$CONFIG_FILE" 2>/dev/null | head -1 | sed 's/.*=\s*"\([^"]*\)".*/\1/' || echo "")
+    EXISTING_MODEL=$(grep -E '^model\s*=' "$CONFIG_FILE" 2>/dev/null | head -1 | sed 's/.*=\s*"\([^"]*\)".*/\1/' || echo "")
 fi
+
+# Default model for each provider
+set_default_model() {
+    case "$PROVIDER" in
+        anthropic) MODEL="claude-sonnet-4-20250514" ;;
+        openai) MODEL="gpt-4o" ;;
+        google) MODEL="gemini-2.5-pro" ;;
+        kimi) MODEL="kimi-k2.5" ;;
+        minimax) MODEL="MiniMax-M2.7" ;;
+        z) MODEL="glm-4.7" ;;
+        *) MODEL="gpt-4o" ;;
+    esac
+}
 
 if [ "$UPDATE_MODE" = true ] || [ -z "$EXISTING_PROVIDER" ]; then
     select_provider
@@ -309,6 +324,12 @@ else
             minimax) API_KEY_NAME="MINIMAX_API_KEY" ;;
             z) API_KEY_NAME="Z_API_KEY" ;;
         esac
+        # Use existing model if valid, otherwise use default
+        if [ -n "$EXISTING_MODEL" ] && [ "$EXISTING_MODEL" != "default" ]; then
+            MODEL="$EXISTING_MODEL"
+        else
+            set_default_model
+        fi
     fi
 fi
 
@@ -690,7 +711,7 @@ cat > "$CONFIG_FILE" << EOF
 
 [agent]
 provider = "${PROVIDER}"
-model = "default"
+model = "${MODEL}"
 
 [channels.websocket]
 enabled = true
