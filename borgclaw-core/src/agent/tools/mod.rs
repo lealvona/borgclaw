@@ -301,6 +301,7 @@ pub fn parse_tool_command(input: &str, tools: &[Tool]) -> Option<ToolCall> {
         }
     }
     
+    // Content should now start with the tool command (think blocks stripped by caller)
     if !content.starts_with('/') {
         return None;
     }
