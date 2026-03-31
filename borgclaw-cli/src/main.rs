@@ -145,12 +145,14 @@ enum SecretAction {
     Check { key: String },
     /// Rotate the service authentication token
     RotateToken,
-    /// Initialize secret store with password protection (future feature)
+    /// Initialize secret store with password protection
     Init,
-    /// Unlock secret store for session (future feature)
+    /// Unlock secret store for session
     Unlock,
-    /// Lock secret store (future feature)
+    /// Lock secret store
     Lock,
+    /// Change secret store password
+    ChangePassword,
     /// Migrate secrets from .env file to encrypted store
     Migrate {
         /// Path to .env file (defaults to ./.env)
@@ -1124,7 +1126,7 @@ async fn identity_action(path: &PathBuf, config: &mut AppConfig, action: Identit
                     println!("Created identity document: {}", path.display());
                     // Update config to point to new file
                     config.agent.soul_path = Some(path.clone());
-                    if let Err(e) = save_config(config, path) {
+                    if let Err(e) = save_config(config, &path) {
                         println!("Created file but failed to update config: {}", e);
                     }
                 }
@@ -2346,58 +2348,172 @@ async fn secrets(config: AppConfig, action: SecretAction) {
             }
         }
         SecretAction::Init => {
-            println!("Secret store initialization with password protection");
-            println!("==================================================");
+            println!("🔐 Secret Store Password Protection Setup");
+            println!("========================================");
             println!();
-            println!("This feature will be available in a future release.");
-            println!();
-            println!("Current behavior:");
-            println!("- Secret store uses file-based encryption keys (.key files)");
-            println!("- Keys are automatically generated on first use");
-            println!();
-            println!("Future password protection will include:");
-            println!("- PBKDF2 key derivation from your password");
-            println!("- Salt storage with encrypted data");
-            println!("- Session-based unlock/lock");
-            println!();
-            println!("For now, the secret store is ready to use with automatic key generation.");
+            
+            if !config.security.secrets_encryption {
+                println!("✗ Encryption is disabled in config.");
+                println!("  Enable it by setting: security.secrets_encryption = true");
+                return;
+            }
+            
+            let store = borgclaw_core::security::SecretStore::with_config(
+                borgclaw_core::security::SecretStoreConfig {
+                    encryption_enabled: config.security.secrets_encryption,
+                    secrets_path: Some(config.security.secrets_path.clone()),
+                },
+            );
+            
+            if store.is_password_protected() {
+                println!("✗ Secret store is already password protected.");
+                println!();
+                println!("To change the password, use:");
+                println!("  borgclaw secrets change-password");
+                return;
+            }
+            
+            // Get password from user
+            let password = dialoguer::Password::new()
+                .with_prompt("Enter new password for secret store")
+                .with_confirmation("Confirm password", "Passwords do not match")
+                .interact();
+                
+            match password {
+                Ok(pw) => {
+                    match store.init_with_password(&pw).await {
+                        Ok(()) => {
+                            println!();
+                            println!("✓ Secret store initialized with password protection");
+                            println!();
+                            println!("IMPORTANT: Your password is NOT stored anywhere.");
+                            println!("If you forget it, your secrets CANNOT be recovered.");
+                            println!();
+                            println!("Store location: {}", config.security.secrets_path.display());
+                        }
+                        Err(e) => {
+                            println!();
+                            println!("✗ Failed to initialize: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("✗ Password input cancelled: {}", e);
+                }
+            }
         }
         SecretAction::Unlock => {
-            println!("Unlocking secret store...");
-            println!();
-            println!("This feature will be available in a future release.");
-            println!();
-            println!("Current behavior:");
-            println!(
-                "- Secret store is automatically accessible when the encryption key file exists"
+            let store = borgclaw_core::security::SecretStore::with_config(
+                borgclaw_core::security::SecretStoreConfig {
+                    encryption_enabled: config.security.secrets_encryption,
+                    secrets_path: Some(config.security.secrets_path.clone()),
+                },
             );
-            println!("- No interactive unlock required");
-            println!();
-            println!("Store location: {}", config.security.secrets_path.display());
-            if config.security.secrets_encryption {
-                println!("Encryption: enabled");
-            } else {
-                println!("Encryption: disabled (enable in config)");
+            
+            if !store.is_password_protected() {
+                println!("ℹ Secret store does not use password protection.");
+                println!();
+                println!("To set up password protection, run:");
+                println!("  borgclaw secrets init");
+                return;
+            }
+            
+            let state = store.state().await;
+            if state == borgclaw_core::security::StoreState::Unlocked {
+                println!("✓ Secret store is already unlocked");
+                return;
+            }
+            
+            let password = dialoguer::Password::new()
+                .with_prompt("Enter password to unlock secret store")
+                .interact();
+                
+            match password {
+                Ok(pw) => {
+                    match store.unlock(&pw).await {
+                        Ok(()) => {
+                            println!("✓ Secret store unlocked");
+                        }
+                        Err(e) => {
+                            println!("✗ Failed to unlock: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("✗ Password input cancelled: {}", e);
+                }
             }
         }
         SecretAction::Lock => {
-            println!("Locking secret store...");
-            println!();
-            println!("This feature will be available in a future release.");
-            println!();
-            println!("Current behavior:");
-            println!("- Secret store remains accessible while the key file exists");
-            println!("- To effectively 'lock', remove the key file:");
-            println!(
-                "  rm {}",
-                config
-                    .security
-                    .secrets_path
-                    .with_extension("enc.key")
-                    .display()
+            let store = borgclaw_core::security::SecretStore::with_config(
+                borgclaw_core::security::SecretStoreConfig {
+                    encryption_enabled: config.security.secrets_encryption,
+                    secrets_path: Some(config.security.secrets_path.clone()),
+                },
             );
+            
+            if !store.is_password_protected() {
+                println!("ℹ Secret store does not use password protection.");
+                return;
+            }
+            
+            store.lock().await;
+            println!("✓ Secret store locked");
+        }
+        SecretAction::ChangePassword => {
+            let store = borgclaw_core::security::SecretStore::with_config(
+                borgclaw_core::security::SecretStoreConfig {
+                    encryption_enabled: config.security.secrets_encryption,
+                    secrets_path: Some(config.security.secrets_path.clone()),
+                },
+            );
+            
+            if !store.is_password_protected() {
+                println!("✗ Secret store is not password protected.");
+                println!();
+                println!("To set up password protection, run:");
+                println!("  borgclaw secrets init");
+                return;
+            }
+            
+            println!("🔐 Change Secret Store Password");
+            println!("===============================");
             println!();
-            println!("Warning: Without the key file, secrets cannot be decrypted!");
+            
+            let old_password = dialoguer::Password::new()
+                .with_prompt("Enter current password")
+                .interact();
+                
+            let Ok(old_pw) = old_password else {
+                println!("✗ Password input cancelled");
+                return;
+            };
+            
+            let new_password = dialoguer::Password::new()
+                .with_prompt("Enter new password")
+                .with_confirmation("Confirm new password", "Passwords do not match")
+                .interact();
+                
+            match new_password {
+                Ok(new_pw) => {
+                    match store.change_password(&old_pw, &new_pw).await {
+                        Ok(()) => {
+                            println!();
+                            println!("✓ Password changed successfully");
+                            println!();
+                            println!("IMPORTANT: Your new password is NOT stored anywhere.");
+                            println!("If you forget it, your secrets CANNOT be recovered.");
+                        }
+                        Err(e) => {
+                            println!();
+                            println!("✗ Failed to change password: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("✗ Password input cancelled: {}", e);
+                }
+            }
         }
         SecretAction::Migrate { env_file } => {
             let env_path = env_file.unwrap_or_else(|| PathBuf::from(".env"));

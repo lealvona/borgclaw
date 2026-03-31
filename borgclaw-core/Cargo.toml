@@ -23,6 +23,7 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 sqlx.workspace = true
+argon2 = "0.5"
 regex.workspace = true
 cron.workspace = true
 teloxide = { version = "0.13", features = ["full"] }
