@@ -207,6 +207,17 @@ fn canonical_or_current(path: &Path) -> PathBuf {
 pub fn parse_tool_command(input: &str, tools: &[Tool]) -> Option<ToolCall> {
     let trimmed = input.trim();
     
+    // Check for MiniMax native [TOOL_CALL] format
+    if let Some(start) = trimmed.find("[TOOL_CALL]") {
+        let start_idx = start + "[TOOL_CALL]".len();
+        if let Some(end) = trimmed.find("[/TOOL_CALL]") {
+            let content = &trimmed[start_idx..end];
+            if let Some(tool_call) = parse_minimax_tool_format(content, tools) {
+                return Some(tool_call);
+            }
+        }
+    }
+    
     // Check for XML-wrapped tool calls (e.g., <minimax:tool_call>...</minimax:tool_call>)
     let content = if let Some(start) = trimmed.find("<tool_call>") {
         let start_idx = start + "<tool_call>".len();
@@ -274,6 +285,150 @@ pub fn parse_tool_command(input: &str, tools: &[Tool]) -> Option<ToolCall> {
     };
 
     Some(ToolCall::new(tool_name, arguments))
+}
+
+/// Parse MiniMax native tool format: {tool => "name", args => {param => value}}
+fn parse_minimax_tool_format(content: &str, tools: &[Tool]) -> Option<ToolCall> {
+    // Extract tool name: {tool => "name" ...}
+    let tool_pattern = "{tool => ";
+    let tool_start = content.find(tool_pattern)?;
+    let tool_start = tool_start + tool_pattern.len();
+    
+    // Find the tool name (quoted string)
+    let tool_name_start = content[tool_start..].find('"')?;
+    let tool_name_start = tool_start + tool_name_start + 1;
+    let tool_name_end = content[tool_name_start..].find('"')?;
+    let tool_name = &content[tool_name_start..tool_name_start + tool_name_end];
+    
+    // Verify tool exists
+    if !tools.iter().any(|t| t.name == tool_name) {
+        return None;
+    }
+    
+    // Extract args: args => { ... }
+    let args_pattern = "args => {";
+    let args_start = content.find(args_pattern)?;
+    let args_start = args_start + args_pattern.len();
+    
+    // Find the closing brace for args
+    let mut brace_count = 1;
+    let mut args_end = args_start;
+    for (i, ch) in content[args_start..].chars().enumerate() {
+        match ch {
+            '{' => brace_count += 1,
+            '}' => {
+                brace_count -= 1;
+                if brace_count == 0 {
+                    args_end = args_start + i;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    
+    let args_content = &content[args_start..args_end];
+    
+    // Parse arguments - MiniMax format supports both:
+    //   key => value       (arrow syntax)
+    //   --key "value"      (flag syntax)
+    let arguments = parse_minimax_args(args_content);
+    
+    Some(ToolCall::new(tool_name, arguments))
+}
+
+/// Parse MiniMax args format handling both => and --key value styles
+fn parse_minimax_args(content: &str) -> HashMap<String, serde_json::Value> {
+    let mut arguments = HashMap::new();
+    let trimmed = content.trim();
+    
+    if trimmed.is_empty() {
+        return arguments;
+    }
+    
+    // First try the --key "value" format (most common from MiniMax)
+    if trimmed.contains("--") {
+        parse_minimax_flag_format(trimmed, &mut arguments);
+    }
+    
+    // Also try key => value format
+    parse_minimax_arrow_format(trimmed, &mut arguments);
+    
+    arguments
+}
+
+/// Parse --key "value" format
+fn parse_minimax_flag_format(content: &str, arguments: &mut HashMap<String, serde_json::Value>) {
+    let mut chars = content.chars().peekable();
+    
+    while chars.peek().is_some() {
+        // Skip whitespace and newlines
+        while chars.peek().map(|c| c.is_whitespace()).unwrap_or(false) {
+            chars.next();
+        }
+        
+        // Check for -- prefix
+        if chars.peek() == Some(&'-') {
+            chars.next();
+            if chars.peek() == Some(&'-') {
+                chars.next();
+                
+                // Read the key
+                let mut key = String::new();
+                while chars.peek().map(|c| !c.is_whitespace() && *c != '=').unwrap_or(false) {
+                    key.push(chars.next().unwrap());
+                }
+                
+                // Skip whitespace
+                while chars.peek().map(|c| c.is_whitespace()).unwrap_or(false) {
+                    chars.next();
+                }
+                
+                // Read value (quoted or unquoted)
+                let mut value = String::new();
+                if chars.peek() == Some(&'"') {
+                    chars.next(); // consume opening quote
+                    while chars.peek().is_some() && chars.peek() != Some(&'"') {
+                        value.push(chars.next().unwrap());
+                    }
+                    chars.next(); // consume closing quote if present
+                } else {
+                    // Unquoted value - read until whitespace or end
+                    while chars.peek().map(|c| !c.is_whitespace() && *c != '}').unwrap_or(false) {
+                        value.push(chars.next().unwrap());
+                    }
+                }
+                
+                if !key.is_empty() {
+                    let json_value = serde_json::from_str::<serde_json::Value>(&value)
+                        .unwrap_or_else(|_| serde_json::Value::String(value));
+                    arguments.insert(key, json_value);
+                }
+            }
+        } else {
+            chars.next();
+        }
+    }
+}
+
+/// Parse key => value format
+fn parse_minimax_arrow_format(content: &str, arguments: &mut HashMap<String, serde_json::Value>) {
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line == "--" {
+            continue;
+        }
+        
+        if let Some(arrow_pos) = line.find("=>") {
+            let key = line[..arrow_pos].trim().trim_start_matches('-').to_string();
+            let value_str = line[arrow_pos + 2..].trim().trim_matches('"');
+            
+            let value = serde_json::from_str::<serde_json::Value>(value_str)
+                .unwrap_or_else(|_| serde_json::Value::String(value_str.to_string()));
+            
+            arguments.insert(key, value);
+        }
+    }
 }
 
 pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult {
@@ -817,6 +972,19 @@ mod tests {
         let call = parse_tool_command(input, &tools).unwrap();
         assert_eq!(call.name, "list_directory");
         assert_eq!(call.arguments["path"], ".");
+    }
+
+    #[test]
+    fn parses_minimax_native_tool_call_format() {
+        let tools = builtin_tools();
+        let input = r#"[TOOL_CALL]
+{tool => "execute_command", args => {
+  --command "ls -la"
+}}
+[/TOOL_CALL]"#;
+        let call = parse_tool_command(input, &tools).unwrap();
+        assert_eq!(call.name, "execute_command");
+        assert_eq!(call.arguments["command"], "ls -la");
     }
 
     #[test]
