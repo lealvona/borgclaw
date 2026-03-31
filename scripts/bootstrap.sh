@@ -33,6 +33,29 @@ cd "$ROOT_DIR"
 source "$ROOT_DIR/scripts/lib/build-env.sh"
 borgclaw_prepare_build_env
 
+# Parse arguments
+FORCE_REBUILD=false
+for arg in "$@"; do
+    case "$arg" in
+        --force)
+            FORCE_REBUILD=true
+            shift
+            ;;
+        --help|-h)
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  --force    Force a clean rebuild even if binaries exist"
+            echo "  --help     Show this help message"
+            echo ""
+            echo "Examples:"
+            echo "  $0              # Normal bootstrap (builds only if needed)"
+            echo "  $0 --force      # Force rebuild from scratch"
+            exit 0
+            ;;
+    esac
+done
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -148,8 +171,12 @@ source_is_newer() {
     return 1  # Source is not newer
 }
 
-# Force rebuild if source is newer than binaries
-if [ -f "$BORGCLAW_BIN" ] && source_is_newer "$BORGCLAW_BIN"; then
+# Force rebuild if --force flag set or source is newer than binaries
+if [ "$FORCE_REBUILD" = true ]; then
+    warn "--force flag set: performing clean rebuild"
+    log "Cleaning release build artifacts..."
+    cargo clean --release 2>/dev/null || true
+elif [ -f "$BORGCLAW_BIN" ] && source_is_newer "$BORGCLAW_BIN"; then
     warn "Source files are newer than existing binary"
     log "Forcing rebuild to ensure binaries are up to date..."
     cargo clean --release 2>/dev/null || true
