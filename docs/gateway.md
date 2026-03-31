@@ -269,11 +269,14 @@ Current behavior:
 - The browser window always receives the success or failure HTML response.
 - Browser-originated flows also emit `window.opener.postMessage(...)` so the originating page can react.
 - Telegram-originated OAuth flows now receive a direct completion message back through the Telegram channel.
-- WebSocket, web chat, and CLI sessions do not yet receive a live in-band completion event from the gateway; those flows still rely on the browser success page as the operator-facing completion signal.
+- Active WebSocket sessions can now receive a live `oauth_complete` event from the gateway once the callback succeeds.
+- Browser chat still relies on the popup window's `window.opener.postMessage(...)` notification path.
+- CLI sessions do not yet receive a live in-band completion event from the gateway.
 
 Operational note:
 
 - Pending OAuth requests are persisted alongside the configured Google token path so the tool-runtime request and the gateway callback can share state safely.
+- The dashboard now renders management endpoints inside modal inspectors instead of linking operators to raw JSON tabs, and chat responses can display structured payloads including markdown, HTML previews, media, files, tool calls, and metadata.
 - `authenticated` — Successful authentication
 - `response` — Agent reply
 - `heartbeat` / `pong` — Keepalive
