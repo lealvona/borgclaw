@@ -20,7 +20,7 @@ use borgclaw_core::{
     },
     config::load_config,
     security::{load_process_records, process_state_path, CommandProcessStatus, SecurityLayer},
-    skills::{GoogleClient, OAuthPendingStore, SkillsRegistry},
+    skills::{GoogleClient, OAuthCompletionStore, OAuthPendingStore, SkillsRegistry},
     AppConfig,
 };
 use futures_util::{SinkExt, StreamExt};
@@ -125,9 +125,11 @@ struct ConnectionInfo {
     client_id: String,
     connected_at: chrono::DateTime<chrono::Utc>,
     session_id: Option<String>,
+    session_state: String,
     authenticated: bool,
     messages_received: u64,
     messages_sent: u64,
+    last_event_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Clone)]
@@ -177,6 +179,7 @@ async fn main() {
         connections: Arc::new(RwLock::new(HashMap::new())),
         oauth_pending,
     };
+    spawn_oauth_store_maintenance(state.clone());
 
     // CORS layer
     let cors = CorsLayer::new()
@@ -198,6 +201,8 @@ async fn main() {
         .route("/api/chat", get(api_chat_get).post(api_chat_post))
         .route("/api/tools", get(api_tools))
         .route("/api/connections", get(api_connections))
+        .route("/api/oauth/completion", get(api_oauth_completion))
+        .route("/api/oauth/stores", get(api_oauth_stores))
         .route("/api/schedules", get(api_schedules))
         .route("/api/heartbeat/tasks", get(api_heartbeat_tasks))
         .route("/api/subagents", get(api_subagents))
@@ -247,6 +252,25 @@ async fn main() {
 
 async fn index() -> impl IntoResponse {
     axum::response::Html(INDEX_HTML)
+}
+
+fn spawn_oauth_store_maintenance(state: GatewayState) {
+    tokio::spawn(async move {
+        let completion_store =
+            OAuthCompletionStore::from_google_config(&state.config.skills.google);
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            let pending_removed = state.oauth_pending.cleanup_expired().await;
+            let completion_removed = completion_store.cleanup_expired(60).await;
+            if pending_removed > 0 || completion_removed > 0 {
+                info!(
+                    "OAuth store maintenance pruned {} pending and {} completion entries",
+                    pending_removed, completion_removed
+                );
+            }
+        }
+    });
 }
 
 /// OAuth callback handler for Google authentication
@@ -1456,6 +1480,10 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                         <span class="menu-icon">🔌</span>
                         Connections
                     </button>
+                    <button type="button" class="menu-item" onclick="openInspector('OAuth Stores', '/api/oauth/stores', 'Pending/completion OAuth store size, entries, and file paths')">
+                        <span class="menu-icon">🔐</span>
+                        OAuth Stores
+                    </button>
                     <button type="button" class="menu-item" onclick="openInspector('Doctor', '/api/doctor', 'Health checks across runtime, memory, skills, and workspace')">
                         <span class="menu-icon">🔍</span>
                         Health Check
@@ -1565,6 +1593,10 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                             <button type="button" class="endpoint-item" onclick="openInspector('Connections', '/api/connections', 'Connected clients, auth state, and routed session IDs')">
                                 <span class="method get">GET</span>
                                 <code>/api/connections</code>
+                            </button>
+                            <button type="button" class="endpoint-item" onclick="openInspector('OAuth Stores', '/api/oauth/stores', 'Inspect OAuth pending/completion store health and file growth')">
+                                <span class="method get">GET</span>
+                                <code>/api/oauth/stores</code>
                             </button>
                             <button type="button" class="endpoint-item" onclick="openInspector('Tools', '/api/tools', 'Introspect the runtime tool registry exposed to the agent')">
                                 <span class="method get">GET</span>
@@ -2166,6 +2198,7 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
         let messageHistory = [];
         let isProcessing = false;
         let currentChatSessionId = null;
+        const completedOAuthStates = new Set();
         
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
@@ -2230,6 +2263,7 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 } else {
                     currentChatSessionId = data.session_id || currentChatSessionId;
                     addMessage('assistant', data);
+                    maybeWatchOAuthCompletion(data.metadata || {});
                     updateMetrics();
                 }
             } catch (err) {
@@ -2486,14 +2520,67 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
             if (!event.data || event.data.type !== 'oauth_complete' || !event.data.success) {
                 return;
             }
+            emitOAuthCompletionMessage(
+                event.data.state || '(unknown)',
+                'Google authentication completed in the browser. The session is ready for Gmail, Drive, and Calendar tools.',
+                'window_post_message',
+                null
+            );
+        }
+
+        function maybeWatchOAuthCompletion(metadata) {
+            const oauthState = metadata.google_oauth_state;
+            const oauthChannel = metadata.google_oauth_channel;
+            if (!oauthState) return;
+            if (oauthChannel !== 'web' && oauthChannel !== 'websocket') return;
+            if (completedOAuthStates.has(oauthState)) return;
+            watchOAuthCompletion(oauthState);
+        }
+
+        async function watchOAuthCompletion(stateKey) {
+            const startedAt = Date.now();
+            const timeoutMs = 10 * 60 * 1000;
+            while (Date.now() - startedAt < timeoutMs) {
+                try {
+                    const res = await fetch('/api/oauth/completion?state=' + encodeURIComponent(stateKey));
+                    if (res.ok) {
+                        const payload = await res.json();
+                        if (payload.status === 'completed' && payload.completion) {
+                            emitOAuthCompletionMessage(
+                                stateKey,
+                                payload.completion.message || 'Google authentication completed.',
+                                'oauth_completion_store',
+                                payload.completion
+                            );
+                            return;
+                        }
+                    }
+                } catch (err) {
+                    // Keep polling; websocket/browser flows remain usable even if this endpoint is briefly unavailable.
+                }
+                await sleep(1000);
+            }
+        }
+
+        function emitOAuthCompletionMessage(stateKey, text, source, completion) {
+            if (completedOAuthStates.has(stateKey)) {
+                return;
+            }
+            completedOAuthStates.add(stateKey);
             addMessage('system', {
-                text: 'Google authentication completed in the browser. The session is ready for Gmail, Drive, and Calendar tools.',
+                text,
                 metadata: {
                     provider: 'google',
-                    state: event.data.state || '(unknown)',
-                    session_id: currentChatSessionId || '(web-chat)'
+                    state: stateKey,
+                    source,
+                    channel: completion?.channel || 'web',
+                    session_id: completion?.session_id || currentChatSessionId || '(web-chat)'
                 }
             });
+        }
+
+        function sleep(ms) {
+            return new Promise((resolve) => setTimeout(resolve, ms));
         }
         
         // Configuration Editor Functions
@@ -2888,9 +2975,15 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
                     client_id: client_id.clone(),
                     connected_at: chrono::Utc::now(),
                     session_id: None,
+                    session_state: if requires_pairing {
+                        "waiting".to_string()
+                    } else {
+                        "idle".to_string()
+                    },
                     authenticated: !requires_pairing,
                     messages_received: 0,
                     messages_sent: 0,
+                    last_event_at: chrono::Utc::now(),
                 },
                 outbound: outbound_tx.clone(),
             },
@@ -2946,6 +3039,7 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
                         increment_connection_received(&state, &client_id).await;
                         if let Err(e) = handle_ws_message(&state, &client_id, &text).await {
                             error!("Error handling message: {}", e);
+                            set_connection_session_state(&state, &client_id, "error").await;
                             queue_client_event(&state, &client_id, error_event("internal gateway error")).await;
                         }
                     }
@@ -2955,6 +3049,7 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
                     }
                     Some(Err(e)) => {
                         error!("WebSocket error: {}", e);
+                        set_connection_session_state(&state, &client_id, "error").await;
                         queue_client_event(&state, &client_id, error_event(&e.to_string())).await;
                         break;
                     }
@@ -2993,6 +3088,7 @@ async fn handle_ws_message(
     match msg_type {
         "request_pairing" => {
             state.metrics.increment_pairing_requests();
+            set_connection_session_state(state, client_id, "waiting").await;
             let code = state.router.request_pairing_code(client_id).await?;
             queue_client_event(
                 state,
@@ -3015,8 +3111,10 @@ async fn handle_ws_message(
             if authenticated {
                 state.metrics.increment_auth_success();
                 update_connection_auth(state, client_id, true).await;
+                set_connection_session_state(state, client_id, "idle").await;
             } else {
                 state.metrics.increment_auth_failure();
+                set_connection_session_state(state, client_id, "waiting").await;
             }
             queue_client_event(state, client_id, serde_json::json!({
                     "type": if authenticated { "authenticated" } else { "error" },
@@ -3027,6 +3125,7 @@ async fn handle_ws_message(
             .await;
         }
         "message" => {
+            set_connection_session_state(state, client_id, "running").await;
             let content = request
                 .get("content")
                 .and_then(|v| v.as_str())
@@ -3046,6 +3145,7 @@ async fn handle_ws_message(
             match state.router.route(inbound).await {
                 Ok(outcome) => {
                     update_connection_session(state, client_id, &outcome.session_id.0).await;
+                    set_connection_session_state(state, client_id, "idle").await;
                     queue_client_event(
                         state,
                         client_id,
@@ -3077,9 +3177,15 @@ async fn handle_ws_message(
                     } else {
                         error_event(&message)
                     };
+                    if event.get("type").and_then(|value| value.as_str()) == Some("error") {
+                        set_connection_session_state(state, client_id, "error").await;
+                    } else {
+                        set_connection_session_state(state, client_id, "waiting").await;
+                    }
                     queue_client_event(state, client_id, event).await;
                 }
                 Err(err) => {
+                    set_connection_session_state(state, client_id, "error").await;
                     queue_client_event(state, client_id, error_event(&err.to_string())).await;
                 }
             }
@@ -3111,6 +3217,7 @@ async fn queue_client_event(
     }
 
     handle.info.messages_sent += 1;
+    handle.info.last_event_at = chrono::Utc::now();
     state.metrics.increment_messages_sent();
     true
 }
@@ -3119,6 +3226,7 @@ async fn update_connection_auth(state: &GatewayState, client_id: &str, authentic
     let mut connections = state.connections.write().await;
     if let Some(handle) = connections.get_mut(client_id) {
         handle.info.authenticated = authenticated;
+        handle.info.last_event_at = chrono::Utc::now();
     }
 }
 
@@ -3126,6 +3234,7 @@ async fn update_connection_session(state: &GatewayState, client_id: &str, sessio
     let mut connections = state.connections.write().await;
     if let Some(handle) = connections.get_mut(client_id) {
         handle.info.session_id = Some(session_id.to_string());
+        handle.info.last_event_at = chrono::Utc::now();
     }
 }
 
@@ -3133,6 +3242,15 @@ async fn increment_connection_received(state: &GatewayState, client_id: &str) {
     let mut connections = state.connections.write().await;
     if let Some(handle) = connections.get_mut(client_id) {
         handle.info.messages_received += 1;
+        handle.info.last_event_at = chrono::Utc::now();
+    }
+}
+
+async fn set_connection_session_state(state: &GatewayState, client_id: &str, session_state: &str) {
+    let mut connections = state.connections.write().await;
+    if let Some(handle) = connections.get_mut(client_id) {
+        handle.info.session_state = session_state.to_string();
+        handle.info.last_event_at = chrono::Utc::now();
     }
 }
 
@@ -3582,10 +3700,24 @@ fn error_event(message: &str) -> serde_json::Value {
 }
 
 async fn api_status(State(state): State<GatewayState>) -> impl IntoResponse {
+    let conns = state.connections.read().await;
+    let session_state_counts = session_state_counts(conns.values().map(|handle| &handle.info));
+    drop(conns);
+    let completion_store = OAuthCompletionStore::from_google_config(&state.config.skills.google);
+    let pending_count = state.oauth_pending.entry_count().await;
+    let completion_count = completion_store.entry_count().await;
     let body = serde_json::json!({
         "status": "running",
         "model": state.config.agent.model,
         "provider": state.config.agent.provider,
+        "connections": {
+            "active": state.metrics.connections_active.load(Ordering::SeqCst),
+            "session_states": session_state_counts,
+        },
+        "oauth": {
+            "pending_entries": pending_count,
+            "completion_entries": completion_count,
+        },
     });
 
     (
@@ -4294,11 +4426,87 @@ async fn api_connections(State(state): State<GatewayState>) -> impl IntoResponse
     let conns = state.connections.read().await;
     let connections: Vec<ConnectionInfo> =
         conns.values().map(|handle| handle.info.clone()).collect();
+    let session_states = session_state_counts(conns.values().map(|handle| &handle.info));
 
     axum::Json(serde_json::json!({
         "connections": connections,
         "count": connections.len(),
+        "session_states": session_states,
     }))
+}
+
+async fn api_oauth_completion(
+    State(state): State<GatewayState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let Some(state_key) = params.get("state").cloned() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({ "error": "state is required" })),
+        );
+    };
+
+    let store = OAuthCompletionStore::from_google_config(&state.config.skills.google);
+    let completion = store.take(&state_key).await;
+    (
+        StatusCode::OK,
+        axum::Json(serde_json::json!({
+            "status": if completion.is_some() { "completed" } else { "pending" },
+            "state": state_key,
+            "completion": completion,
+        })),
+    )
+}
+
+async fn api_oauth_stores(State(state): State<GatewayState>) -> impl IntoResponse {
+    let pending_store = state.oauth_pending.clone();
+    let completion_store = OAuthCompletionStore::from_google_config(&state.config.skills.google);
+    let pending_count = pending_store.entry_count().await;
+    let completion_count = completion_store.entry_count().await;
+    let pending_path = pending_store.path();
+    let completion_path = completion_store.path();
+
+    axum::Json(serde_json::json!({
+        "pending": oauth_store_file_stats("pending", pending_path.as_ref(), pending_count),
+        "completion": oauth_store_file_stats("completion", completion_path.as_ref(), completion_count),
+    }))
+}
+
+fn session_state_counts<'a>(
+    connections: impl Iterator<Item = &'a ConnectionInfo>,
+) -> serde_json::Value {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for info in connections {
+        let key = if info.session_state.is_empty() {
+            "unknown".to_string()
+        } else {
+            info.session_state.clone()
+        };
+        *counts.entry(key).or_insert(0) += 1;
+    }
+    serde_json::json!(counts)
+}
+
+fn oauth_store_file_stats(
+    kind: &str,
+    path: Option<&PathBuf>,
+    entry_count: usize,
+) -> serde_json::Value {
+    let path_text = path
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let exists = path.map(|value| value.exists()).unwrap_or(false);
+    let bytes = path
+        .and_then(|value| std::fs::metadata(value).ok())
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    serde_json::json!({
+        "kind": kind,
+        "path": path_text,
+        "exists": exists,
+        "bytes": bytes,
+        "entries": entry_count,
+    })
 }
 
 async fn api_schedules(State(state): State<GatewayState>) -> impl IntoResponse {
@@ -5047,9 +5255,11 @@ mod tests {
                         client_id: "client-1".to_string(),
                         connected_at: chrono::Utc::now(),
                         session_id: Some("session-1".to_string()),
+                        session_state: "idle".to_string(),
                         authenticated: true,
                         messages_received: 0,
                         messages_sent: 0,
+                        last_event_at: chrono::Utc::now(),
                     },
                     outbound: outbound_tx,
                 },
