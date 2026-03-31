@@ -80,3 +80,66 @@ borgclaw_print_build_env() {
     echo "  temp:   ${TMPDIR:-$BORGCLAW_TMP_ROOT_DEFAULT}"
     echo "  incr:   ${CARGO_INCREMENTAL:-0}"
 }
+
+# ============================================================================
+# BINARY LOCATION FUNCTIONS
+# ============================================================================
+
+# Locate the borgclaw binary, preferring release over debug
+# Returns empty string if not found
+borgclaw_locate_binary() {
+    local target_dir="${1:-$(borgclaw_target_dir)}"
+    local binary_name="${2:-borgclaw}"
+    
+    # Prefer release binary
+    if [ -f "$target_dir/release/$binary_name" ]; then
+        printf '%s\n' "$target_dir/release/$binary_name"
+        return 0
+    fi
+    
+    # Fallback to debug binary
+    if [ -f "$target_dir/debug/$binary_name" ]; then
+        printf '%s\n' "$target_dir/debug/$binary_name"
+        return 0
+    fi
+    
+    # Not found
+    return 1
+}
+
+# Get the recommended user bin directory for the current platform
+borgclaw_user_bin_dir() {
+    case "$(uname -s)" in
+        Linux*|Darwin*)
+            # Prefer ~/.local/bin (XDG standard)
+            if [ -d "$HOME/.local/bin" ] || mkdir -p "$HOME/.local/bin" 2>/dev/null; then
+                printf '%s\n' "$HOME/.local/bin"
+                return 0
+            fi
+            # Fallback to ~/bin
+            if [ -d "$HOME/bin" ] || mkdir -p "$HOME/bin" 2>/dev/null; then
+                printf '%s\n' "$HOME/bin"
+                return 0
+            fi
+            ;;
+        CYGWIN*|MINGW*|MSYS*)
+            # Windows - use LocalAppData
+            if [ -n "$LOCALAPPDATA" ]; then
+                local win_bin="$LOCALAPPDATA/borgclaw/bin"
+                mkdir -p "$win_bin" 2>/dev/null || true
+                printf '%s\n' "$win_bin"
+                return 0
+            fi
+            ;;
+    esac
+    return 1
+}
+
+# Check if a directory is in PATH
+borgclaw_in_path() {
+    local dir="$1"
+    case ":$PATH:" in
+        *":$dir:"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}

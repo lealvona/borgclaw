@@ -161,13 +161,15 @@ if [ "$QUICK_MODE" = true ]; then
     echo ""
 fi
 
-# Use release binary (built by bootstrap)
-BORGCLAW_BIN="$CARGO_TARGET_DIR/release/borgclaw"
-if [ ! -f "$BORGCLAW_BIN" ]; then
-    error "BorgClaw binary not found at $BORGCLAW_BIN"
+# Locate BorgClaw binary (prefer release, fallback to debug)
+BORGCLAW_BIN="$(borgclaw_locate_binary)"
+if [ -z "$BORGCLAW_BIN" ]; then
+    error "BorgClaw binary not found!"
     error "Please run ./scripts/bootstrap.sh first to build the binaries."
     exit 1
 fi
+
+log "Using BorgClaw binary: $BORGCLAW_BIN"
 
 # ============================================================================
 # HELPER FUNCTIONS
@@ -549,7 +551,7 @@ if [ "${NEED_API_KEY:-false}" = true ]; then
         
         # Store the key
         log "Storing API key in encrypted vault..."
-        if echo "$API_KEY" | "$BORGCLAW_BIN" secrets set "$API_KEY_NAME"; then
+        if "$BORGCLAW_BIN" secrets set "$API_KEY_NAME" --value "$API_KEY"; then
             log "✓ API key stored successfully"
             unset API_KEY  # Clear from memory
             break
