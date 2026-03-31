@@ -14,7 +14,7 @@ pub use processes::{
     save_process_records, upsert_process_record, CommandProcessRecord, CommandProcessStatus,
     PROCESS_STATE_FILE,
 };
-pub use secrets::{secrets_key_path, SecretStore, SecretStoreConfig};
+pub use secrets::{secrets_key_path, PasswordError, SecretStore, SecretStoreConfig, StoreState};
 pub use vault::{
     BitwardenClient, BitwardenConfig, OnePasswordClient, OnePasswordConfig, VaultClient,
     VaultError, VaultItem, VaultItemType,
