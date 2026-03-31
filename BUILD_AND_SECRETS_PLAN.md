@@ -1,6 +1,6 @@
 # BorgClaw Setup & Secrets Plan
 
-> Historical planning note as of March 31, 2026: large parts of this setup/secrets tranche landed through the March bootstrap/onboarding work, but this file still contains deferred ideas that are not part of the currently completed contract.
+> Historical planning note as of March 31, 2026: large parts of this setup/secrets tranche landed through the March bootstrap/onboarding work. Password-gated secret-store unlock is now confirmed product scope and should be treated as active follow-up work rather than a deferred maybe.
 
 ## Status Snapshot
 
@@ -11,7 +11,7 @@ Landed or largely landed:
 - provider-profile-backed onboarding and secure secret storage
 - helper installers for optional runtimes and Docker sandbox images
 
-Still open or intentionally deferred:
+Still open and active follow-up:
 
 - user-local install/uninstall helpers for BorgClaw binaries and launchers
 - password-gated secret-store unlock flow (the current encrypted store is file-key based, not interactive-password gated)

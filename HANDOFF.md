@@ -115,9 +115,24 @@ borgclaw-gateway ──┘
 The March 31 follow-up repaired the broken callback-state handoff by persisting pending OAuth state next to the Google token path, and the gateway now sends a direct completion message back to Telegram when the originating channel is Telegram.
 
 **Still open:**
-- WebSocket / CLI / browser-originated OAuth flows do not get a live in-band callback message; they still rely on the browser success page and `postMessage`
+- CLI-originated OAuth flows still do not get a live in-band callback message
 - Google tokens are still persisted to a shared token path rather than being scoped per user/session for multi-user operation
-- Gateway WebSocket connections track metadata only, not outbound session actors, so callback-driven push messages cannot yet target active WebSocket clients
+- Browser chat still relies on popup `postMessage`, not a transport-agnostic callback delivery path
+
+### 2. Password-Gated Secret Store Unlock (PRODUCT GOAL)
+**Locations:** `borgclaw-core/src/security/`, `borgclaw-cli/src/main.rs`, `scripts/bootstrap.sh`, `scripts/onboarding.sh`
+
+This is now an explicit product goal, not a deferred idea.
+
+**Current state:**
+- Secrets are encrypted at rest, but the effective unlock model is still file-key based
+- There is no operator-facing master-password unlock flow across CLI and setup scripts
+
+**Expected direction:**
+- Prompt for a BorgClaw master password during bootstrap/onboarding or an explicit init flow
+- Require unlock before secret-revealing or secret-mutating CLI operations
+- Preserve a safe automation path for non-interactive environments without weakening the interactive password model
+- Document initialization, unlock, relock, wrong-password handling, and backup/recovery expectations
 
 ### 2. Token Persistence
 - OAuth tokens from `exchange_code()` are saved to disk
