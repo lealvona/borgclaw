@@ -291,7 +291,87 @@ pub fn register(tools: &mut Vec<Tool>) {
             vec!["file_id".to_string()],
         ))
         .with_tags(vec!["google".to_string(), "integration".to_string()]),
+        Tool::new(
+            "google_authenticate",
+            "Authenticate with Google OAuth to enable Gmail/Drive/Calendar access. Returns a URL for the user to visit.",
+        )
+        .with_schema(ToolSchema::object(
+            [(
+                "force".to_string(),
+                PropertySchema {
+                    prop_type: "boolean".to_string(),
+                    description: Some("Force re-authentication even if already authenticated".to_string()),
+                    default: Some(serde_json::json!(false)),
+                    enum_values: None,
+                },
+            )]
+            .into(),
+            Vec::new(),
+        ))
+        .with_tags(vec!["google".to_string(), "integration".to_string()]),
     ]);
+}
+
+pub async fn google_authenticate(
+    arguments: &HashMap<String, serde_json::Value>,
+    runtime: &ToolRuntime,
+) -> ToolResult {
+    let force = arguments
+        .get("force")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    
+    let client = google_client(runtime);
+    
+    // Check if already authenticated and not forcing re-auth
+    if !force {
+        if let Ok(_) = client.auth().get_token().await {
+            return ToolResult::ok("Already authenticated with Google. Use force=true to re-authenticate.");
+        }
+    }
+    
+    // Get the context information from runtime
+    let session_id = runtime.invocation.as_ref()
+        .map(|ctx| ctx.session_id.0.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    
+    let user_id = runtime.invocation.as_ref()
+        .map(|ctx| ctx.sender.id.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    
+    let channel = runtime.invocation.as_ref()
+        .map(|ctx| ctx.sender.channel.clone())
+        .unwrap_or_else(|| "cli".to_string());
+    
+    let group_id = runtime.invocation.as_ref()
+        .and_then(|ctx| ctx.metadata.get("group_id").cloned());
+    
+    // Generate a unique state parameter
+    let state = uuid::Uuid::new_v4().to_string();
+    
+    // Store the OAuth state for later retrieval
+    let oauth_state = crate::skills::google::OAuthState {
+        session_id: session_id.clone(),
+        user_id: user_id.clone(),
+        channel: channel.clone(),
+        created_at: chrono::Utc::now(),
+        group_id: group_id.clone(),
+    };
+    
+    client.auth().pending_store().insert(state.clone(), oauth_state).await;
+    
+    // Build the auth URL with state
+    let auth_url = client.auth().build_auth_url_with_state(&state);
+    
+    // Return instructions and URL
+    let message = format!(
+        "Please authenticate with Google by visiting this URL:\n\n{}\n\n\
+        This link is specific to your session and will expire in 10 minutes.\n\
+        Once you complete the authentication, I'll be able to access your Gmail, Google Drive, and Calendar.",
+        auth_url
+    );
+    
+    ToolResult::ok(message)
 }
 
 pub async fn google_list_messages(

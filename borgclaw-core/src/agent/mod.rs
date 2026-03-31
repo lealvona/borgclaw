@@ -459,6 +459,7 @@ You are autonomous, helpful, and capable of complex multi-step tasks.",
                     "Tool '{}' executed. Result: {}",
                     tool_call.name, tool_result.output
                 );
+                tracing::info!("Tool result: success={}, output={}", tool_result.success, tool_result.output);
                 let session =
                     self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
                 session.add_message(Message::system(result_message));

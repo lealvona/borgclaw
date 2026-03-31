@@ -589,6 +589,7 @@ pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult 
         "github_update_file" => github::github_update_file(&call.arguments, runtime).await,
         "github_delete_file" => github::github_delete_file(&call.arguments, runtime).await,
         "github_close_issue" => github::github_close_issue(&call.arguments, runtime).await,
+        "google_authenticate" => google::google_authenticate(&call.arguments, runtime).await,
         "google_list_messages" => google::google_list_messages(&call.arguments, runtime).await,
         "google_get_message" => google::google_get_message(&call.arguments, runtime).await,
         "google_send_email" => google::google_send_email(&call.arguments, runtime).await,

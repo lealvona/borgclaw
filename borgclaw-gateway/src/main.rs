@@ -20,7 +20,7 @@ use borgclaw_core::{
     },
     config::load_config,
     security::{load_process_records, process_state_path, CommandProcessStatus, SecurityLayer},
-    skills::SkillsRegistry,
+    skills::{GoogleClient, OAuthPendingStore, SkillsRegistry},
     AppConfig,
 };
 use futures_util::StreamExt;
@@ -137,6 +137,7 @@ struct GatewayState {
     webhook: Option<Arc<WebhookChannel>>,
     metrics: Arc<GatewayMetrics>,
     connections: Arc<RwLock<HashMap<String, ConnectionInfo>>>,
+    oauth_pending: OAuthPendingStore,
 }
 
 #[tokio::main]
@@ -166,6 +167,7 @@ async fn main() {
         webhook,
         metrics,
         connections: Arc::new(RwLock::new(HashMap::new())),
+        oauth_pending: OAuthPendingStore::new(),
     };
 
     // CORS layer
@@ -178,6 +180,7 @@ async fn main() {
         .route("/", get(index))
         .route("/health", get(api_status))
         .route("/ws", get(websocket_handler))
+        .route("/oauth/callback", get(oauth_callback_handler))
         .route("/api/status", get(api_status))
         .route("/api/version", get(api_version))
         .route("/api/health", get(api_health))
@@ -236,6 +239,151 @@ async fn main() {
 
 async fn index() -> impl IntoResponse {
     axum::response::Html(INDEX_HTML)
+}
+
+/// OAuth callback handler for Google authentication
+async fn oauth_callback_handler(
+    State(gateway_state): State<GatewayState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let code = params.get("code").cloned();
+    let oauth_state_str = params.get("state").cloned();
+    let error = params.get("error").cloned();
+    
+    // Handle OAuth errors
+    if let Some(err) = error {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::response::Html(format!(
+                r##"<!DOCTYPE html>
+<html>
+<head><title>Authentication Failed</title></head>
+<body style="font-family: sans-serif; text-align: center; padding: 50px;">
+    <h1 style="color: #f85149;">Authentication Failed</h1>
+    <p>Error: {}</p>
+    <p>You can close this window and return to BorgClaw.</p>
+</body>
+</html>"##,
+                err
+            )),
+        );
+    }
+    
+    // Validate parameters
+    let (code, oauth_state_str) = match (code, oauth_state_str) {
+        (Some(c), Some(s)) => (c, s),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::response::Html(
+                    r##"<!DOCTYPE html>
+<html>
+<head><title>Invalid Request</title></head>
+<body style="font-family: sans-serif; text-align: center; padding: 50px;">
+    <h1 style="color: #f85149;">Invalid Request</h1>
+    <p>Missing authorization code or state parameter.</p>
+    <p>You can close this window and return to BorgClaw.</p>
+</body>
+</html>"##.to_string()
+                ),
+            );
+        }
+    };
+    
+    // Look up the pending OAuth request
+    let oauth_state = match gateway_state.oauth_pending.get(&oauth_state_str).await {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::response::Html(
+                    r##"<!DOCTYPE html>
+<html>
+<head><title>Invalid or Expired Request</title></head>
+<body style="font-family: sans-serif; text-align: center; padding: 50px;">
+    <h1 style="color: #f85149;">Invalid or Expired Request</h1>
+    <p>This authentication request has expired or is invalid.</p>
+    <p>Please try authenticating again from BorgClaw.</p>
+</body>
+</html>"##.to_string()
+                ),
+            );
+        }
+    };
+    
+    // Remove the pending request
+    gateway_state.oauth_pending.remove(&oauth_state_str).await;
+    
+    // Create a Google client to exchange the code
+    let google_config = &gateway_state.config.skills.google;
+    if google_config.client_id.is_empty() || google_config.client_secret.is_empty() {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::response::Html(
+                r##"<!DOCTYPE html>
+<html>
+<head><title>Configuration Error</title></head>
+<body style="font-family: sans-serif; text-align: center; padding: 50px;">
+    <h1 style="color: #f85149;">Configuration Error</h1>
+    <p>Google OAuth is not properly configured.</p>
+    <p>Please check your BorgClaw configuration.</p>
+</body>
+</html>"##.to_string()
+            ),
+        );
+    }
+    
+    let google_client = GoogleClient::new(google_config.clone());
+    
+    // Exchange the authorization code for tokens
+    match google_client.auth().exchange_code(&code).await {
+        Ok(_token) => {
+            info!("OAuth successful for user: {}, session: {}", oauth_state.user_id, oauth_state.session_id);
+            
+            // Store token info for the session
+            // TODO: Send notification to the original channel
+            
+            (
+                StatusCode::OK,
+                axum::response::Html(format!(
+                    r##"<!DOCTYPE html>
+<html>
+<head><title>Authentication Successful</title></head>
+<body style="font-family: sans-serif; text-align: center; padding: 50px;">
+    <h1 style="color: #3fb950;">Authentication Successful!</h1>
+    <p>You have successfully authenticated with Google.</p>
+    <p>You can now use Gmail, Google Drive, and Calendar features in BorgClaw.</p>
+    <p>You can close this window and return to BorgClaw.</p>
+    <script>
+        if (window.opener) {{
+            window.opener.postMessage({{ type: 'oauth_complete', success: true, state: '{}' }}, '*');
+        }}
+    </script>
+</body>
+</html>"##,
+                    oauth_state_str
+                )),
+            )
+        }
+        Err(err) => {
+            error!("OAuth token exchange failed: {}", err);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::response::Html(format!(
+                    r##"<!DOCTYPE html>
+<html>
+<head><title>Authentication Failed</title></head>
+<body style="font-family: sans-serif; text-align: center; padding: 50px;">
+    <h1 style="color: #f85149;">Authentication Failed</h1>
+    <p>Failed to complete authentication: {}</p>
+    <p>Please try again.</p>
+</body>
+</html>"##,
+                    err
+                )),
+            )
+        }
+    }
 }
 
 const INDEX_HTML: &str = r##"<!DOCTYPE html>
@@ -3816,6 +3964,7 @@ mod tests {
             webhook: None,
             metrics,
             connections: Arc::new(RwLock::new(HashMap::new())),
+        oauth_pending: OAuthPendingStore::new(),
         };
 
         let response = api_status(State(state)).await.into_response();
@@ -3861,6 +4010,7 @@ mod tests {
             webhook: None,
             metrics: Arc::new(GatewayMetrics::new()),
             connections: Arc::new(RwLock::new(HashMap::new())),
+        oauth_pending: OAuthPendingStore::new(),
         };
 
         let response = api_config(State(state)).await.into_response();
@@ -3907,6 +4057,7 @@ mod tests {
             webhook: None,
             metrics: Arc::new(GatewayMetrics::new()),
             connections: Arc::new(RwLock::new(HashMap::new())),
+        oauth_pending: OAuthPendingStore::new(),
         };
 
         let response = api_doctor(State(state)).await.into_response();
@@ -4034,6 +4185,7 @@ mod tests {
             webhook: None,
             metrics,
             connections: Arc::new(RwLock::new(HashMap::new())),
+        oauth_pending: OAuthPendingStore::new(),
         };
 
         let app = Router::new()
@@ -4132,6 +4284,7 @@ mod tests {
             webhook: None,
             metrics,
             connections: Arc::new(RwLock::new(HashMap::new())),
+        oauth_pending: OAuthPendingStore::new(),
         };
 
         let app = Router::new()
@@ -4167,6 +4320,7 @@ mod tests {
             webhook: configured_webhook_channel(&config).await.map(Arc::new),
             metrics,
             connections: Arc::new(RwLock::new(HashMap::new())),
+        oauth_pending: OAuthPendingStore::new(),
         };
 
         let app = Router::new()
@@ -4276,6 +4430,7 @@ mod tests {
             webhook: configured_webhook_channel(&config).await.map(Arc::new),
             metrics,
             connections: Arc::new(RwLock::new(HashMap::new())),
+        oauth_pending: OAuthPendingStore::new(),
         };
 
         let app = Router::new()

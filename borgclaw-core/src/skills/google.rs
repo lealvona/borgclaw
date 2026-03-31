@@ -55,12 +55,72 @@ pub struct GoogleToken {
     pub scopes: Vec<String>,
 }
 
+/// OAuth state for cross-channel authentication
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OAuthState {
+    /// Unique session ID for this auth request
+    pub session_id: String,
+    /// User/channel identifier to route the callback
+    pub user_id: String,
+    /// Channel type (cli, websocket, telegram, etc.)
+    pub channel: String,
+    /// Timestamp when the request was created
+    pub created_at: DateTime<Utc>,
+    /// Optional group ID for multi-user channels
+    pub group_id: Option<String>,
+}
+
+/// Pending OAuth requests store
+#[derive(Clone)]
+pub struct OAuthPendingStore {
+    requests: Arc<RwLock<std::collections::HashMap<String, OAuthState>>>,
+}
+
+impl OAuthPendingStore {
+    pub fn new() -> Self {
+        Self {
+            requests: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        }
+    }
+
+    pub async fn insert(&self, state: String, info: OAuthState) {
+        let mut requests = self.requests.write().await;
+        requests.insert(state, info);
+    }
+
+    pub async fn get(&self, state: &str) -> Option<OAuthState> {
+        let requests = self.requests.read().await;
+        requests.get(state).cloned()
+    }
+
+    pub async fn remove(&self, state: &str) -> Option<OAuthState> {
+        let mut requests = self.requests.write().await;
+        requests.remove(state)
+    }
+
+    /// Clean up expired requests (older than 10 minutes)
+    pub async fn cleanup_expired(&self) {
+        let mut requests = self.requests.write().await;
+        let now = Utc::now();
+        requests.retain(|_, info| {
+            now.signed_duration_since(info.created_at).num_minutes() < 10
+        });
+    }
+}
+
+impl Default for OAuthPendingStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Clone)]
 pub struct GoogleAuth {
     config: GoogleOAuthConfig,
     token: Arc<RwLock<Option<GoogleToken>>>,
     token_path: PathBuf,
     http: reqwest::Client,
+    pending: OAuthPendingStore,
 }
 
 impl GoogleAuth {
@@ -70,6 +130,7 @@ impl GoogleAuth {
             token: Arc::new(RwLock::new(None)),
             token_path,
             http: reqwest::Client::new(),
+            pending: OAuthPendingStore::new(),
         }
     }
 
@@ -84,18 +145,30 @@ impl GoogleAuth {
             token: Arc::new(RwLock::new(Some(token))),
             token_path: PathBuf::from("/dev/null"),
             http: reqwest::Client::new(),
+            pending: OAuthPendingStore::new(),
         }
     }
 
-    pub fn build_auth_url(&self) -> String {
+    /// Build OAuth URL with state parameter for cross-channel auth
+    pub fn build_auth_url_with_state(&self, state: &str) -> String {
         let scopes = self.config.scopes.join(" ");
         format!(
-            "{}/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent",
+            "{}/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent&state={}",
             self.authorization_base_url(),
             urlencoding::encode(&self.config.client_id),
             urlencoding::encode(&self.config.redirect_uri),
-            urlencoding::encode(&scopes)
+            urlencoding::encode(&scopes),
+            urlencoding::encode(state)
         )
+    }
+
+    pub fn build_auth_url(&self) -> String {
+        self.build_auth_url_with_state("")
+    }
+
+    /// Get reference to pending OAuth store
+    pub fn pending_store(&self) -> &OAuthPendingStore {
+        &self.pending
     }
 
     pub async fn exchange_code(&self, code: &str) -> Result<GoogleToken, GoogleError> {
