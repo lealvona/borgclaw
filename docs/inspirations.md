@@ -2,17 +2,18 @@
 
 This guide expands the short origin list in the README into an engineering reference.
 
-Last reviewed against upstream repositories: March 22, 2026
+Last reviewed against upstream repositories: March 31, 2026
 
 Status note:
 - Several gaps originally called out here are now partially or fully closed in BorgClaw.
 - Use [Implementation Status](implementation-status.md) as the current source of truth for what remains open.
 - Keep this document focused on upstream implementation ideas, not on narrowing BorgClaw's contract.
+- The main current value of this document is extension quality: comparing BorgClaw's landed contracts against the stronger operational patterns upstream projects are shipping now.
 
 Current BorgClaw disposition of major inspiration items:
 - Implemented and verified in the runtime: provider-backed shared routing, structured gateway auth/events, scheduler/heartbeat/sub-agent persistence and recovery, typed workspace policy, unified approval flow for foreground/background tool execution, explicit memory backend selection with PostgreSQL + pgvector, tool-level retry, system prompt date/time injection, archive-backed skill installs, and the typed optional Docker command sandbox.
 - Implemented and still worth iterating on: the Docker sandbox now covers `execute_command` through typed `security.docker` policy plus local/remote/background context overrides. Separate base and remote images are shipped, though operators can still choose whether to use image overrides in their config.
-- Not yet implemented but explicitly tracked here: none. The remaining work is final audit and cleanup rather than another inspiration-derived runtime feature.
+- Not yet implemented but explicitly tracked here: live OAuth callback delivery back into non-Telegram channels, per-user OAuth token scoping, gateway/session actor queues for out-of-band pushes, stronger multi-tenant auth and workspace isolation, gateway auth/rate-limit hardening, and a more explicit operator control plane for active sessions/channels.
 - Explicitly declined for BorgClaw: AWS Bedrock provider support, Composio integration, and Slack approval UI/buttons.
 
 Use it for two things:
@@ -61,6 +62,37 @@ Recent upstream movement:
 - IronClaw: Webhook reverse proxy support for tunnel scenarios
 - IronClaw: CLI skills list/search/info subcommands
 - IronClaw: Slack approval buttons for tool execution in DMs
+
+## Upstream Follow-Up: March 31, 2026
+
+Recent upstream movement:
+
+- OpenClaw's late-March `main` branch continued tightening gateway and execution correctness with unified channel approval/routing work, safer gateway config-file opening without shell interpolation, diff-viewer proxy hardening, and memory scoping fixes.
+  Sources: [OpenClaw commits](https://github.com/openclaw/openclaw/commits/main)
+- ZeroClaw's latest release line pushed further on context-overflow recovery, auth rate limiting, per-session actor queues, richer session state tracking, web-chat persistence, and memory continuity controls.
+  Source: [ZeroClaw releases](https://github.com/zeroclaw-labs/zeroclaw/releases)
+- IronClaw `0.23.0` shipped complete multi-tenant isolation phases 2 through 4, hosted OAuth callbacks with proxy auth token support, Streamable HTTP `202 Accepted` MCP handling, and more defensive tool-call recovery.
+  Sources: [IronClaw release 0.23.0](https://github.com/nearai/ironclaw/releases), [IronClaw staging commits](https://github.com/nearai/ironclaw/commits/staging)
+- PicoClaw `v0.2.4` and the March 31 nightly added model-native search for OpenAI/Codex, configurable logging, and documented hot reload of workspace config files.
+  Source: [PicoClaw releases](https://github.com/sipeed/picoclaw/releases)
+- TinyAGI `v0.0.20` added a stronger office control plane and standardized provider credential fields around `api_key` and `oauth_token`.
+  Source: [TinyAGI releases](https://github.com/TinyAGI/tinyagi/releases)
+- NanoClaw's March 28 commits tightened Apple Container credential-proxy routing and explicitly prevented full message histories from being forwarded into container agents.
+  Source: [NanoClaw commits](https://github.com/qwibitai/nanoclaw/commits/main)
+
+**New "What BorgClaw should copy" items** (added per upstream findings, preserving all existing items):
+
+- OpenClaw: Unify channel approval, callback routing, and restored-session auth into a single execution/session ownership path
+- OpenClaw: Keep gateway file/config operations out of shell interpolation paths by construction
+- ZeroClaw: Per-session actor queues so concurrent work and out-of-band events serialize cleanly back to the right session
+- ZeroClaw: Gateway and auth rate limiting as a first-class operator/security control
+- ZeroClaw: Explicit session state machine surfaces (`idle`, `running`, `error`, `waiting`) for operator introspection
+- ZeroClaw: Persisted web chat/session history instead of page-lifetime-only browser state
+- IronClaw: Hosted OAuth callback support with explicit callback auth token / reverse-proxy-aware validation
+- IronClaw: Stronger multi-tenant auth/workspace isolation boundaries
+- NanoClaw: Hard caps on history forwarded into isolated execution contexts
+- TinyAGI: Standardized provider credential schema (`api_key`, `oauth_token`) across integrations
+- PicoClaw: Operator-visible logger configuration and documented hot-reload behavior for workspace config
 
 ## Upstream Follow-Up: March 21, 2026
 

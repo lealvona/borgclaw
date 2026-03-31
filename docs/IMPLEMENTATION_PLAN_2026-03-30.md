@@ -1,5 +1,7 @@
 # Implementation Plan: Docker Sandbox Contract and Remaining Hardening
 
+> Historical note as of March 31, 2026: this plan is complete and retained as an audit artifact. Use `ROADMAP.md` for the active extension roadmap.
+
 This document is the execution source of truth for the Docker sandbox tranche started on March 30, 2026.
 
 It assumes the merged baseline from PRs `#251` through `#257`, and focuses on the remaining gaps that are still either unimplemented, incomplete, or stale in repo guidance.

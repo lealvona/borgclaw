@@ -74,18 +74,33 @@ pub struct OAuthState {
 #[derive(Clone)]
 pub struct OAuthPendingStore {
     requests: Arc<RwLock<std::collections::HashMap<String, OAuthState>>>,
+    path: Option<PathBuf>,
 }
 
 impl OAuthPendingStore {
     pub fn new() -> Self {
         Self {
             requests: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            path: None,
         }
+    }
+
+    pub fn with_path(path: PathBuf) -> Self {
+        let requests = load_pending_requests(&path);
+        Self {
+            requests: Arc::new(RwLock::new(requests)),
+            path: Some(path),
+        }
+    }
+
+    pub fn from_google_config(config: &GoogleOAuthConfig) -> Self {
+        Self::with_path(pending_store_path_for_token(&config.token_path))
     }
 
     pub async fn insert(&self, state: String, info: OAuthState) {
         let mut requests = self.requests.write().await;
         requests.insert(state, info);
+        persist_pending_requests(self.path.as_ref(), &requests);
     }
 
     pub async fn get(&self, state: &str) -> Option<OAuthState> {
@@ -95,16 +110,17 @@ impl OAuthPendingStore {
 
     pub async fn remove(&self, state: &str) -> Option<OAuthState> {
         let mut requests = self.requests.write().await;
-        requests.remove(state)
+        let removed = requests.remove(state);
+        persist_pending_requests(self.path.as_ref(), &requests);
+        removed
     }
 
     /// Clean up expired requests (older than 10 minutes)
     pub async fn cleanup_expired(&self) {
         let mut requests = self.requests.write().await;
         let now = Utc::now();
-        requests.retain(|_, info| {
-            now.signed_duration_since(info.created_at).num_minutes() < 10
-        });
+        requests.retain(|_, info| now.signed_duration_since(info.created_at).num_minutes() < 10);
+        persist_pending_requests(self.path.as_ref(), &requests);
     }
 }
 
@@ -125,12 +141,13 @@ pub struct GoogleAuth {
 
 impl GoogleAuth {
     pub fn new(config: GoogleOAuthConfig, token_path: PathBuf) -> Self {
+        let pending = OAuthPendingStore::from_google_config(&config);
         Self {
             config,
             token: Arc::new(RwLock::new(None)),
             token_path,
             http: reqwest::Client::new(),
-            pending: OAuthPendingStore::new(),
+            pending,
         }
     }
 
@@ -311,6 +328,46 @@ impl GoogleAuth {
 
     fn token_url(&self) -> String {
         format!("{}/token", self.authorization_base_url())
+    }
+}
+
+fn pending_store_path_for_token(token_path: &std::path::Path) -> PathBuf {
+    let mut path = token_path.to_path_buf();
+    let file_name = token_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| format!("{name}.pending-oauth.json"))
+        .unwrap_or_else(|| "google_token.json.pending-oauth.json".to_string());
+    path.set_file_name(file_name);
+    path
+}
+
+fn load_pending_requests(path: &std::path::Path) -> std::collections::HashMap<String, OAuthState> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_default()
+}
+
+fn persist_pending_requests(
+    path: Option<&PathBuf>,
+    requests: &std::collections::HashMap<String, OAuthState>,
+) {
+    let Some(path) = path else {
+        return;
+    };
+
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    if requests.is_empty() {
+        let _ = std::fs::remove_file(path);
+        return;
+    }
+
+    if let Ok(content) = serde_json::to_string_pretty(requests) {
+        let _ = std::fs::write(path, content);
     }
 }
 
@@ -1555,6 +1612,45 @@ mod tests {
             client.auth.token_path,
             PathBuf::from(".local/data/google_token.json")
         );
+    }
+
+    #[tokio::test]
+    async fn oauth_pending_store_persists_requests_for_shared_callback_lookup() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_google_oauth_pending_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let token_path = root.join("google_token.json");
+        let store = OAuthPendingStore::with_path(root.join("google_token.json.pending-oauth.json"));
+        let request = OAuthState {
+            session_id: "session-1".to_string(),
+            user_id: "user-1".to_string(),
+            channel: "websocket".to_string(),
+            created_at: Utc::now(),
+            group_id: Some("group-1".to_string()),
+        };
+
+        store.insert("state-1".to_string(), request.clone()).await;
+
+        let reloaded = OAuthPendingStore::from_google_config(&GoogleOAuthConfig {
+            token_path: token_path.clone(),
+            ..Default::default()
+        });
+        let loaded = reloaded.get("state-1").await.unwrap();
+        assert_eq!(loaded.session_id, request.session_id);
+        assert_eq!(loaded.user_id, request.user_id);
+        assert_eq!(loaded.group_id, request.group_id);
+
+        reloaded.remove("state-1").await.unwrap();
+        let reloaded_again = OAuthPendingStore::from_google_config(&GoogleOAuthConfig {
+            token_path,
+            ..Default::default()
+        });
+        assert!(reloaded_again.get("state-1").await.is_none());
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

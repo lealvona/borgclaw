@@ -2122,7 +2122,9 @@ async fn secrets(config: AppConfig, action: SecretAction) {
             println!("This feature will be available in a future release.");
             println!();
             println!("Current behavior:");
-            println!("- Secret store is automatically accessible when the encryption key file exists");
+            println!(
+                "- Secret store is automatically accessible when the encryption key file exists"
+            );
             println!("- No interactive unlock required");
             println!();
             println!("Store location: {}", config.security.secrets_path.display());
@@ -2140,14 +2142,24 @@ async fn secrets(config: AppConfig, action: SecretAction) {
             println!("Current behavior:");
             println!("- Secret store remains accessible while the key file exists");
             println!("- To effectively 'lock', remove the key file:");
-            println!("  rm {}", config.security.secrets_path.with_extension("enc.key").display());
+            println!(
+                "  rm {}",
+                config
+                    .security
+                    .secrets_path
+                    .with_extension("enc.key")
+                    .display()
+            );
             println!();
             println!("Warning: Without the key file, secrets cannot be decrypted!");
         }
         SecretAction::Migrate { env_file } => {
             let env_path = env_file.unwrap_or_else(|| PathBuf::from(".env"));
             println!("Migrating secrets from {}", env_path.display());
-            println!("========================================={}", "=".repeat(env_path.display().to_string().len()));
+            println!(
+                "========================================={}",
+                "=".repeat(env_path.display().to_string().len())
+            );
             println!();
 
             if !env_path.exists() {
@@ -2181,10 +2193,10 @@ async fn secrets(config: AppConfig, action: SecretAction) {
                 if let Some(pos) = line.find('=') {
                     let key = &line[..pos];
                     let value = &line[pos + 1..];
-                    
+
                     // Check if this looks like a secret key
-                    let is_secret = key.contains("API_KEY") 
-                        || key.contains("TOKEN") 
+                    let is_secret = key.contains("API_KEY")
+                        || key.contains("TOKEN")
                         || key.contains("SECRET")
                         || key.contains("PASSWORD")
                         || key.contains("KEY");

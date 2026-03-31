@@ -1,5 +1,7 @@
 # Implementation Plan: Remaining Follow-Up Work
 
+> Historical note as of March 31, 2026: this PR train is complete and retained for auditability. Use `ROADMAP.md` plus `docs/inspirations.md` for current improvement and extension work.
+
 This document is the execution source of truth for the remaining inspiration-driven BorgClaw backlog after the March 2026 contract-repair work.
 
 It assumes the merged baseline through the Docker sandbox tranche and turns the remaining intended work into a sequential PR train that can be landed cleanly on `main`.

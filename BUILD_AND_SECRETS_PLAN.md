@@ -1,5 +1,24 @@
 # BorgClaw Setup & Secrets Plan
 
+> Historical planning note as of March 31, 2026: large parts of this setup/secrets tranche landed through the March bootstrap/onboarding work, but this file still contains deferred ideas that are not part of the currently completed contract.
+
+## Status Snapshot
+
+Landed or largely landed:
+
+- bootstrap/onboarding as the canonical setup path
+- config-derived gateway/webhook port guidance in scripts and docs
+- provider-profile-backed onboarding and secure secret storage
+- helper installers for optional runtimes and Docker sandbox images
+
+Still open or intentionally deferred:
+
+- user-local install/uninstall helpers for BorgClaw binaries and launchers
+- password-gated secret-store unlock flow (the current encrypted store is file-key based, not interactive-password gated)
+- release/nightly automation as a documented product workflow
+
+Use `ROADMAP.md` for active follow-up prioritization. The original plan items are retained below for historical context.
+
 1. **TIGHTEN SETUP FLOW**
    - Make `bootstrap -> onboarding -> borgclaw` the single canonical path; bootstrap only builds once and reuses the built binary. Ensure `onboarding` text references the actual gateway port from config and no longer promotes redundant builds or `.env` secrets.
 2. **SCRIPT INSTALL/UNINSTALL**
@@ -24,4 +43,3 @@
 - `./scripts/with-build-env.sh cargo fmt --check`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`
 - `borgclaw secrets list` should prompt for the password and only succeed after unlock
 - `./scripts/doctor.sh` should report gateway port and secret store state without exposing secrets
-

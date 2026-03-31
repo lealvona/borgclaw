@@ -1,102 +1,71 @@
 # BorgClaw Roadmap
 
-## Summary
+## Status
 
-Implement the remaining documented BorgClaw feature set in a security-first sequence. The goal is to make the runtime match the README and `docs/` contract without breaking the existing config and crate layout.
+As of March 31, 2026, the original contract-repair roadmap is effectively complete. BorgClaw now has the documented shared runtime, memory/scheduler/sub-agent persistence, skill lifecycle, provider profiles, Docker command sandbox, and gateway/control-plane baseline.
 
-Status note as of March 29, 2026:
-- Phase 1 is complete.
-- Phase 2 is complete.
-- Phase 3 is complete.
-- Phase 4 is complete against the current documented contract.
-- Phase 5 is complete for the current product contract, with ongoing lint/doc maintenance remaining as normal follow-up work.
-- See `docs/IMPLEMENTATION_AUDIT_2026-03-29.md` for the evidence-backed issue list and concrete fix steps.
-- The remaining post-contract follow-up train is tracked in `docs/IMPLEMENTATION_PLAN_2026-03-30_REMAINING_BACKLOG.md`.
+The roadmap is no longer about "make the README true." It is now about improving implementation quality, multi-user correctness, and operator ergonomics on top of the landed baseline.
 
-## Phase 1: Core Runtime
+Historical execution records remain in:
 
-- Replace the echo-only `SimpleAgent` path with provider-backed chat execution.
-- Add a provider abstraction for OpenAI, Anthropic, Google, and Ollama.
-- Load system prompt content from `agent.soul_path` when configured.
-- Persist session history in the agent and feed that history into provider calls.
-- Convert built-in tools from metadata-only definitions into executable runtime actions.
-- Centralize approval checks for dangerous tools through `SecurityLayer`.
+- `docs/IMPLEMENTATION_AUDIT_2026-03-29.md`
+- `docs/IMPLEMENTATION_PLAN_2026-03-30.md`
+- `docs/IMPLEMENTATION_PLAN_2026-03-30_REMAINING_BACKLOG.md`
+- `docs/FINAL_SHIPPABILITY_AUDIT_2026-03-30.md`
 
-## Phase 2: Shared Routing
+## Current Priorities
 
-- Introduce a core message router that owns agent invocation, approvals, and session mapping.
-- Move CLI, Telegram, webhook, and gateway onto the same router path.
-- Enforce pairing and DM policy consistently across transports.
-- Upgrade the WebSocket gateway to use authenticated sessions and structured response events.
+### Priority 1: OAuth And Session Delivery
 
-## Phase 3: Memory and Scheduling
+- Finish live OAuth completion routing for WebSocket, web-chat, and CLI sessions instead of relying on the browser success page alone.
+- Replace the gateway's connection-metadata-only model with session-scoped outbound actors or callback queues.
+- Scope Google OAuth token persistence per user or per session instead of a shared token file.
+- Add black-box gateway coverage for the OAuth callback path, including persisted pending state and channel completion behavior.
 
-- Finish SQLite memory initialization, metadata round-tripping, and group isolation.
-- Implement session compaction before provider calls when transcripts exceed limits.
-- Complete solution memory recall and heartbeat scheduler execution.
-- Integrate sub-agent background execution with status tracking.
+Why this matters:
+- This is the main remaining correctness gap in an otherwise landed Google integration.
+- Upstream projects are moving toward stronger hosted OAuth and session ownership patterns, and BorgClaw should not stop at "browser page says success."
 
-Recent landed work in this phase:
-- Heartbeat engine state gating, manual-run state updates, and disable/re-enable consistency.
-- Heartbeat background loop startup with duplicate-start protection.
-- Heartbeat config is now owned by the shared runtime, with auto-started persistent engine state when enabled.
-- Heartbeat task persistence across engine reconstruction.
-- Heartbeat retry rescheduling and dead-letter handling for exhausted tasks.
-- Sub-agent concurrency limits, cancellation precedence, memory tool policy enforcement, parent-context inheritance, and persisted task state.
-- Sub-agent retry rescheduling, retry-backoff visibility, and dead-letter handling for exhausted tasks.
-- Scheduler job initialization with stable `next_run` state for cron, interval, and one-shot jobs.
-- Scheduler loop startup, concurrency limits, timeout enforcement, due-job execution, and bounded run history.
-- Scheduler state persistence across reconstruction, including recovery of in-flight `Running` jobs back to runnable `Pending` state.
-- Shared-runtime restart recovery is now covered for persisted due scheduler jobs, including recovered `Running` jobs that execute after reconstruction.
-- Scheduler retry rescheduling and dead-letter handling for exhausted jobs.
-- Scheduled jobs can now dispatch built-in tool calls through the shared runtime, not just synthetic message actions.
-- Background scheduled and sub-agent tool selection now reject approval-gated tools when interactive approval is unavailable.
-- Tool execution now carries conversation context so memory tools respect `group_id`, and scheduled tool jobs inherit originating sender/session metadata.
-- CLI `status`/`doctor` now surface persisted scheduler, heartbeat, and sub-agent recovery state from the workspace, including task counts and dead-letter counts when state files exist.
-- CLI heartbeat manual trigger now executes persisted tasks immediately through the heartbeat engine instead of acting as a placeholder-only surface.
-- Signal polling now rejects duplicate receiver starts, performs a health check before entering the receive loop, and tracks/aborts the background poll task on shutdown.
-- Telegram polling now rejects duplicate receiver starts, uses explicit update polling with persisted offsets, and tracks/aborts the background receive task on shutdown.
+### Priority 2: Multi-Tenant And Gateway Hardening
 
-## Phase 4: Skills and Integrations
+- Tighten gateway authentication and rate limiting for remote/operator-facing surfaces.
+- Make session state explicit and inspectable (`idle`, `running`, `waiting`, `error`) instead of inferring everything from scattered metrics.
+- Strengthen channel/session ownership so approvals, callbacks, and background completions all route back through one authoritative session model.
+- Continue reducing shell-mediated gateway/control-plane operations in favor of typed internal paths.
 
-- Complete operational paths for GitHub, Google Workspace, browser automation, STT, TTS, image, QR, URL, MCP, and WASM plugins.
-- Normalize skill execution results and error handling behind a shared runtime interface.
-- Route plugin and MCP capabilities into the same tool execution layer used by the agent.
+Why this matters:
+- The current gateway is good enough for single-operator local use, but thinner than the stronger control-plane and multi-tenant models visible upstream.
 
-Recent landed work in this phase:
-- WASM plugin manifests now accept the documented TOML permission table shape, default invocations honor `entry_point`, and non-exported function calls are rejected.
-- MCP stdio server commands now pass through the shared command policy instead of bypassing the blocklist.
-- Shared runtime GitHub happy-path coverage now exercises configured read operations against a local API stub, instead of relying only on client-level tests.
-- Shared runtime Google happy-path coverage now exercises configured Gmail, Drive, and Calendar endpoints against a local stub, instead of relying only on client-level tests.
-- Shared runtime browser happy-path coverage now exercises a configured local bridge for `browser_get_url` and `browser_eval_js`, instead of relying only on browser-client unit tests.
-- Shared runtime coverage now includes local happy-path tests for QR URL encoding and URL shortening via a configured YOURLS-compatible provider.
-- Archive-backed install now works for local `.tar.gz` packages, remote archive URLs, GitHub repo installs, GitHub-backed registry installs, and direct GitHub raw `SKILL.md` URLs.
-- Direct `SKILL.md` installs now support explicit `files:` entries, adjacent `SKILL.files.json`, and best-effort directory-listing discovery when the source exposes one.
+### Priority 3: Context And Execution Discipline
 
-## Phase 5: Hardening and UX
+- Enforce stricter bounds on history forwarded into isolated command/container execution contexts.
+- Keep compaction and memory continuity transparent to operators with clearer lifecycle notifications and failure-state summaries.
+- Extend regression coverage around tool-call recovery, context overflow, and long-running session behavior.
+- Keep PTY/background execution behavior aligned with the same policy and audit guarantees already used elsewhere.
 
-- Make `SecurityLayer` authoritative for approvals, pairing, blocklists, prompt-injection defense, and secret scanning.
-- Finish secret storage and vault integration.
-- Expand onboarding, `status`, and `doctor` to reflect provider, channel, memory, and integration state.
-- Add focused unit and integration coverage for each completed phase.
-- Add an optional Docker command sandbox with typed config, diagnostics, and installer support.
+Why this matters:
+- The platform already supports a lot of runtime surface area; the next gains come from making that surface more predictable under pressure.
 
-Recent landed work in this phase:
-- Plugin and MCP invocation now use the same approval flow as command execution in supervised mode, instead of bypassing approval semantics entirely.
-- Shared file-path tools now honor a typed workspace policy with forbidden paths and additive allowed roots, and scheduled tool execution inherits that policy through the shared runtime path.
-- Shared command policy now supports an additive allowlist, and that policy is enforced consistently for foreground command execution, scheduled command execution, and MCP stdio server commands.
-- MCP stdio transport setup now inherits injected secret environment and resolves `${VAR}` placeholders through the security layer instead of relying on raw configured env only.
-- MCP client coverage now includes a local stdio-stub flow for `initialize`, `tools/list`, and `tools/call`, matching the plan’s stub-server test requirement.
-- CLI `doctor` now summarizes aggregate MCP reachability failures across configured servers instead of surfacing only per-server lines, improving the remaining MCP/runtime correctness diagnostics.
-- Plugin manifest file read/write permissions now preserve declared paths and are enforced against the shared workspace policy instead of being treated as mostly informational.
-- Plugin coverage now includes a real loaded-WASM runtime path through `plugin_invoke`, plus a permission-denial case that proves workspace policy is enforced before execution.
-- Onboarding coverage now includes a non-interactive `--refresh-models` path against a local HTTP stub plus a fallback case, and `providers.toml` now round-trips the documented `env_key` shape for both auth and no-auth providers.
-- Gateway coverage now includes black-box WebSocket and webhook tests for the documented welcome/pairing/auth event flow plus webhook health, secret enforcement, and rate-limiting behavior.
-- Webhook ingress now has request-size enforcement and redacted external error responses, narrowing the remaining gap in this phase.
-- The shared router now rejects explicitly disabled channels instead of treating `enabled = false` as informational only, tightening routing correctness against the documented channel contract.
-- The gateway now also rejects WebSocket upgrades when the channel is explicitly disabled, aligning transport entry with the same channel-enable contract.
-- Webhook rate limiting now returns `Retry-After` metadata on `429` responses, improving transport-facing retry semantics instead of leaving operators to guess the backoff window.
-- Optional Docker sandboxing is now implemented for `execute_command` with a typed `security.docker` contract, shared routing, diagnostics, and installer helpers.
-- Ongoing maintenance still includes repo-wide lint hardening and continued docs-as-contract upkeep.
-- CLI now provides backup export, import, and verify workflows over persisted scheduler, heartbeat, and sub-agent state.
-- `self-test` now treats persisted dead-lettered scheduler, heartbeat, and sub-agent state as explicit operator-facing failures instead of leaving them only to manual inspection.
+### Priority 4: Operator Workflow And Release Ergonomics
+
+- Add first-class install/uninstall helpers for local binary and launcher integration.
+- Decide whether password-gated secret-store unlock is a real product goal; if yes, promote it from an abandoned plan into an explicit execution track.
+- Standardize provider/integration credential shapes where possible (`api_key`, `oauth_token`, profile id) to reduce per-provider drift.
+- Add explicit nightly/release automation documentation and implementation when the operator workflow is stable enough to freeze.
+
+Why this matters:
+- Setup and release ergonomics are now the main non-runtime polish gap.
+
+## Explicit Non-Goals
+
+These remain useful upstream references, but they are not BorgClaw roadmap items:
+
+- AWS Bedrock provider support
+- Composio integration
+- Slack approval UI/buttons
+
+## Guidance
+
+- Use `docs/implementation-status.md` for the evidence-backed status of what is complete versus partial.
+- Use `docs/inspirations.md` for upstream patterns worth copying next.
+- Treat new roadmap items as extension and quality work, not justification to quietly narrow the existing product contract.

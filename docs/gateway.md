@@ -258,6 +258,22 @@ Message types:
 - `welcome` — Sent on connection
 - `pairing_code` — 6-digit authentication code
 - `auth_required` — Prompt to authenticate
+
+## OAuth Callback Behavior
+
+The gateway exposes `GET /oauth/callback` for Google OAuth completion.
+
+Current behavior:
+
+- The callback validates the stored `state` token and exchanges the Google authorization code for tokens.
+- The browser window always receives the success or failure HTML response.
+- Browser-originated flows also emit `window.opener.postMessage(...)` so the originating page can react.
+- Telegram-originated OAuth flows now receive a direct completion message back through the Telegram channel.
+- WebSocket, web chat, and CLI sessions do not yet receive a live in-band completion event from the gateway; those flows still rely on the browser success page as the operator-facing completion signal.
+
+Operational note:
+
+- Pending OAuth requests are persisted alongside the configured Google token path so the tool-runtime request and the gateway callback can share state safely.
 - `authenticated` — Successful authentication
 - `response` — Agent reply
 - `heartbeat` / `pong` — Keepalive

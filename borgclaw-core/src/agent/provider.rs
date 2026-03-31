@@ -287,10 +287,7 @@ impl ChatProvider for OpenAiProvider {
             .into_iter()
             .next()
             .map(|choice| {
-                ProviderResponse::from_text_with_think_blocks(
-                    choice.message.content,
-                    "openai",
-                )
+                ProviderResponse::from_text_with_think_blocks(choice.message.content, "openai")
             })
             .ok_or_else(|| ProviderError::Parse("missing choice".to_string()))
     }
@@ -627,8 +624,7 @@ impl ChatProvider for GoogleProvider {
             .ok_or_else(|| ProviderError::Parse("missing candidate text".to_string()))?;
 
         Ok(ProviderResponse::from_text_with_think_blocks(
-            text,
-            "google",
+            text, "google",
         ))
     }
 }
@@ -653,7 +649,11 @@ impl OllamaProvider {
         std::env::var("OLLAMA_API_BASE")
             .ok()
             .filter(|s| !s.is_empty())
-            .or_else(|| std::env::var("OLLAMA_BASE_URL").ok().filter(|s| !s.is_empty()))
+            .or_else(|| {
+                std::env::var("OLLAMA_BASE_URL")
+                    .ok()
+                    .filter(|s| !s.is_empty())
+            })
             .map(|s| s.trim_end_matches('/').to_string())
             .unwrap_or_else(|| "http://localhost:11434".to_string())
     }
@@ -909,7 +909,10 @@ impl MiniMaxProvider {
     fn resolve_base_url() -> String {
         if let Ok(custom_base) = std::env::var("MINIMAX_API_BASE") {
             if !custom_base.is_empty() {
-                tracing::info!("Using custom API base from MINIMAX_API_BASE: {}", custom_base);
+                tracing::info!(
+                    "Using custom API base from MINIMAX_API_BASE: {}",
+                    custom_base
+                );
                 return custom_base.trim_end_matches('/').to_string();
             }
         }
@@ -931,10 +934,7 @@ impl MiniMaxProvider {
                 "user" => {
                     if first_user && !system_content.is_empty() {
                         // Prepend system content to first user message
-                        let combined = format!(
-                            "{}",
-                            system_content.join("\n\n")
-                        );
+                        let combined = system_content.join("\n\n");
                         converted.push(ChatMessage {
                             role: "user".to_string(),
                             content: format!("{}\n\n{}", combined, msg.content),
@@ -963,7 +963,7 @@ impl MiniMaxProvider {
 
     fn build_request_body(request: &ProviderRequest) -> serde_json::Value {
         let converted_messages = Self::convert_messages(&request.messages);
-        
+
         serde_json::json!({
             "model": request.model,
             "temperature": request.temperature,
@@ -976,10 +976,7 @@ impl MiniMaxProvider {
 
 #[async_trait]
 impl ChatProvider for MiniMaxProvider {
-    async fn complete(
-        &self,
-        request: &ProviderRequest,
-    ) -> Result<ProviderResponse, ProviderError> {
+    async fn complete(&self, request: &ProviderRequest) -> Result<ProviderResponse, ProviderError> {
         tracing::info!(
             "MiniMaxProvider request: model={}, temperature={}, max_tokens={}",
             request.model,
@@ -1187,7 +1184,7 @@ mod tests {
         };
 
         let body = MiniMaxProvider::build_request_body(&request);
-        
+
         // Assistant message preserved first (comes before user in original)
         assert_eq!(body["messages"][0]["role"], "assistant");
         assert_eq!(
@@ -1222,7 +1219,7 @@ mod tests {
         ];
 
         let converted = MiniMaxProvider::convert_messages(&messages);
-        
+
         // Should have one message: system content prepended to user message
         assert_eq!(converted.len(), 1);
         assert_eq!(converted[0].role, "user");
@@ -1294,17 +1291,14 @@ mod tests {
             "http://custom.ollama:11434"
         );
         std::env::remove_var("OLLAMA_API_BASE");
-        
+
         std::env::set_var("OLLAMA_BASE_URL", "http://fallback.ollama:11434");
         assert_eq!(
             OllamaProvider::resolve_base_url(),
             "http://fallback.ollama:11434"
         );
         std::env::remove_var("OLLAMA_BASE_URL");
-        
-        assert_eq!(
-            OllamaProvider::resolve_base_url(),
-            "http://localhost:11434"
-        );
+
+        assert_eq!(OllamaProvider::resolve_base_url(), "http://localhost:11434");
     }
 }
