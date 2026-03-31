@@ -145,7 +145,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-clear
 echo ""
 echo "╔════════════════════════════════════════════════════════════════╗"
 echo "║                                                                ║"
@@ -719,18 +718,30 @@ if [ "$QUICK_MODE" = false ]; then
     info "  • Read and create Calendar events"
     info "  • Use OAuth for secure authentication"
     echo ""
-    warn "External Setup Required:"
-    warn "  This requires Google OAuth 2.0 credentials. Run after onboarding:"
-    warn "    ./scripts/install-google-oauth.sh"
-    warn ""
-    warn "  The setup script will guide you through:"
-    warn "    1. Creating a Google Cloud project"
-    warn "    2. Enabling Gmail, Drive, Calendar APIs"
-    warn "    3. Creating OAuth 2.0 credentials"
-    warn "    4. Configuring the OAuth consent screen"
-    echo ""
-    prompt "Configure Google Workspace integration? [y/N]: "
-    read -r setup_google
+    
+    # Check if already configured (has both client ID and secret)
+    if "$BORGCLAW_BIN" secrets check "GOOGLE_CLIENT_ID" &>/dev/null && \
+       "$BORGCLAW_BIN" secrets check "GOOGLE_CLIENT_SECRET" &>/dev/null; then
+        log "✓ Google Workspace integration is already configured"
+        prompt "Reconfigure Google Workspace integration? [y/N]: "
+        read -r setup_google
+        if [[ ! "$setup_google" =~ ^[Yy]$ ]]; then
+            log "Keeping existing Google Workspace configuration"
+        fi
+    else
+        warn "External Setup Required:"
+        warn "  This requires Google OAuth 2.0 credentials. Run after onboarding:"
+        warn "    ./scripts/install-google-oauth.sh"
+        warn ""
+        warn "  The setup script will guide you through:"
+        warn "    1. Creating a Google Cloud project"
+        warn "    2. Enabling Gmail, Drive, Calendar APIs"
+        warn "    3. Creating OAuth 2.0 credentials"
+        warn "    4. Configuring the OAuth consent screen"
+        echo ""
+        prompt "Configure Google Workspace integration? [y/N]: "
+        read -r setup_google
+    fi
     
     if [[ "$setup_google" =~ ^[Yy]$ ]]; then
         log "Running Google OAuth setup..."
@@ -822,22 +833,48 @@ if [ "$QUICK_MODE" = false ]; then
     info "  • Fill forms and click buttons"
     info "  • Extract data from web pages"
     echo ""
-    warn "External Setup Required:"
-    warn "  • Node.js 18+ must be installed"
-    warn "  • Run: ./scripts/install-playwright.sh"
-    echo ""
     
-    if command -v node &>/dev/null; then
-        log "✓ Node.js found: $(node --version)"
-        prompt "Install Playwright now? [Y/n]: "
+    # Check if already configured (playwright command available)
+    PLAYWRIGHT_ALREADY_CONFIGURED=false
+    if command -v npx &>/dev/null && npx playwright --version &>/dev/null 2>&1; then
+        PLAYWRIGHT_ALREADY_CONFIGURED=true
+        log "✓ Playwright is already installed: $(npx playwright --version 2>/dev/null | head -1)"
+        prompt "Reinstall or update Playwright? [y/N]: "
         read -r install_playwright
-        if [[ ! "$install_playwright" =~ ^[Nn]$ ]]; then
-            "$ROOT_DIR/scripts/install-playwright.sh"
+        if [[ ! "$install_playwright" =~ ^[Yy]$ ]]; then
+            log "Keeping existing Playwright installation"
+        fi
+    elif [ -f "$ROOT_DIR/.local/playwright/node_modules/.bin/playwright" ]; then
+        PLAYWRIGHT_ALREADY_CONFIGURED=true
+        log "✓ Playwright is already installed in workspace"
+        prompt "Reinstall or update Playwright? [y/N]: "
+        read -r install_playwright
+        if [[ ! "$install_playwright" =~ ^[Yy]$ ]]; then
+            log "Keeping existing Playwright installation"
         fi
     else
-        warn "✗ Node.js not found"
-        info "Install from: https://nodejs.org"
-        info "Then run: ./scripts/install-playwright.sh"
+        warn "External Setup Required:"
+        warn "  • Node.js 18+ must be installed"
+        warn "  • Run: ./scripts/install-playwright.sh"
+        echo ""
+        
+        if command -v node &>/dev/null; then
+            log "✓ Node.js found: $(node --version)"
+            prompt "Install Playwright now? [Y/n]: "
+            read -r install_playwright
+        else
+            warn "✗ Node.js not found"
+            info "Install from: https://nodejs.org"
+            info "Then run: ./scripts/install-playwright.sh"
+        fi
+    fi
+    
+    if [[ "${install_playwright:-n}" =~ ^[Yy]$ ]]; then
+        if [ -f "$ROOT_DIR/scripts/install-playwright.sh" ]; then
+            "$ROOT_DIR/scripts/install-playwright.sh"
+        else
+            warn "install-playwright.sh not found. Please run it manually."
+        fi
     fi
     
     # Webhook Channel
@@ -847,8 +884,32 @@ if [ "$QUICK_MODE" = false ]; then
     info "Allows external services to send messages to BorgClaw via HTTP POST."
     info "Useful for CI/CD integrations, monitoring alerts, etc."
     echo ""
-    prompt "Enable webhook channel? [y/N]: "
-    read -r setup_webhook
+    
+    # Check if already configured in existing config
+    EXISTING_WEBHOOK_ENABLED=false
+    EXISTING_WEBHOOK_PORT=""
+    if [ -f "$CONFIG_FILE" ]; then
+        if grep -q '^\[channels.webhook\]' "$CONFIG_FILE" 2>/dev/null; then
+            if grep -A1 '^\[channels.webhook\]' "$CONFIG_FILE" | grep -q 'enabled = true'; then
+                EXISTING_WEBHOOK_ENABLED=true
+                EXISTING_WEBHOOK_PORT=$(grep -A2 '^\[channels.webhook\]' "$CONFIG_FILE" | grep 'port' | sed 's/.*=\s*//' | tr -d ' ')
+            fi
+        fi
+    fi
+    
+    if [ "$EXISTING_WEBHOOK_ENABLED" = true ]; then
+        log "✓ Webhook channel is already enabled (port: ${EXISTING_WEBHOOK_PORT:-8080})"
+        prompt "Reconfigure webhook channel? [y/N]: "
+        read -r setup_webhook
+        if [[ ! "$setup_webhook" =~ ^[Yy]$ ]]; then
+            log "Keeping existing webhook configuration"
+            ENABLE_WEBHOOK=true
+            WEBHOOK_PORT="${EXISTING_WEBHOOK_PORT:-8080}"
+        fi
+    else
+        prompt "Enable webhook channel? [y/N]: "
+        read -r setup_webhook
+    fi
     
     if [[ "$setup_webhook" =~ ^[Yy]$ ]]; then
         while true; do
