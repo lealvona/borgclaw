@@ -17,8 +17,8 @@ Historical execution records remain in:
 
 ### Priority 1: OAuth And Session Delivery
 
-- Finish live OAuth completion routing for WebSocket, web-chat, and CLI sessions instead of relying on the browser success page alone.
-- Replace the gateway's connection-metadata-only model with session-scoped outbound actors or callback queues.
+- Finish live OAuth completion routing for CLI and any future non-WebSocket sessions instead of relying on browser-only confirmation or manual retry.
+- Extend the new session-scoped outbound queue model beyond the current live WebSocket path so callback ownership is transport-agnostic.
 - Scope Google OAuth token persistence per user or per session instead of a shared token file.
 - Add black-box gateway coverage for the OAuth callback path, including persisted pending state and channel completion behavior.
 
@@ -34,7 +34,7 @@ Why this matters:
 - Continue reducing shell-mediated gateway/control-plane operations in favor of typed internal paths.
 
 Why this matters:
-- The current gateway is good enough for single-operator local use, but thinner than the stronger control-plane and multi-tenant models visible upstream.
+- The current gateway now has a better operator surface and live callback routing, but it is still thinner than the stronger control-plane and multi-tenant models visible upstream.
 
 ### Priority 3: Context And Execution Discipline
 

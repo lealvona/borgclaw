@@ -23,7 +23,7 @@ use borgclaw_core::{
     skills::{GoogleClient, OAuthPendingStore, SkillsRegistry},
     AppConfig,
 };
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -124,9 +124,16 @@ struct MetricsSnapshot {
 struct ConnectionInfo {
     client_id: String,
     connected_at: chrono::DateTime<chrono::Utc>,
+    session_id: Option<String>,
     authenticated: bool,
     messages_received: u64,
     messages_sent: u64,
+}
+
+#[derive(Clone)]
+struct ConnectionHandle {
+    info: ConnectionInfo,
+    outbound: mpsc::UnboundedSender<serde_json::Value>,
 }
 
 #[derive(Clone)]
@@ -136,7 +143,7 @@ struct GatewayState {
     router: Arc<MessageRouter>,
     webhook: Option<Arc<WebhookChannel>>,
     metrics: Arc<GatewayMetrics>,
-    connections: Arc<RwLock<HashMap<String, ConnectionInfo>>>,
+    connections: Arc<RwLock<HashMap<String, ConnectionHandle>>>,
     oauth_pending: OAuthPendingStore,
 }
 
@@ -405,7 +412,10 @@ async fn notify_oauth_completion(
 
     match oauth_state.channel.as_str() {
         "telegram" => send_telegram_oauth_notification(gateway_state, oauth_state, message).await,
-        "websocket" | "web" | "cli" => Ok(()),
+        "websocket" | "web" => {
+            send_session_oauth_notification(gateway_state, oauth_state, message).await
+        }
+        "cli" => Ok(()),
         other => {
             info!(
                 "OAuth callback has no direct notifier for channel '{}'; browser success page remains the fallback",
@@ -414,6 +424,61 @@ async fn notify_oauth_completion(
             Ok(())
         }
     }
+}
+
+async fn send_session_oauth_notification(
+    gateway_state: &GatewayState,
+    oauth_state: &borgclaw_core::skills::OAuthState,
+    message: &str,
+) -> Result<(), String> {
+    let event = serde_json::json!({
+        "type": "oauth_complete",
+        "session_id": oauth_state.session_id,
+        "channel": oauth_state.channel,
+        "provider": "google",
+        "success": true,
+        "message": message,
+    });
+
+    if queue_oauth_event_for_session(gateway_state, &oauth_state.session_id, event).await? {
+        return Ok(());
+    }
+
+    info!(
+        "OAuth completed for session {} but no live gateway session was connected; browser success page remains the fallback",
+        oauth_state.session_id
+    );
+    Ok(())
+}
+
+async fn queue_oauth_event_for_session(
+    gateway_state: &GatewayState,
+    session_id: &str,
+    event: serde_json::Value,
+) -> Result<bool, String> {
+    let mut delivered = false;
+    let mut stale_clients = Vec::new();
+    let mut connections = gateway_state.connections.write().await;
+
+    for (client_id, handle) in connections.iter_mut() {
+        if handle.info.session_id.as_deref() != Some(session_id) {
+            continue;
+        }
+
+        if handle.outbound.send(event.clone()).is_ok() {
+            handle.info.messages_sent += 1;
+            gateway_state.metrics.increment_messages_sent();
+            delivered = true;
+        } else {
+            stale_clients.push(client_id.clone());
+        }
+    }
+
+    for client_id in stale_clients {
+        connections.remove(&client_id);
+    }
+
+    Ok(delivered)
 }
 
 async fn send_telegram_oauth_notification(
@@ -696,6 +761,13 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
             text-decoration: none;
             margin-bottom: 2px;
         }
+        button.menu-item {
+            width: 100%;
+            border: none;
+            background: transparent;
+            text-align: left;
+            font: inherit;
+        }
         .menu-item:hover {
             background: var(--bg-tertiary);
             color: var(--text-primary);
@@ -775,6 +847,139 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
             align-items: center;
             gap: 8px;
             color: var(--text-secondary);
+        }
+        .message-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 10px;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+        .message-role-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 8px;
+            border-radius: 999px;
+            font-weight: 700;
+        }
+        .message.user .message-role-badge {
+            background: rgba(255,255,255,0.18);
+        }
+        .message.assistant .message-role-badge {
+            background: rgba(0, 212, 170, 0.12);
+            color: var(--accent-cyan);
+        }
+        .message.system .message-role-badge {
+            background: rgba(240, 136, 62, 0.14);
+            color: var(--accent-orange);
+        }
+        .message-time {
+            color: var(--text-secondary);
+        }
+        .message-body {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .rich-text, .markdown-body, .json-pretty {
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .markdown-body h1, .markdown-body h2, .markdown-body h3 {
+            margin: 0 0 8px;
+            color: var(--text-primary);
+        }
+        .markdown-body p, .markdown-body ul, .markdown-body ol, .markdown-body blockquote {
+            margin: 0 0 10px;
+        }
+        .markdown-body code,
+        .json-pretty code {
+            font-family: var(--font-mono);
+            background: rgba(0,0,0,0.25);
+            border-radius: 6px;
+            padding: 2px 6px;
+        }
+        .markdown-body pre,
+        .json-pretty {
+            font-family: var(--font-mono);
+            background: rgba(0,0,0,0.28);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 10px;
+            padding: 14px;
+            overflow-x: auto;
+        }
+        .markdown-body blockquote {
+            border-left: 3px solid var(--accent-cyan);
+            padding-left: 12px;
+            color: var(--text-secondary);
+        }
+        .message-rail {
+            display: grid;
+            gap: 10px;
+        }
+        .message-panel {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 10px;
+            padding: 12px;
+        }
+        .message-panel-title {
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+        .tool-call-list,
+        .attachment-grid,
+        .meta-pill-list,
+        .inspector-summary {
+            display: grid;
+            gap: 10px;
+        }
+        .tool-call-card,
+        .attachment-card,
+        .inspector-card {
+            background: linear-gradient(145deg, rgba(88, 166, 255, 0.08), rgba(0, 212, 170, 0.05));
+            border: 1px solid rgba(88, 166, 255, 0.18);
+            border-radius: 12px;
+            padding: 12px;
+        }
+        .tool-call-name,
+        .attachment-title,
+        .inspector-card-title {
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+        .attachment-preview {
+            width: 100%;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(0,0,0,0.2);
+        }
+        .meta-pill-list {
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        }
+        .meta-pill {
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 999px;
+            padding: 8px 10px;
+            font-size: 0.76rem;
+        }
+        .meta-pill strong {
+            color: var(--accent-cyan);
+        }
+        .html-preview-frame {
+            width: 100%;
+            min-height: 180px;
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 10px;
+            background: #fff;
         }
         .loading-dots {
             display: flex;
@@ -870,6 +1075,12 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
             color: var(--text-secondary);
             transition: all 0.2s;
         }
+        button.endpoint-item {
+            width: 100%;
+            border: none;
+            text-align: left;
+            cursor: pointer;
+        }
         .endpoint-item:hover {
             background: var(--border-color);
             color: var(--text-primary);
@@ -898,7 +1109,18 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
             color: var(--accent-cyan);
             text-decoration: none;
         }
+        .footer-link {
+            background: transparent;
+            border: none;
+            color: var(--accent-cyan);
+            cursor: pointer;
+            font: inherit;
+            padding: 0;
+        }
         footer a:hover {
+            text-decoration: underline;
+        }
+        .footer-link:hover {
             text-decoration: underline;
         }
         
@@ -1165,40 +1387,40 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                         <span class="menu-icon">💬</span>
                         Chat
                     </a>
-                    <a href="/api/status" class="menu-item" target="_blank">
+                    <button type="button" class="menu-item" onclick="openInspector('Status', '/api/status', 'Gateway runtime state and version')">
                         <span class="menu-icon">📊</span>
                         Status
-                    </a>
-                    <a href="/api/metrics" class="menu-item" target="_blank">
+                    </button>
+                    <button type="button" class="menu-item" onclick="openInspector('Metrics', '/api/metrics', 'Live gateway counters and throughput')">
                         <span class="menu-icon">📈</span>
                         Metrics
-                    </a>
-                    <a href="/api/tools" class="menu-item" target="_blank">
+                    </button>
+                    <button type="button" class="menu-item" onclick="openInspector('Tools', '/api/tools', 'Built-in tool catalog exposed by the gateway')">
                         <span class="menu-icon">🛠️</span>
                         Tools
-                    </a>
-                    <a href="/api/connections" class="menu-item" target="_blank">
+                    </button>
+                    <button type="button" class="menu-item" onclick="openInspector('Connections', '/api/connections', 'Active live sessions and transport state')">
                         <span class="menu-icon">🔌</span>
                         Connections
-                    </a>
-                    <a href="/api/doctor" class="menu-item" target="_blank">
+                    </button>
+                    <button type="button" class="menu-item" onclick="openInspector('Doctor', '/api/doctor', 'Health checks across runtime, memory, skills, and workspace')">
                         <span class="menu-icon">🔍</span>
                         Health Check
-                    </a>
+                    </button>
                 </nav>
             </div>
 
             <div class="panel">
                 <h3>Configuration</h3>
                 <nav class="menu-list">
-                    <a href="#" class="menu-item" onclick="showConfigEditor(); return false;">
+                    <button type="button" class="menu-item" onclick="showConfigEditor()">
                         <span class="menu-icon">⚙️</span>
                         Edit Config
-                    </a>
-                    <a href="/api/config" class="menu-item" target="_blank">
+                    </button>
+                    <button type="button" class="menu-item" onclick="openInspector('Configuration Snapshot', '/api/config', 'Current effective configuration surface exposed by the gateway')">
                         <span class="menu-icon">📋</span>
-                        View Config (JSON)
-                    </a>
+                        Review Config
+                    </button>
                 </nav>
             </div>
         </aside>
@@ -1233,10 +1455,10 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                     <div class="endpoint-card">
                         <h4>💬 Chat & Messages</h4>
                         <div class="endpoint-list">
-                            <a href="/api/chat" class="endpoint-item" target="_blank">
+                            <button type="button" class="endpoint-item" onclick="openApiGuide('Chat API', 'POST /api/chat', 'Send a prompt to the router-backed agent and inspect the structured outbound payload returned to the dashboard.')">
                                 <span class="method post">POST</span>
                                 <code>/api/chat</code>
-                            </a>
+                            </button>
                             <div class="endpoint-item">
                                 <span class="method ws">WS</span>
                                 <code>/ws</code>
@@ -1251,54 +1473,54 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                                 <span class="method post">POST</span>
                                 <code>/webhook</code>
                             </div>
-                            <a href="/webhook/health" class="endpoint-item" target="_blank">
+                            <button type="button" class="endpoint-item" onclick="openInspector('Webhook Health', '/webhook/health', 'Readiness and shared-secret status for the webhook surface')">
                                 <span class="method get">GET</span>
                                 <code>/webhook/health</code>
-                            </a>
+                            </button>
                         </div>
                     </div>
 
                     <div class="endpoint-card">
                         <h4>📊 Observability</h4>
                         <div class="endpoint-list">
-                            <a href="/api/health" class="endpoint-item" target="_blank">
+                            <button type="button" class="endpoint-item" onclick="openInspector('Health', '/api/health', 'Gateway health summary with HTTP-ready status')">
                                 <span class="method get">GET</span>
                                 <code>/api/health</code>
-                            </a>
-                            <a href="/api/ready" class="endpoint-item" target="_blank">
+                            </button>
+                            <button type="button" class="endpoint-item" onclick="openInspector('Readiness', '/api/ready', 'Startup/readiness gate for automated deployment checks')">
                                 <span class="method get">GET</span>
                                 <code>/api/ready</code>
-                            </a>
-                            <a href="/api/metrics" class="endpoint-item" target="_blank">
+                            </button>
+                            <button type="button" class="endpoint-item" onclick="openInspector('Metrics', '/api/metrics', 'Connection, message, auth, and uptime counters')">
                                 <span class="method get">GET</span>
                                 <code>/api/metrics</code>
-                            </a>
+                            </button>
                         </div>
                     </div>
 
                     <div class="endpoint-card">
                         <h4>🔧 Management</h4>
                         <div class="endpoint-list">
-                            <a href="/api/status" class="endpoint-item" target="_blank">
+                            <button type="button" class="endpoint-item" onclick="openInspector('Status', '/api/status', 'Gateway process status and release metadata')">
                                 <span class="method get">GET</span>
                                 <code>/api/status</code>
-                            </a>
-                            <a href="/api/config" class="endpoint-item" target="_blank">
+                            </button>
+                            <button type="button" class="endpoint-item" onclick="openInspector('Configuration Snapshot', '/api/config', 'Current config as consumed by the gateway')">
                                 <span class="method get">GET</span>
                                 <code>/api/config</code>
-                            </a>
-                            <a href="/api/connections" class="endpoint-item" target="_blank">
+                            </button>
+                            <button type="button" class="endpoint-item" onclick="openInspector('Connections', '/api/connections', 'Connected clients, auth state, and routed session IDs')">
                                 <span class="method get">GET</span>
                                 <code>/api/connections</code>
-                            </a>
-                            <a href="/api/tools" class="endpoint-item" target="_blank">
+                            </button>
+                            <button type="button" class="endpoint-item" onclick="openInspector('Tools', '/api/tools', 'Introspect the runtime tool registry exposed to the agent')">
                                 <span class="method get">GET</span>
                                 <code>/api/tools</code>
-                            </a>
-                            <a href="/api/doctor" class="endpoint-item" target="_blank">
+                            </button>
+                            <button type="button" class="endpoint-item" onclick="openInspector('Doctor', '/api/doctor', 'Full diagnostic output with per-check status')">
                                 <span class="method get">GET</span>
                                 <code>/api/doctor</code>
-                            </a>
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -1308,9 +1530,9 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 <p id="footer-version">BorgClaw — Personal AI Agent Framework</p>
                 <p style="margin-top: 8px;">
                     <a href="https://github.com/lealvona/borgclaw">GitHub</a> • 
-                    <a href="/api/status">Status</a> • 
-                    <a href="/api/health">Health</a> •
-                    <a href="/api/version">Version</a>
+                    <button type="button" class="footer-link" onclick="openInspector('Status', '/api/status', 'Gateway runtime state and version')">Status</button> • 
+                    <button type="button" class="footer-link" onclick="openInspector('Health', '/api/health', 'Gateway health summary')">Health</button> •
+                    <button type="button" class="footer-link" onclick="openInspector('Version', '/api/version', 'Release metadata for the running build')">Version</button>
                 </p>
             </footer>
         </div>
@@ -1562,6 +1784,25 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
         </div>
     </div>
 
+    <div id="inspector-modal" class="modal" style="display: none;">
+        <div class="modal-content inspector-modal-content">
+            <div class="modal-header">
+                <div>
+                    <h2 id="inspector-title">Inspector</h2>
+                    <div id="inspector-subtitle" class="text-muted"></div>
+                </div>
+                <button class="modal-close" onclick="hideInspector()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="inspector-summary" class="inspector-summary"></div>
+                <pre id="inspector-json" class="json-pretty"></pre>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="hideInspector()">Close</button>
+            </div>
+        </div>
+    </div>
+
     <style>
         .modal {
             position: fixed;
@@ -1586,6 +1827,14 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
             display: flex;
             flex-direction: column;
             box-shadow: 0 0 30px rgba(0,212,255,0.2);
+        }
+        .inspector-modal-content {
+            max-width: 900px;
+        }
+        .text-muted {
+            color: var(--text-secondary);
+            font-size: 0.82rem;
+            margin-top: 4px;
         }
         .modal-header {
             display: flex;
@@ -1863,6 +2112,7 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
         // State
         let messageHistory = [];
         let isProcessing = false;
+        let currentChatSessionId = null;
         
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
@@ -1872,43 +2122,39 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                     sendMessage();
                 }
             });
+            window.addEventListener('message', handleOAuthWindowMessage);
             
-            // Load initial metrics
             updateMetrics();
-            // Poll metrics every 5 seconds
             setInterval(updateMetrics, 5000);
         });
         
-        // Update metrics
         async function updateMetrics() {
             try {
                 const res = await fetch('/api/metrics');
                 if (res.ok) {
                     const data = await res.json();
-                    document.getElementById('conn-active').textContent = 
-                        data.connections_active || 0;
-                    document.getElementById('msg-received').textContent = 
-                        (data.messages_received || 0).toLocaleString();
+                    document.getElementById('conn-active').textContent = data.connections_active || 0;
+                    document.getElementById('msg-received').textContent = (data.messages_received || 0).toLocaleString();
                 }
             } catch (err) {
-                // Silently fail - metrics are optional
+                // Metrics are optional in the UI
             }
         }
         
-        // Send message
         async function sendMessage() {
             const input = document.getElementById('chat-input');
             const sendBtn = document.getElementById('chat-send');
-            const messages = document.getElementById('chat-messages');
             const content = input.value.trim();
             
             if (!content || isProcessing) return;
             
-            // Add user message
-            addMessage('user', content);
+            addMessage('user', {
+                text: content,
+                content_type: 'markdown',
+                content: { kind: 'markdown', text: content }
+            });
             input.value = '';
             
-            // Show loading
             isProcessing = true;
             sendBtn.disabled = true;
             const loadingId = addLoading();
@@ -1917,27 +2163,25 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 const res = await fetch('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        content, 
+                    body: JSON.stringify({
+                        content,
                         sender_id: 'web-ui',
                         group_id: 'web-chat'
                     })
                 });
-                
-                // Remove loading
                 document.getElementById(loadingId)?.remove();
                 
                 const data = await res.json();
                 if (data.error) {
-                    addMessage('system', 'Error: ' + data.error);
+                    addMessage('system', { text: 'Error: ' + data.error });
                 } else {
-                    addMessage('assistant', data.text);
-                    // Update metrics after successful message
+                    currentChatSessionId = data.session_id || currentChatSessionId;
+                    addMessage('assistant', data);
                     updateMetrics();
                 }
             } catch (err) {
                 document.getElementById(loadingId)?.remove();
-                addMessage('system', 'Connection error: ' + err.message);
+                addMessage('system', { text: 'Connection error: ' + err.message });
             } finally {
                 isProcessing = false;
                 sendBtn.disabled = false;
@@ -1945,18 +2189,44 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
             }
         }
         
-        // Add message to chat
-        function addMessage(role, text) {
+        function addMessage(role, payload) {
             const messages = document.getElementById('chat-messages');
-            const msg = document.createElement('div');
+            const msg = document.createElement('article');
             msg.className = 'message ' + role;
-            msg.textContent = text;
+            msg.style.opacity = '0';
+            msg.style.transform = 'translateY(8px)';
+            
+            const normalized = normalizePayload(payload);
+            const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            msg.innerHTML = `
+                <div class="message-header">
+                    <span class="message-role-badge">${roleLabel(role, normalized)}</span>
+                    <span class="message-time">${time}</span>
+                </div>
+                <div class="message-body"></div>
+            `;
+            
+            const body = msg.querySelector('.message-body');
+            body.appendChild(renderPrimaryContent(normalized));
+            
+            if (Array.isArray(normalized.tool_calls) && normalized.tool_calls.length > 0) {
+                body.appendChild(renderToolCalls(normalized.tool_calls));
+            }
+            if (normalized.metadata && Object.keys(normalized.metadata).length > 0) {
+                body.appendChild(renderMetadata(normalized.metadata));
+            }
+            
             messages.appendChild(msg);
+            requestAnimationFrame(() => {
+                msg.style.transition = 'opacity 220ms ease, transform 220ms ease';
+                msg.style.opacity = '1';
+                msg.style.transform = 'translateY(0)';
+            });
             messages.scrollTop = messages.scrollHeight;
+            messageHistory.push({ role, payload: normalized });
             return msg;
         }
         
-        // Add loading indicator
         function addLoading() {
             const messages = document.getElementById('chat-messages');
             const id = 'loading-' + Date.now();
@@ -1974,6 +2244,203 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
             messages.appendChild(msg);
             messages.scrollTop = messages.scrollHeight;
             return id;
+        }
+        
+        function normalizePayload(payload) {
+            if (payload == null) {
+                return { text: '' };
+            }
+            if (typeof payload === 'string') {
+                return {
+                    text: payload,
+                    content_type: 'text',
+                    content: { kind: 'text', text: payload },
+                    tool_calls: [],
+                    metadata: {}
+                };
+            }
+            const normalized = { ...payload };
+            if (!normalized.content) {
+                const kind = normalized.content_type || 'text';
+                if (kind === 'html') {
+                    normalized.content = { kind: 'html', html: normalized.text || '' };
+                } else {
+                    normalized.content = { kind, text: normalized.text || '' };
+                }
+            }
+            normalized.tool_calls = normalized.tool_calls || [];
+            normalized.metadata = normalized.metadata || {};
+            return normalized;
+        }
+        
+        function roleLabel(role, payload) {
+            if (role === 'assistant' && payload.content_type) {
+                return `Assistant · ${payload.content_type}`;
+            }
+            if (role === 'system' && payload.metadata?.provider) {
+                return `System · ${payload.metadata.provider}`;
+            }
+            return role.charAt(0).toUpperCase() + role.slice(1);
+        }
+        
+        function renderPrimaryContent(payload) {
+            const panel = document.createElement('div');
+            panel.className = 'message-panel';
+            const content = payload.content || { kind: payload.content_type || 'text', text: payload.text || '' };
+            
+            if (content.kind === 'markdown') {
+                panel.innerHTML = `<div class="markdown-body">${renderMarkdown(content.text || payload.text || '')}</div>`;
+                return panel;
+            }
+            if (content.kind === 'html') {
+                const escapedHtml = escapeHtml(content.html || payload.text || '');
+                panel.innerHTML = `
+                    <div class="message-panel-title">HTML Response</div>
+                    <iframe class="html-preview-frame" sandbox="" srcdoc="${escapedHtml.replace(/"/g, '&quot;')}"></iframe>
+                    <pre class="json-pretty">${escapedHtml}</pre>
+                `;
+                return panel;
+            }
+            if (content.kind === 'media') {
+                return renderAttachmentCard(content.url, content.mime_type);
+            }
+            if (content.kind === 'file') {
+                panel.innerHTML = `
+                    <div class="message-panel-title">Attachment</div>
+                    <div class="attachment-card">
+                        <div class="attachment-title">${escapeHtml(content.name || 'File')}</div>
+                        <div class="text-muted">${escapeHtml(content.path || '')}</div>
+                    </div>
+                `;
+                return panel;
+            }
+            panel.innerHTML = `<div class="rich-text">${renderPlainText(content.text || payload.text || '')}</div>`;
+            return panel;
+        }
+        
+        function renderAttachmentCard(url, mimeType) {
+            const panel = document.createElement('div');
+            panel.className = 'message-panel';
+            const safeUrl = escapeHtml(url || '');
+            if ((mimeType || '').startsWith('image/')) {
+                panel.innerHTML = `
+                    <div class="message-panel-title">Image</div>
+                    <div class="attachment-card">
+                        <img class="attachment-preview" src="${safeUrl}" alt="attachment preview">
+                    </div>
+                `;
+            } else if ((mimeType || '').startsWith('video/')) {
+                panel.innerHTML = `
+                    <div class="message-panel-title">Video</div>
+                    <div class="attachment-card">
+                        <video class="attachment-preview" controls src="${safeUrl}"></video>
+                    </div>
+                `;
+            } else {
+                panel.innerHTML = `
+                    <div class="message-panel-title">Media</div>
+                    <div class="attachment-card">
+                        <div class="attachment-title">${escapeHtml(mimeType || 'media')}</div>
+                        <a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeUrl}</a>
+                    </div>
+                `;
+            }
+            return panel;
+        }
+        
+        function renderToolCalls(toolCalls) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'message-panel';
+            wrapper.innerHTML = '<div class="message-panel-title">Tool Calls</div>';
+            const list = document.createElement('div');
+            list.className = 'tool-call-list';
+            toolCalls.forEach(call => {
+                const card = document.createElement('div');
+                card.className = 'tool-call-card';
+                card.innerHTML = `
+                    <div class="tool-call-name">${escapeHtml(call.name || 'tool')}</div>
+                    <pre class="json-pretty">${escapeHtml(JSON.stringify(call.arguments || {}, null, 2))}</pre>
+                `;
+                list.appendChild(card);
+            });
+            wrapper.appendChild(list);
+            return wrapper;
+        }
+        
+        function renderMetadata(metadata) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'message-panel';
+            wrapper.innerHTML = '<div class="message-panel-title">Metadata</div>';
+            const list = document.createElement('div');
+            list.className = 'meta-pill-list';
+            Object.entries(metadata).forEach(([key, value]) => {
+                const pill = document.createElement('div');
+                pill.className = 'meta-pill';
+                pill.innerHTML = `<strong>${escapeHtml(key)}:</strong> ${escapeHtml(formatScalar(value))}`;
+                list.appendChild(pill);
+            });
+            wrapper.appendChild(list);
+            return wrapper;
+        }
+        
+        function renderPlainText(text) {
+            return escapeHtml(text).replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>').replace(/\n/g, '<br>');
+        }
+        
+        function renderMarkdown(text) {
+            const escaped = escapeHtml(text || '');
+            const fenced = escaped.replace(/```([\s\S]*?)```/g, (_, code) => `<pre><code>${code.trim()}</code></pre>`);
+            const headings = fenced
+                .replace(/^### (.*)$/gm, '<h3>$1</h3>')
+                .replace(/^## (.*)$/gm, '<h2>$1</h2>')
+                .replace(/^# (.*)$/gm, '<h1>$1</h1>');
+            const emphasis = headings
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                .replace(/`([^`]+)`/g, '<code>$1</code>')
+                .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+            return emphasis
+                .split(/\n\n+/)
+                .map(block => {
+                    if (block.startsWith('<h') || block.startsWith('<pre>')) return block;
+                    if (/^[-*] /m.test(block)) {
+                        const items = block.split('\n').map(line => line.replace(/^[-*] /, '').trim()).filter(Boolean);
+                        return `<ul>${items.map(item => `<li>${item}</li>`).join('')}</ul>`;
+                    }
+                    if (block.startsWith('&gt;')) {
+                        return `<blockquote>${block.replace(/^&gt;\s?/gm, '').replace(/\n/g, '<br>')}</blockquote>`;
+                    }
+                    return `<p>${block.replace(/\n/g, '<br>')}</p>`;
+                })
+                .join('');
+        }
+        
+        function formatScalar(value) {
+            if (value == null) return 'null';
+            if (typeof value === 'object') return JSON.stringify(value);
+            return String(value);
+        }
+        
+        function escapeHtml(value) {
+            return String(value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+        
+        function handleOAuthWindowMessage(event) {
+            if (!event.data || event.data.type !== 'oauth_complete' || !event.data.success) {
+                return;
+            }
+            addMessage('system', {
+                text: 'Google authentication completed in the browser. The session is ready for Gmail, Drive, and Calendar tools.',
+                metadata: {
+                    provider: 'google',
+                    state: event.data.state || '(unknown)',
+                    session_id: currentChatSessionId || '(web-chat)'
+                }
+            });
         }
         
         // Configuration Editor Functions
@@ -2221,10 +2688,79 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
         function hideConfigStatus() {
             document.getElementById('config-status').className = 'config-status';
         }
+
+        async function openInspector(title, url, subtitle) {
+            const modal = document.getElementById('inspector-modal');
+            document.getElementById('inspector-title').textContent = title;
+            document.getElementById('inspector-subtitle').textContent = subtitle || url;
+            document.getElementById('inspector-summary').innerHTML = '<div class="inspector-card">Loading…</div>';
+            document.getElementById('inspector-json').textContent = '';
+            modal.style.display = 'flex';
+
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+                renderInspectorData(data, res.status, url);
+            } catch (err) {
+                document.getElementById('inspector-summary').innerHTML = `
+                    <div class="inspector-card">
+                        <div class="inspector-card-title">Request Failed</div>
+                        <div>${escapeHtml(err.message)}</div>
+                    </div>
+                `;
+            }
+        }
+
+        function openApiGuide(title, endpoint, description) {
+            const modal = document.getElementById('inspector-modal');
+            document.getElementById('inspector-title').textContent = title;
+            document.getElementById('inspector-subtitle').textContent = endpoint;
+            document.getElementById('inspector-summary').innerHTML = `
+                <div class="inspector-card">
+                    <div class="inspector-card-title">${escapeHtml(endpoint)}</div>
+                    <div>${escapeHtml(description)}</div>
+                </div>
+                <div class="inspector-card">
+                    <div class="inspector-card-title">Dashboard Note</div>
+                    <div>This endpoint is intentionally surfaced in the UI instead of opening raw JSON in a separate tab.</div>
+                </div>
+            `;
+            document.getElementById('inspector-json').textContent = '';
+            modal.style.display = 'flex';
+        }
+
+        function renderInspectorData(data, status, url) {
+            const summary = document.getElementById('inspector-summary');
+            const cards = [
+                `<div class="inspector-card"><div class="inspector-card-title">HTTP Status</div><div>${status}</div></div>`,
+                `<div class="inspector-card"><div class="inspector-card-title">Endpoint</div><div>${escapeHtml(url)}</div></div>`
+            ];
+
+            if (data && typeof data === 'object') {
+                Object.entries(data).slice(0, 6).forEach(([key, value]) => {
+                    cards.push(`
+                        <div class="inspector-card">
+                            <div class="inspector-card-title">${escapeHtml(key)}</div>
+                            <div>${escapeHtml(formatScalar(value))}</div>
+                        </div>
+                    `);
+                });
+            }
+
+            summary.innerHTML = cards.join('');
+            document.getElementById('inspector-json').textContent = JSON.stringify(data, null, 2);
+        }
+
+        function hideInspector() {
+            document.getElementById('inspector-modal').style.display = 'none';
+        }
         
         // Close modal on backdrop click
         document.getElementById('config-modal').addEventListener('click', function(e) {
             if (e.target === this) hideConfigEditor();
+        });
+        document.getElementById('inspector-modal').addEventListener('click', function(e) {
+            if (e.target === this) hideInspector();
         });
         
         // Keyboard shortcut for config (Ctrl/Cmd + ,)
@@ -2235,6 +2771,7 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
             }
             if (e.key === 'Escape') {
                 hideConfigEditor();
+                hideInspector();
             }
         });
         
@@ -2269,8 +2806,9 @@ async fn websocket_handler(
 }
 
 async fn handle_socket(socket: WebSocket, state: GatewayState) {
-    let mut socket = socket;
+    let (mut socket_sender, mut socket_receiver) = socket.split();
     let client_id = uuid::Uuid::new_v4().to_string();
+    let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<serde_json::Value>();
     let requires_pairing = state
         .config
         .channels
@@ -2292,12 +2830,16 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
         let mut conns = state.connections.write().await;
         conns.insert(
             client_id.clone(),
-            ConnectionInfo {
-                client_id: client_id.clone(),
-                connected_at: chrono::Utc::now(),
-                authenticated: !requires_pairing,
-                messages_received: 0,
-                messages_sent: 0,
+            ConnectionHandle {
+                info: ConnectionInfo {
+                    client_id: client_id.clone(),
+                    connected_at: chrono::Utc::now(),
+                    session_id: None,
+                    authenticated: !requires_pairing,
+                    messages_received: 0,
+                    messages_sent: 0,
+                },
+                outbound: outbound_tx.clone(),
             },
         );
     }
@@ -2307,8 +2849,21 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
         state.metrics.connections_active.load(Ordering::SeqCst)
     );
 
-    let _ = send_event(
-        &mut socket,
+    let writer = tokio::spawn(async move {
+        while let Some(event) = outbound_rx.recv().await {
+            if socket_sender
+                .send(Message::Text(event.to_string()))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+
+    queue_client_event(
+        &state,
+        &client_id,
         serde_json::json!({
             "type": "welcome",
             "client_id": client_id,
@@ -2317,30 +2872,28 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
         }),
     )
     .await;
-    state.metrics.increment_messages_sent();
 
     let mut heartbeat = tokio::time::interval(Duration::from_secs(30));
 
     loop {
         tokio::select! {
             _ = heartbeat.tick() => {
-                if send_event(&mut socket, serde_json::json!({
+                if !queue_client_event(&state, &client_id, serde_json::json!({
                     "type": "heartbeat",
                     "client_id": client_id,
                     "ts": chrono::Utc::now(),
-                })).await.is_err() {
+                })).await {
                     break;
                 }
-                state.metrics.increment_messages_sent();
             }
-            msg = socket.next() => {
+            msg = socket_receiver.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         state.metrics.increment_messages_received();
-                        if let Err(e) = handle_ws_message(&mut socket, &state, &client_id, &text).await {
+                        increment_connection_received(&state, &client_id).await;
+                        if let Err(e) = handle_ws_message(&state, &client_id, &text).await {
                             error!("Error handling message: {}", e);
-                            let _ = send_event(&mut socket, error_event("internal gateway error")).await;
-                            state.metrics.increment_messages_sent();
+                            queue_client_event(&state, &client_id, error_event("internal gateway error")).await;
                         }
                     }
                     Some(Ok(Message::Close(_))) | None => {
@@ -2349,8 +2902,7 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
                     }
                     Some(Err(e)) => {
                         error!("WebSocket error: {}", e);
-                        let _ = send_event(&mut socket, error_event(&e.to_string())).await;
-                        state.metrics.increment_messages_sent();
+                        queue_client_event(&state, &client_id, error_event(&e.to_string())).await;
                         break;
                     }
                     _ => {}
@@ -2358,6 +2910,8 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
             }
         }
     }
+
+    writer.abort();
 
     state.metrics.decrement_connections();
     {
@@ -2372,7 +2926,6 @@ async fn handle_socket(socket: WebSocket, state: GatewayState) {
 }
 
 async fn handle_ws_message(
-    socket: &mut WebSocket,
     state: &GatewayState,
     client_id: &str,
     text: &str,
@@ -2388,16 +2941,16 @@ async fn handle_ws_message(
         "request_pairing" => {
             state.metrics.increment_pairing_requests();
             let code = state.router.request_pairing_code(client_id).await?;
-            send_event(
-                socket,
+            queue_client_event(
+                state,
+                client_id,
                 serde_json::json!({
                     "type": "pairing_code",
                     "client_id": client_id,
                     "pairing_code": code
                 }),
             )
-            .await?;
-            state.metrics.increment_messages_sent();
+            .await;
         }
         "auth" => {
             let pairing_code = request
@@ -2408,17 +2961,17 @@ async fn handle_ws_message(
             let authenticated = approved_sender == client_id;
             if authenticated {
                 state.metrics.increment_auth_success();
+                update_connection_auth(state, client_id, true).await;
             } else {
                 state.metrics.increment_auth_failure();
             }
-            send_event(socket, serde_json::json!({
+            queue_client_event(state, client_id, serde_json::json!({
                     "type": if authenticated { "authenticated" } else { "error" },
                     "client_id": client_id,
                     "approved_sender": approved_sender,
                     "message": if authenticated { "Pairing approved" } else { "Pairing code belongs to another sender" }
                 }))
-            .await?;
-            state.metrics.increment_messages_sent();
+            .await;
         }
         "message" => {
             let content = request
@@ -2439,25 +2992,21 @@ async fn handle_ws_message(
             };
             match state.router.route(inbound).await {
                 Ok(outcome) => {
-                    // Determine content type from the outbound message
-                    let content_type = match &outcome.outbound.content {
-                        borgclaw_core::channel::MessagePayload::Markdown(_) => "markdown",
-                        borgclaw_core::channel::MessagePayload::Html(_) => "html",
-                        _ => "text",
-                    };
-
-                    send_event(
-                        socket,
+                    update_connection_session(state, client_id, &outcome.session_id.0).await;
+                    queue_client_event(
+                        state,
+                        client_id,
                         serde_json::json!({
                             "type": "response",
                             "session_id": outcome.session_id.0,
                             "text": outcome.response.text,
-                            "content_type": content_type,
+                            "content_type": message_payload_kind(&outcome.outbound.content),
+                            "content": message_payload_json(&outcome.outbound.content),
                             "tool_calls": outcome.response.tool_calls,
                             "metadata": outcome.response.metadata,
                         }),
                     )
-                    .await?;
+                    .await;
                 }
                 Err(borgclaw_core::channel::ChannelError::AuthFailed(message)) => {
                     let event = if message.contains("pairing required") {
@@ -2475,28 +3024,102 @@ async fn handle_ws_message(
                     } else {
                         error_event(&message)
                     };
-                    send_event(socket, event).await?;
+                    queue_client_event(state, client_id, event).await;
                 }
                 Err(err) => {
-                    send_event(socket, error_event(&err.to_string())).await?;
+                    queue_client_event(state, client_id, error_event(&err.to_string())).await;
                 }
             }
         }
         "ping" => {
-            send_event(socket, serde_json::json!({ "type": "pong" })).await?;
-            state.metrics.increment_messages_sent();
+            queue_client_event(state, client_id, serde_json::json!({ "type": "pong" })).await;
         }
         _ => {
-            send_event(socket, error_event("Unknown message type")).await?;
-            state.metrics.increment_messages_sent();
+            queue_client_event(state, client_id, error_event("Unknown message type")).await;
         }
     }
 
     Ok(())
 }
 
-async fn send_event(socket: &mut WebSocket, event: serde_json::Value) -> Result<(), axum::Error> {
-    socket.send(Message::Text(event.to_string())).await
+async fn queue_client_event(
+    state: &GatewayState,
+    client_id: &str,
+    event: serde_json::Value,
+) -> bool {
+    let mut connections = state.connections.write().await;
+    let Some(handle) = connections.get_mut(client_id) else {
+        return false;
+    };
+
+    if handle.outbound.send(event).is_err() {
+        connections.remove(client_id);
+        return false;
+    }
+
+    handle.info.messages_sent += 1;
+    state.metrics.increment_messages_sent();
+    true
+}
+
+async fn update_connection_auth(state: &GatewayState, client_id: &str, authenticated: bool) {
+    let mut connections = state.connections.write().await;
+    if let Some(handle) = connections.get_mut(client_id) {
+        handle.info.authenticated = authenticated;
+    }
+}
+
+async fn update_connection_session(state: &GatewayState, client_id: &str, session_id: &str) {
+    let mut connections = state.connections.write().await;
+    if let Some(handle) = connections.get_mut(client_id) {
+        handle.info.session_id = Some(session_id.to_string());
+    }
+}
+
+async fn increment_connection_received(state: &GatewayState, client_id: &str) {
+    let mut connections = state.connections.write().await;
+    if let Some(handle) = connections.get_mut(client_id) {
+        handle.info.messages_received += 1;
+    }
+}
+
+fn message_payload_kind(payload: &MessagePayload) -> &'static str {
+    match payload {
+        MessagePayload::Text(_) => "text",
+        MessagePayload::Markdown(_) => "markdown",
+        MessagePayload::Html(_) => "html",
+        MessagePayload::Media { mime_type, .. } if mime_type.starts_with("image/") => "image",
+        MessagePayload::Media { mime_type, .. } if mime_type.starts_with("video/") => "video",
+        MessagePayload::Media { .. } => "media",
+        MessagePayload::File { .. } => "file",
+    }
+}
+
+fn message_payload_json(payload: &MessagePayload) -> serde_json::Value {
+    match payload {
+        MessagePayload::Text(text) => serde_json::json!({
+            "kind": "text",
+            "text": text,
+        }),
+        MessagePayload::Markdown(text) => serde_json::json!({
+            "kind": "markdown",
+            "text": text,
+        }),
+        MessagePayload::Html(html) => serde_json::json!({
+            "kind": "html",
+            "html": html,
+        }),
+        MessagePayload::Media { url, mime_type } => serde_json::json!({
+            "kind": "media",
+            "url": url,
+            "mime_type": mime_type,
+        }),
+        MessagePayload::File { path, name } => serde_json::json!({
+            "kind": "file",
+            "path": path,
+            "name": name,
+        }),
+    }
 }
 
 fn default_config_path() -> PathBuf {
@@ -3581,6 +4204,8 @@ async fn api_chat_post(
             axum::Json(serde_json::json!({
                 "session_id": outcome.session_id.0,
                 "text": outcome.response.text,
+                "content_type": message_payload_kind(&outcome.outbound.content),
+                "content": message_payload_json(&outcome.outbound.content),
                 "tool_calls": outcome.response.tool_calls,
                 "metadata": outcome.response.metadata,
             })),
@@ -3614,7 +4239,8 @@ async fn api_tools() -> impl IntoResponse {
 
 async fn api_connections(State(state): State<GatewayState>) -> impl IntoResponse {
     let conns = state.connections.read().await;
-    let connections: Vec<&ConnectionInfo> = conns.values().collect();
+    let connections: Vec<ConnectionInfo> =
+        conns.values().map(|handle| handle.info.clone()).collect();
 
     axum::Json(serde_json::json!({
         "connections": connections,
@@ -4345,6 +4971,54 @@ mod tests {
         assert_eq!(error["message"], "Unknown message type");
 
         socket.close(None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn oauth_completion_notifies_matching_websocket_session() {
+        let mut config = AppConfig::default();
+        let websocket = config.channels.entry("websocket".to_string()).or_default();
+        websocket.enabled = true;
+
+        let metrics = Arc::new(GatewayMetrics::new());
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel();
+        let state = GatewayState {
+            config_path: Arc::new(PathBuf::from(".")),
+            config: Arc::new(config.clone()),
+            router: Arc::new(MessageRouter::from_config(&config)),
+            webhook: None,
+            metrics,
+            connections: Arc::new(RwLock::new(HashMap::from([(
+                "client-1".to_string(),
+                ConnectionHandle {
+                    info: ConnectionInfo {
+                        client_id: "client-1".to_string(),
+                        connected_at: chrono::Utc::now(),
+                        session_id: Some("session-1".to_string()),
+                        authenticated: true,
+                        messages_received: 0,
+                        messages_sent: 0,
+                    },
+                    outbound: outbound_tx,
+                },
+            )]))),
+            oauth_pending: OAuthPendingStore::new(),
+        };
+
+        let oauth_state = borgclaw_core::skills::OAuthState {
+            session_id: "session-1".to_string(),
+            user_id: "client-1".to_string(),
+            channel: "websocket".to_string(),
+            created_at: chrono::Utc::now(),
+            group_id: None,
+        };
+
+        notify_oauth_completion(&state, &oauth_state).await.unwrap();
+
+        let event = outbound_rx.recv().await.unwrap();
+        assert_eq!(event["type"], "oauth_complete");
+        assert_eq!(event["session_id"], "session-1");
+        assert_eq!(event["provider"], "google");
+        assert_eq!(event["success"], true);
     }
 
     #[tokio::test]
