@@ -256,6 +256,150 @@ info "  • MiniMax:            https://platform.minimax.io/"
 info "  • Z.ai:               https://z.ai/model-api"
 echo ""
 
+# Provider API endpoints for fetching models
+declare -A PROVIDER_API_BASES=(
+    ["anthropic"]="https://api.anthropic.com/v1"
+    ["openai"]="https://api.openai.com/v1"
+    ["google"]="https://generativelanguage.googleapis.com/v1beta"
+    ["kimi"]="https://api.moonshot.cn/v1"
+    ["minimax"]="https://api.minimax.io/v1"
+    ["z"]="https://api.z.ai/api/paas/v4"
+)
+
+# Fetch models from provider API
+fetch_provider_models() {
+    local provider="$1"
+    local api_key="$2"
+    local base_url="${PROVIDER_API_BASES[$provider]}"
+    local models=""
+    
+    case "$provider" in
+        anthropic)
+            # Anthropic doesn't have a models endpoint yet, use known models
+            models="claude-sonnet-4-20250514
+claude-opus-4-20250514
+claude-haiku-3.5"
+            ;;
+        openai)
+            models=$(curl -s -H "Authorization: Bearer $api_key" \
+                "${base_url}/models" 2>/dev/null | \
+                grep -o '"id": "[^"*]*"' | \
+                sed 's/"id": "//;s/"$//' | \
+                grep -E '^(gpt-|o1-|o3-)' | \
+                grep -v 'turbo\|instruct\|audio\|realtime\|vision' | \
+                sort)
+            ;;
+        google)
+            models=$(curl -s "${base_url}/models?key=${api_key}" 2>/dev/null | \
+                grep -o '"name": "models/[^"]*"' | \
+                sed 's/"name": "models\///;s/"$//' | \
+                grep -E 'gemini' | \
+                grep -v 'embedding\|vision' | \
+                sort)
+            ;;
+        kimi)
+            models=$(curl -s -H "Authorization: Bearer $api_key" \
+                "${base_url}/models" 2>/dev/null | \
+                grep -o '"id": "[^"]*"' | \
+                sed 's/"id": "//;s/"$//' | \
+                sort)
+            ;;
+        minimax)
+            models=$(curl -s -H "Authorization: Bearer $api_key" \
+                "${base_url}/models" 2>/dev/null | \
+                grep -o '"id": "[^"]*"' | \
+                sed 's/"id": "//;s/"$//' | \
+                sort)
+            ;;
+        z)
+            # Z.ai doesn't publish a models list endpoint, use known models
+            models="glm-4.7
+glm-4.6
+glm-4.5"
+            ;;
+    esac
+    
+    echo "$models"
+}
+
+# Select model from fetched list or fallback to default
+select_model() {
+    local provider="$1"
+    local api_key="$2"
+    
+    echo ""
+    info "Fetching available models from $provider..."
+    
+    local models
+    models=$(fetch_provider_models "$provider" "$api_key")
+    
+    if [ -z "$models" ] || [ "$(echo "$models" | wc -l)" -lt 1 ]; then
+        warn "Could not fetch models from $provider API."
+        warn "Using default model."
+        set_default_model
+        return
+    fi
+    
+    echo ""
+    log "Available models:"
+    local i=1
+    local model_array=()
+    while IFS= read -r model; do
+        [ -z "$model" ] && continue
+        model_array+=("$model")
+        local marker=""
+        # Mark recommended models
+        case "$provider" in
+            anthropic)
+                [[ "$model" == *"sonnet-4"* ]] && marker=" (recommended)"
+                ;;
+            openai)
+                [[ "$model" == *"gpt-4o"* ]] && [[ "$model" != *"mini"* ]] && marker=" (recommended)"
+                ;;
+            google)
+                [[ "$model" == *"pro"* ]] && [[ "$model" != *"vision"* ]] && marker=" (recommended)"
+                ;;
+            kimi)
+                [[ "$model" == *"k2.5"* ]] && marker=" (recommended)"
+                ;;
+            minimax)
+                [[ "$model" == *"M2"* ]] && marker=" (recommended)"
+                ;;
+        esac
+        echo "  $i) $model$marker"
+        ((i++))
+    done <<< "$models"
+    
+    echo ""
+    prompt "Select model (1-$((i-1)), or press Enter for recommended): "
+    read -r model_choice
+    
+    if [ -z "$model_choice" ]; then
+        # Use recommended default
+        set_default_model
+    elif [[ "$model_choice" =~ ^[0-9]+$ ]] && [ "$model_choice" -ge 1 ] && [ "$model_choice" -lt "$i" ]; then
+        MODEL="${model_array[$((model_choice-1))]}"
+    else
+        warn "Invalid selection. Using default model."
+        set_default_model
+    fi
+    
+    log "Selected model: $MODEL"
+}
+
+# Default model for each provider
+set_default_model() {
+    case "$PROVIDER" in
+        anthropic) MODEL="claude-sonnet-4-20250514" ;;
+        openai) MODEL="gpt-4o" ;;
+        google) MODEL="gemini-2.5-pro" ;;
+        kimi) MODEL="kimi-k2.5" ;;
+        minimax) MODEL="MiniMax-M2.7" ;;
+        z) MODEL="glm-4.7" ;;
+        *) MODEL="gpt-4o" ;;
+    esac
+}
+
 select_provider() {
     echo "Select your AI provider:"
     echo "  1) Anthropic Claude (recommended)"
@@ -271,12 +415,12 @@ select_provider() {
         read -r provider_choice
         
         case "$provider_choice" in
-            1) PROVIDER="anthropic"; API_KEY_NAME="ANTHROPIC_API_KEY"; MODEL="claude-sonnet-4-20250514"; break ;;
-            2) PROVIDER="openai"; API_KEY_NAME="OPENAI_API_KEY"; MODEL="gpt-4o"; break ;;
-            3) PROVIDER="google"; API_KEY_NAME="GOOGLE_API_KEY"; MODEL="gemini-2.5-pro"; break ;;
-            4) PROVIDER="kimi"; API_KEY_NAME="KIMI_API_KEY"; MODEL="kimi-k2.5"; break ;;
-            5) PROVIDER="minimax"; API_KEY_NAME="MINIMAX_API_KEY"; MODEL="MiniMax-M2.7"; break ;;
-            6) PROVIDER="z"; API_KEY_NAME="Z_API_KEY"; MODEL="glm-4.7"; break ;;
+            1) PROVIDER="anthropic"; API_KEY_NAME="ANTHROPIC_API_KEY"; break ;;
+            2) PROVIDER="openai"; API_KEY_NAME="OPENAI_API_KEY"; break ;;
+            3) PROVIDER="google"; API_KEY_NAME="GOOGLE_API_KEY"; break ;;
+            4) PROVIDER="kimi"; API_KEY_NAME="KIMI_API_KEY"; break ;;
+            5) PROVIDER="minimax"; API_KEY_NAME="MINIMAX_API_KEY"; break ;;
+            6) PROVIDER="z"; API_KEY_NAME="Z_API_KEY"; break ;;
             *) error "Invalid choice. Please enter 1-6." ;;
         esac
     done
@@ -292,19 +436,6 @@ if [ -f "$CONFIG_FILE" ]; then
     EXISTING_PROVIDER=$(grep -E '^provider\s*=' "$CONFIG_FILE" 2>/dev/null | head -1 | sed 's/.*=\s*"\([^"]*\)".*/\1/' || echo "")
     EXISTING_MODEL=$(grep -E '^model\s*=' "$CONFIG_FILE" 2>/dev/null | head -1 | sed 's/.*=\s*"\([^"]*\)".*/\1/' || echo "")
 fi
-
-# Default model for each provider
-set_default_model() {
-    case "$PROVIDER" in
-        anthropic) MODEL="claude-sonnet-4-20250514" ;;
-        openai) MODEL="gpt-4o" ;;
-        google) MODEL="gemini-2.5-pro" ;;
-        kimi) MODEL="kimi-k2.5" ;;
-        minimax) MODEL="MiniMax-M2.7" ;;
-        z) MODEL="glm-4.7" ;;
-        *) MODEL="gpt-4o" ;;
-    esac
-}
 
 if [ "$UPDATE_MODE" = true ] || [ -z "$EXISTING_PROVIDER" ]; then
     select_provider
@@ -432,12 +563,34 @@ if [ "${NEED_API_KEY:-false}" = true ]; then
 fi
 
 # ============================================================================
-# SECTION 3: WEBSOCKET GATEWAY CONFIGURATION
+# SECTION 3: MODEL SELECTION
 # ============================================================================
 
 echo ""
 section "═══════════════════════════════════════════════════════════════"
-section "SECTION 3: WebSocket Gateway Configuration"
+section "SECTION 3: Model Selection"
+section "═══════════════════════════════════════════════════════════════"
+echo ""
+
+# Retrieve API key from vault for model fetching
+API_KEY_FOR_MODELS=$("$BORGCLAW_BIN" secrets get "$API_KEY_NAME" 2>/dev/null || echo "")
+
+if [ -n "$API_KEY_FOR_MODELS" ]; then
+    select_model "$PROVIDER" "$API_KEY_FOR_MODELS"
+    unset API_KEY_FOR_MODELS
+else
+    warn "Could not retrieve API key for model fetching."
+    set_default_model
+    log "Using default model: $MODEL"
+fi
+
+# ============================================================================
+# SECTION 4: WEBSOCKET GATEWAY CONFIGURATION
+# ============================================================================
+
+echo ""
+section "═══════════════════════════════════════════════════════════════"
+section "SECTION 4: WebSocket Gateway Configuration"
 section "═══════════════════════════════════════════════════════════════"
 echo ""
 
@@ -469,13 +622,13 @@ else
 fi
 
 # ============================================================================
-# SECTION 4: OPTIONAL INTEGRATIONS (Skip in quick mode)
+# SECTION 5: OPTIONAL INTEGRATIONS (Skip in quick mode)
 # ============================================================================
 
 if [ "$QUICK_MODE" = false ]; then
     echo ""
     section "═══════════════════════════════════════════════════════════════"
-    section "SECTION 4: Optional Integrations"
+    section "SECTION 5: Optional Integrations"
     section "═══════════════════════════════════════════════════════════════"
     echo ""
     info "These integrations enhance BorgClaw's capabilities but require"
@@ -687,12 +840,12 @@ if [ "$QUICK_MODE" = false ]; then
 fi  # End of non-quick mode sections
 
 # ============================================================================
-# SECTION 5: GENERATE CONFIGURATION
+# SECTION 6: GENERATE CONFIGURATION
 # ============================================================================
 
 echo ""
 section "═══════════════════════════════════════════════════════════════"
-section "SECTION 5: Generating Configuration"
+section "SECTION 6: Generating Configuration"
 section "═══════════════════════════════════════════════════════════════"
 echo ""
 
@@ -763,6 +916,7 @@ echo "║  Your BorgClaw is now configured and ready to use!             ║"
 echo "║                                                                ║"
 echo "║  CONFIGURATION SUMMARY:                                        ║"
 echo "║    • AI Provider:    ${PROVIDER}"
+echo "║    • Model:          ${MODEL}"
 echo "║    • WebSocket Port: ${WS_PORT}"
 
 if [ "${ENABLE_GITHUB:-false}" = true ]; then

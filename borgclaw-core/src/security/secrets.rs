@@ -20,8 +20,7 @@ pub const SERVICE_TOKEN_FILE: &str = ".service_token";
 /// Key file version for format compatibility
 const KEY_FILE_VERSION: u8 = 1;
 
-/// Salt length for Argon2
-const SALT_LEN: usize = 16;
+// Note: Argon2's SaltString::generate uses its own default length
 /// Nonce length for ChaCha20-Poly1305
 const NONCE_LEN: usize = 12;
 /// Tag length for ChaCha20-Poly1305 authentication
@@ -53,9 +52,11 @@ pub struct SecretStore {
     secrets: Arc<RwLock<HashMap<String, String>>>,
     config: SecretStoreConfig,
     /// The decrypted encryption key (only present when unlocked)
-    encryption_key: Arc<RwLock<Option<[u8; 32]>>>,
+    /// Uses std::sync::RwLock because we need to write in the sync constructor
+    encryption_key: Arc<std::sync::RwLock<Option<[u8; 32]>>>,
     /// Current store state
-    state: Arc<RwLock<StoreState>>,
+    /// Uses std::sync::RwLock because we need to write in the sync constructor
+    state: Arc<std::sync::RwLock<StoreState>>,
 }
 
 /// Error type for password operations
@@ -114,15 +115,15 @@ impl SecretStore {
         let store = Self {
             secrets: Arc::new(RwLock::new(secrets)),
             config,
-            encryption_key: Arc::new(RwLock::new(None)),
-            state: Arc::new(RwLock::new(state)),
+            encryption_key: Arc::new(std::sync::RwLock::new(None)),
+            state: Arc::new(std::sync::RwLock::new(state)),
         };
 
         // If using legacy file-based key, load it
         if state == StoreState::Unprotected && store.config.encryption_enabled {
             if let Some(path) = &store.config.secrets_path {
                 if let Ok(key) = load_legacy_key(path) {
-                    *store.encryption_key.blocking_write() = Some(key);
+                    *store.encryption_key.write().unwrap() = Some(key);
                 }
             }
         }
@@ -132,7 +133,7 @@ impl SecretStore {
 
     /// Get current store state
     pub async fn state(&self) -> StoreState {
-        *self.state.read().await
+        *self.state.read().unwrap()
     }
 
     /// Check if store is password protected
@@ -164,7 +165,7 @@ impl SecretStore {
         if key_path.exists() {
             // Check if it's already password protected
             let contents = tokio::fs::read(&key_path).await?;
-            if contents.len() > 0 && contents[0] == KEY_FILE_VERSION {
+            if !contents.is_empty() && contents[0] == KEY_FILE_VERSION {
                 return Err(PasswordError::AlreadyInitialized);
             }
         }
@@ -227,8 +228,8 @@ impl SecretStore {
         }
 
         // Store the decrypted key and update state
-        *self.encryption_key.write().await = Some(key);
-        *self.state.write().await = StoreState::Unlocked;
+        *self.encryption_key.write().unwrap() = Some(key);
+        *self.state.write().unwrap() = StoreState::Unlocked;
 
         Ok(())
     }
@@ -257,8 +258,8 @@ impl SecretStore {
         if contents.is_empty() || contents[0] != KEY_FILE_VERSION {
             // Try legacy format
             if let Ok(key) = load_legacy_key(path) {
-                *self.encryption_key.write().await = Some(key);
-                *self.state.write().await = StoreState::Unprotected;
+                *self.encryption_key.write().unwrap() = Some(key);
+                *self.state.write().unwrap() = StoreState::Unprotected;
                 return Ok(());
             }
             return Err(PasswordError::FormatError(
@@ -317,8 +318,8 @@ impl SecretStore {
             .map_err(|_| PasswordError::FormatError("Invalid key length".to_string()))?;
 
         // Store decrypted key and unlock
-        *self.encryption_key.write().await = Some(key);
-        *self.state.write().await = StoreState::Unlocked;
+        *self.encryption_key.write().unwrap() = Some(key);
+        *self.state.write().unwrap() = StoreState::Unlocked;
 
         // Reload secrets with the new key
         let secrets = load_persisted_secrets_with_key(&self.config, key)?;
@@ -329,8 +330,8 @@ impl SecretStore {
 
     /// Lock the store (clear decrypted key from memory)
     pub async fn lock(&self) {
-        *self.encryption_key.write().await = None;
-        *self.state.write().await = StoreState::Locked;
+        *self.encryption_key.write().unwrap() = None;
+        *self.state.write().unwrap() = StoreState::Locked;
     }
 
     /// Change the store password
@@ -343,11 +344,11 @@ impl SecretStore {
         self.unlock(old_password).await?;
 
         // Get current encryption key (keep the same key, just re-encrypt with new password)
-        let key = self
-            .encryption_key
-            .read()
-            .await
-            .ok_or(PasswordError::StoreLocked)?;
+        // Scope the lock guard so it's dropped before await points
+        let key: [u8; 32] = {
+            let key_guard = self.encryption_key.read().map_err(|_| PasswordError::StoreLocked)?;
+            key_guard.ok_or(PasswordError::StoreLocked)?
+        };
 
         let path = self
             .config
@@ -410,7 +411,7 @@ impl SecretStore {
         }
 
         // Update state
-        *self.state.write().await = StoreState::Unlocked;
+        *self.state.write().unwrap() = StoreState::Unlocked;
 
         Ok(())
     }
@@ -418,7 +419,7 @@ impl SecretStore {
     /// Store a secret
     pub async fn store(&self, key: &str, value: &str) -> Result<(), super::SecurityError> {
         // Check if we need to be unlocked
-        let state = *self.state.read().await;
+        let state = *self.state.read().unwrap();
         if state == StoreState::Locked {
             return Err(super::SecurityError::SecretError(
                 "Store is locked - unlock first".to_string(),
@@ -434,7 +435,7 @@ impl SecretStore {
     /// Get a secret
     pub async fn get(&self, key: &str) -> Option<String> {
         // Check if locked
-        if *self.state.read().await == StoreState::Locked {
+        if *self.state.read().unwrap() == StoreState::Locked {
             return None;
         }
 
@@ -445,7 +446,7 @@ impl SecretStore {
     /// Delete a secret
     pub async fn delete(&self, key: &str) -> Option<String> {
         // Check if locked
-        if *self.state.read().await == StoreState::Locked {
+        if *self.state.read().unwrap() == StoreState::Locked {
             return None;
         }
 
@@ -458,7 +459,7 @@ impl SecretStore {
     /// List secret keys (not values)
     pub async fn keys(&self) -> Vec<String> {
         // Check if locked
-        if *self.state.read().await == StoreState::Locked {
+        if *self.state.read().unwrap() == StoreState::Locked {
             return Vec::new();
         }
 
@@ -469,7 +470,7 @@ impl SecretStore {
     /// Check if secret exists
     pub async fn exists(&self, key: &str) -> bool {
         // Check if locked
-        if *self.state.read().await == StoreState::Locked {
+        if *self.state.read().unwrap() == StoreState::Locked {
             return false;
         }
 
@@ -480,7 +481,7 @@ impl SecretStore {
     /// Inject secrets into environment variables (for tool execution)
     pub async fn inject_env(&self) -> HashMap<String, String> {
         // Check if locked
-        if *self.state.read().await == StoreState::Locked {
+        if *self.state.read().unwrap() == StoreState::Locked {
             return HashMap::new();
         }
 
@@ -494,7 +495,7 @@ impl SecretStore {
     /// Verify a service token against the stored hash
     pub async fn verify_service_token(&self, token: &str) -> bool {
         // Check if locked
-        if *self.state.read().await == StoreState::Locked {
+        if *self.state.read().unwrap() == StoreState::Locked {
             return false;
         }
 
@@ -511,7 +512,7 @@ impl SecretStore {
     /// Generate and store a new service token
     pub async fn rotate_service_token(&self) -> Result<String, super::SecurityError> {
         // Check if locked
-        if *self.state.read().await == StoreState::Locked {
+        if *self.state.read().unwrap() == StoreState::Locked {
             return Err(super::SecurityError::SecretError(
                 "Store is locked - unlock first".to_string(),
             ));
@@ -608,8 +609,28 @@ fn load_persisted_secrets(
     let plaintext = if config.encryption_enabled {
         // Try to get the key - for legacy mode
         match load_legacy_key(path) {
-            Ok(key) => decrypt_bytes_with_key(&bytes, &key)?,
-            Err(_) => return Ok(HashMap::new()), // Can't decrypt, return empty
+            Ok(key) => {
+                // Try decryption. If it fails, check if data is plaintext JSON
+                match decrypt_bytes_with_key(&bytes, &key) {
+                    Ok(pt) => pt,
+                    Err(_) => {
+                        // Check if it's plaintext JSON (starts with '{' for JSON object)
+                        if bytes.first() == Some(&b'{') {
+                            bytes
+                        } else {
+                            return Ok(HashMap::new()); // Can't decrypt, return empty
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                // No key available - check if it's plaintext JSON
+                if bytes.first() == Some(&b'{') {
+                    bytes
+                } else {
+                    return Ok(HashMap::new()); // Can't decrypt, return empty
+                }
+            }
         }
     } else {
         bytes
@@ -634,7 +655,21 @@ fn load_persisted_secrets_with_key(
         return Ok(HashMap::new());
     }
 
-    let plaintext = decrypt_bytes_with_key(&bytes, &key)?;
+    // Try to decrypt first. If that fails, the data might be plaintext JSON
+    // (which happens when secrets are stored before encryption is fully set up)
+    let plaintext = match decrypt_bytes_with_key(&bytes, &key) {
+        Ok(pt) => pt,
+        Err(_) => {
+            // Check if it's plaintext JSON (starts with '{' for JSON object)
+            if bytes.first() == Some(&b'{') {
+                bytes
+            } else {
+                return Err(super::SecurityError::SecretError(
+                    "Failed to decrypt secrets".to_string()
+                ));
+            }
+        }
+    };
 
     serde_json::from_slice(&plaintext)
         .map_err(|e| super::SecurityError::SecretError(e.to_string()))
