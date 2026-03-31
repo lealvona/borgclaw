@@ -13,7 +13,7 @@ BorgClaw is a personal AI Agent Framework written in Rust that combines the best
 - **Async Runtime**: Tokio (`full` feature)
 - **Storage**: SQLite + FTS5 (via `sqlx`)
 - **Security**: WASM sandbox (`wasmtime`), encrypted secrets, command blocklist
-- **Version**: 0.16.0 (current release line)
+- **Version**: 0.17.0 (current release line)
 
 ### Workspace Structure
 
