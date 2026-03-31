@@ -126,6 +126,11 @@ enum Commands {
         #[command(subcommand)]
         action: ProviderAction,
     },
+    /// Manage agent identity/soul document
+    Identity {
+        #[command(subcommand)]
+        action: IdentityAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -185,6 +190,24 @@ enum ProviderAction {
     Select { id: String },
     /// Delete a provider profile
     Delete { id: String },
+}
+
+#[derive(Subcommand)]
+enum IdentityAction {
+    /// Show current identity configuration
+    Show,
+    /// Edit the identity document (opens in $EDITOR)
+    Edit,
+    /// Set identity file path
+    SetPath { path: String },
+    /// Set identity format (auto, markdown, aieos)
+    SetFormat { format: String },
+    /// Create a new identity document with default content
+    Init {
+        /// Path for the new identity file
+        #[arg(default_value = ".borgclaw/soul.md")]
+        path: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -460,6 +483,7 @@ async fn main() {
         Commands::Secrets { action } => secrets(config, action).await,
         Commands::Runtime => runtime(config).await,
         Commands::Providers { action } => providers_action(&config_path, &mut config, action).await,
+        Commands::Identity { action } => identity_action(&config_path, &mut config, action).await,
     }
 }
 
@@ -818,9 +842,56 @@ fn set_config_key(config: &mut AppConfig, key: &str, value: &str) -> bool {
                 return false;
             }
         }
+        "agent.soul_path" => config.agent.soul_path = Some(PathBuf::from(value)),
+        "agent.identity_format" => {
+            config.agent.identity_format = match value.to_lowercase().as_str() {
+                "markdown" => borgclaw_core::config::IdentityFormat::Markdown,
+                "aieos" => borgclaw_core::config::IdentityFormat::Aieos,
+                "auto" => borgclaw_core::config::IdentityFormat::Auto,
+                _ => return false,
+            };
+        }
+        "agent.workspace" => config.agent.workspace = PathBuf::from(value),
+        "skills.auto_load" => {
+            if let Ok(v) = value.parse::<bool>() {
+                config.skills.auto_load = v;
+            } else {
+                return false;
+            }
+        }
+        "skills.skills_path" => config.skills.skills_path = PathBuf::from(value),
         "security.wasm_sandbox" => {
             if let Ok(v) = value.parse::<bool>() {
                 config.security.wasm_sandbox = v;
+            } else {
+                return false;
+            }
+        }
+        "security.command_blocklist" => {
+            if let Ok(v) = value.parse::<bool>() {
+                config.security.command_blocklist = v;
+            } else {
+                return false;
+            }
+        }
+        "security.approval_mode" => {
+            config.security.approval_mode = match value.to_lowercase().as_str() {
+                "readonly" => borgclaw_core::config::ApprovalMode::ReadOnly,
+                "supervised" => borgclaw_core::config::ApprovalMode::Supervised,
+                "autonomous" => borgclaw_core::config::ApprovalMode::Autonomous,
+                _ => return false,
+            };
+        }
+        "memory.hybrid_search" => {
+            if let Ok(v) = value.parse::<bool>() {
+                config.memory.hybrid_search = v;
+            } else {
+                return false;
+            }
+        }
+        "memory.session_max_entries" => {
+            if let Ok(v) = value.parse::<usize>() {
+                config.memory.session_max_entries = v;
             } else {
                 return false;
             }
@@ -951,6 +1022,115 @@ async fn providers_action(path: &PathBuf, config: &mut AppConfig, action: Provid
             Ok(false) => println!("Unknown provider profile: {}", id),
             Err(err) => println!("Failed to delete provider profile: {}", err),
         },
+    }
+}
+
+async fn identity_action(path: &PathBuf, config: &mut AppConfig, action: IdentityAction) {
+    match action {
+        IdentityAction::Show => {
+            println!("Identity Configuration:");
+            println!("  soul_path: {}", 
+                config.agent.soul_path.as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "(not set)".to_string()));
+            println!("  identity_format: {:?}", config.agent.identity_format);
+            
+            if let Some(soul_path) = &config.agent.soul_path {
+                if soul_path.exists() {
+                    match std::fs::read_to_string(soul_path) {
+                        Ok(content) => {
+                            println!("\nIdentity Document ({}):", soul_path.display());
+                            println!("{}", "-".repeat(60));
+                            println!("{}", content);
+                            println!("{}", "-".repeat(60));
+                        }
+                        Err(e) => println!("\nError reading identity file: {}", e),
+                    }
+                } else {
+                    println!("\nIdentity file does not exist yet. Run 'borgclaw identity init' to create it.");
+                }
+            }
+        }
+        IdentityAction::Edit => {
+            let soul_path = config.agent.soul_path.clone()
+                .unwrap_or_else(|| PathBuf::from(".borgclaw/soul.md"));
+            
+            // Create parent directory if needed
+            if let Some(parent) = soul_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            
+            // Create file with default content if it doesn't exist
+            if !soul_path.exists() {
+                let default_content = include_str!("../resources/default_soul.md");
+                if let Err(e) = std::fs::write(&soul_path, default_content) {
+                    println!("Failed to create identity file: {}", e);
+                    return;
+                }
+            }
+            
+            // Open in editor
+            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "nano".to_string());
+            match std::process::Command::new(&editor).arg(&soul_path).status() {
+                Ok(status) if status.success() => {
+                    println!("Identity document updated: {}", soul_path.display());
+                }
+                Ok(_) => println!("Editor exited with error"),
+                Err(e) => println!("Failed to open editor '{}': {}", editor, e),
+            }
+        }
+        IdentityAction::SetPath { path: soul_path } => {
+            config.agent.soul_path = Some(PathBuf::from(&soul_path));
+            if let Err(e) = save_config(config, path) {
+                println!("Failed to save config: {}", e);
+                return;
+            }
+            println!("Set soul_path to: {}", soul_path);
+        }
+        IdentityAction::SetFormat { format } => {
+            let format_enum = match format.to_lowercase().as_str() {
+                "markdown" => borgclaw_core::config::IdentityFormat::Markdown,
+                "aieos" => borgclaw_core::config::IdentityFormat::Aieos,
+                "auto" => borgclaw_core::config::IdentityFormat::Auto,
+                _ => {
+                    println!("Invalid format: {}. Use 'markdown', 'aieos', or 'auto'.", format);
+                    return;
+                }
+            };
+            config.agent.identity_format = format_enum;
+            if let Err(e) = save_config(config, path) {
+                println!("Failed to save config: {}", e);
+                return;
+            }
+            println!("Set identity_format to: {:?}", format_enum);
+        }
+        IdentityAction::Init { path: soul_path } => {
+            let path = PathBuf::from(&soul_path);
+            if let Some(parent) = path.parent() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    println!("Failed to create directory: {}", e);
+                    return;
+                }
+            }
+            
+            if path.exists() {
+                println!("Identity file already exists: {}", path.display());
+                return;
+            }
+            
+            let default_content = include_str!("../resources/default_soul.md");
+            match std::fs::write(&path, default_content) {
+                Ok(_) => {
+                    println!("Created identity document: {}", path.display());
+                    // Update config to point to new file
+                    config.agent.soul_path = Some(path.clone());
+                    if let Err(e) = save_config(config, path) {
+                        println!("Created file but failed to update config: {}", e);
+                    }
+                }
+                Err(e) => println!("Failed to create identity file: {}", e),
+            }
+        }
     }
 }
 
