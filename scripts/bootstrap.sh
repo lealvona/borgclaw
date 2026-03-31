@@ -119,6 +119,46 @@ info "  This builds both binaries in release mode so they don't need"
 info "  rebuilding during normal operation. This may take a few minutes."
 echo ""
 
+# Check if source files are newer than binaries (force rebuild if so)
+BORGCLAW_BIN="$CARGO_TARGET_DIR/release/borgclaw"
+GATEWAY_BIN="$CARGO_TARGET_DIR/release/borgclaw-gateway"
+
+source_is_newer() {
+    local binary="$1"
+    if [ ! -f "$binary" ]; then
+        return 0  # Binary doesn't exist, source is effectively newer
+    fi
+    
+    # Find any Rust source files newer than the binary
+    local newer_files
+    newer_files=$(find "$ROOT_DIR/borgclaw-core/src" "$ROOT_DIR/borgclaw-cli/src" "$ROOT_DIR/borgclaw-gateway/src" \
+        -name "*.rs" -newer "$binary" 2>/dev/null | head -1)
+    
+    if [ -n "$newer_files" ]; then
+        return 0  # Source is newer
+    fi
+    
+    # Also check Cargo.toml files
+    newer_files=$(find "$ROOT_DIR" -maxdepth 2 -name "Cargo.toml" -newer "$binary" 2>/dev/null | head -1)
+    
+    if [ -n "$newer_files" ]; then
+        return 0  # Cargo.toml is newer
+    fi
+    
+    return 1  # Source is not newer
+}
+
+# Force rebuild if source is newer than binaries
+if [ -f "$BORGCLAW_BIN" ] && source_is_newer "$BORGCLAW_BIN"; then
+    warn "Source files are newer than existing binary"
+    log "Forcing rebuild to ensure binaries are up to date..."
+    cargo clean --release 2>/dev/null || true
+elif [ -f "$GATEWAY_BIN" ] && source_is_newer "$GATEWAY_BIN"; then
+    warn "Source files are newer than existing binary"
+    log "Forcing rebuild to ensure binaries are up to date..."
+    cargo clean --release 2>/dev/null || true
+fi
+
 # Build all binaries in release mode
 # This ensures both borgclaw and borgclaw-gateway are built
 if cargo build --release --bins 2>&1 | tee /tmp/bootstrap-build.log; then
@@ -128,10 +168,7 @@ else
     exit 1
 fi
 
-# Verify binaries exist
-BORGCLAW_BIN="$CARGO_TARGET_DIR/release/borgclaw"
-GATEWAY_BIN="$CARGO_TARGET_DIR/release/borgclaw-gateway"
-
+# Verify binaries exist (variables defined earlier)
 if [ ! -f "$BORGCLAW_BIN" ]; then
     error "✗ borgclaw binary not found at expected location"
     error "  Expected: $BORGCLAW_BIN"
