@@ -96,6 +96,27 @@ else
     echo -e "\033[0;33m○\033[0m Secrets encryption key: not initialized (will be created on first use)"
 fi
 
+# Workspace and identity
+echo ""
+echo "=== Workspace Infrastructure ==="
+if [ -d ".borgclaw/workspace" ]; then
+    echo -e "\033[0;32m✓\033[0m Workspace directory: .borgclaw/workspace"
+else
+    echo -e "\033[0;33m○\033[0m Workspace directory: not created (run ./scripts/bootstrap.sh)"
+fi
+
+if [ -d ".borgclaw/skills" ]; then
+    echo -e "\033[0;32m✓\033[0m Skills directory: .borgclaw/skills"
+else
+    echo -e "\033[0;33m○\033[0m Skills directory: not created (run ./scripts/bootstrap.sh)"
+fi
+
+if [ -f ".borgclaw/soul.md" ]; then
+    echo -e "\033[0;32m✓\033[0m Identity document: .borgclaw/soul.md"
+else
+    echo -e "\033[0;33m○\033[0m Identity document: not created (run ./scripts/bootstrap.sh)"
+fi
+
 echo ""
 echo "=== Build Status ==="
 borgclaw_print_build_env

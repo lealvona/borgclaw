@@ -238,11 +238,93 @@ if [ ! -f ".gitignore" ] || ! grep -q "^\.local" .gitignore 2>/dev/null; then
 fi
 
 # ============================================================================
-# PHASE 4: CREATE GLOBAL ENCRYPTION KEYS
+# PHASE 4: CREATE WORKSPACE INFRASTRUCTURE
 # ============================================================================
 
 echo ""
-log "Phase 4: Initializing global encryption keys..."
+log "Phase 4: Creating workspace infrastructure..."
+
+# Default workspace paths (matches AppConfig defaults)
+WORKSPACE_DIR=".borgclaw/workspace"
+SKILLS_DIR=".borgclaw/skills"
+IDENTITY_FILE=".borgclaw/soul.md"
+
+# Create workspace directories
+mkdir -p "$WORKSPACE_DIR"
+mkdir -p "$WORKSPACE_DIR/skills"
+mkdir -p "$SKILLS_DIR"
+
+log "✓ Workspace directory: $WORKSPACE_DIR"
+log "✓ Workspace skills: $WORKSPACE_DIR/skills"
+log "✓ Skills directory: $SKILLS_DIR"
+
+# Create default identity/soul.md if it doesn't exist
+if [ ! -f "$IDENTITY_FILE" ]; then
+    log "  Creating default identity document..."
+    cat > "$IDENTITY_FILE" << 'EOF'
+# BorgClaw Agent Identity
+
+You are BorgClaw, a helpful AI assistant focused on software engineering tasks.
+You are running in a personal AI agent framework that emphasizes:
+
+- **Security-first**: All operations go through approval gates and security scanning
+- **Workspace-aware**: You operate within a defined workspace directory
+- **Tool-enabled**: You have access to file operations, command execution, and integrations
+- **Memory-backed**: Conversations are stored for context across sessions
+
+## Core Directives
+
+1. Be concise and actionable in responses
+2. Prefer reading files before making changes
+3. Use tools rather than describing what you would do
+4. When uncertain, ask clarifying questions
+5. Follow the user's git workflow and coding conventions
+
+## Communication Style
+
+- Use clear, professional language
+- Format code and terminal output appropriately
+- Provide context for recommendations
+- Surface security or safety concerns proactively
+
+## Safety Rules
+
+- Never execute destructive operations without explicit confirmation
+- Respect workspace boundaries for file operations
+- Flag potentially sensitive data exposure
+- Prefer read-only inspection when possible
+
+---
+*This identity document can be edited via: borgclaw config set agent.soul_path <path>*
+*Or through the web UI: Press Ctrl+, in the gateway dashboard*
+EOF
+    log "✓ Default identity created: $IDENTITY_FILE"
+else
+    log "✓ Identity document already exists: $IDENTITY_FILE"
+fi
+
+# Copy bundled skills to workspace if they exist
+if [ -d "skills" ]; then
+    log "  Copying bundled skills to workspace..."
+    for skill_file in skills/*.md; do
+        if [ -f "$skill_file" ]; then
+            skill_name=$(basename "$skill_file" .md)
+            target_dir="$SKILLS_DIR/$skill_name"
+            if [ ! -d "$target_dir" ]; then
+                mkdir -p "$target_dir"
+                cp "$skill_file" "$target_dir/SKILL.md"
+                log "    ✓ Installed skill: $skill_name"
+            fi
+        fi
+    done
+fi
+
+# ============================================================================
+# PHASE 5: CREATE GLOBAL ENCRYPTION KEYS
+# ============================================================================
+
+echo ""
+log "Phase 5: Initializing global encryption keys..."
 
 BORGCLAW_WORKSPACE="${HOME}/.borgclaw"
 SECRETS_FILE="${BORGCLAW_WORKSPACE}/secrets.enc"
@@ -253,10 +335,20 @@ mkdir -p "$BORGCLAW_WORKSPACE"
 if [ -f "$KEY_FILE" ]; then
     log "✓ Encryption key already exists: $KEY_FILE"
 else
-    # Initialize secret store by storing a test value (creates key automatically)
-    log "  Generating encryption key..."
-    if echo "bootstrap_init" | "$BORGCLAW_BIN" secrets set "_bootstrap_test" 2>/dev/null; then
-        "$BORGCLAW_BIN" secrets delete "_bootstrap_test" 2>/dev/null || true
+    log "  Generating 256-bit encryption key..."
+    
+    # Generate a proper 32-byte (256-bit) random key using OpenSSL or /dev/urandom
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -out "$KEY_FILE" 32
+    else
+        # Fallback to /dev/urandom (32 bytes = 256 bits)
+        head -c 32 /dev/urandom > "$KEY_FILE"
+    fi
+    
+    # Verify key was created with correct size
+    key_size=$(stat -c%s "$KEY_FILE" 2>/dev/null || stat -f%z "$KEY_FILE" 2>/dev/null || echo "0")
+    if [ -f "$KEY_FILE" ] && [ "$key_size" = "32" ]; then
+        chmod 600 "$KEY_FILE"
         log "✓ Encryption key generated: $KEY_FILE"
         
         warn ""
@@ -277,18 +369,18 @@ else
         warn "╚══════════════════════════════════════════════════════════════╝"
         warn ""
     else
-        error "✗ Failed to initialize encryption key"
-        error "  This may indicate a problem with the BorgClaw binary."
+        error "✗ Failed to generate encryption key"
+        error "  Please ensure OpenSSL is installed or /dev/urandom is available."
         exit 1
     fi
 fi
 
 # ============================================================================
-# PHASE 5: CREATE RUNTIME CONFIGURATION
+# PHASE 7: CREATE RUNTIME CONFIGURATION
 # ============================================================================
 
 echo ""
-log "Phase 5: Setting up runtime configuration..."
+log "Phase 7: Setting up runtime configuration..."
 
 CONFIG_DIR="${HOME}/.config/borgclaw"
 mkdir -p "$CONFIG_DIR"
@@ -296,11 +388,11 @@ mkdir -p "$CONFIG_DIR"
 log "✓ Config directory: $CONFIG_DIR"
 
 # ============================================================================
-# PHASE 6: CHECK OPTIONAL COMPONENTS
+# PHASE 8: CHECK OPTIONAL COMPONENTS
 # ============================================================================
 
 echo ""
-log "Phase 6: Checking optional components..."
+log "Phase 8: Checking optional components..."
 
 # Check for Node.js (needed for Playwright)
 if check_command node; then
@@ -339,11 +431,11 @@ else
 fi
 
 # ============================================================================
-# PHASE 7: MIGRATE LEGACY ENVIRONMENT
+# PHASE 9: MIGRATE LEGACY ENVIRONMENT
 # ============================================================================
 
 echo ""
-log "Phase 7: Checking for legacy configuration..."
+log "Phase 9: Checking for legacy configuration..."
 
 # Check if .env exists with secrets that should be migrated
 if [ -f ".env" ]; then
