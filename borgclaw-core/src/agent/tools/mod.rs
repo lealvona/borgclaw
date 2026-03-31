@@ -206,7 +206,7 @@ fn canonical_or_current(path: &Path) -> PathBuf {
 
 pub fn parse_tool_command(input: &str, tools: &[Tool]) -> Option<ToolCall> {
     let trimmed = input.trim();
-    
+
     // Check for MiniMax native [TOOL_CALL] format
     if let Some(start) = trimmed.find("[TOOL_CALL]") {
         let start_idx = start + "[TOOL_CALL]".len();
@@ -217,7 +217,7 @@ pub fn parse_tool_command(input: &str, tools: &[Tool]) -> Option<ToolCall> {
             }
         }
     }
-    
+
     // Check for [/!tool_invocation] format
     if trimmed.contains("[/!tool_invocation]") {
         if let Some(end) = trimmed.find("[/!tool_invocation]") {
@@ -227,14 +227,14 @@ pub fn parse_tool_command(input: &str, tools: &[Tool]) -> Option<ToolCall> {
             }
         }
     }
-    
+
     // Check for tool calls in markdown code blocks
     if let Some(code_block) = extract_code_block_tool_call(trimmed) {
         if let Some(tool_call) = parse_tool_command(&code_block, tools) {
             return Some(tool_call);
         }
     }
-    
+
     // Check for XML-wrapped tool calls (e.g., <minimax:tool_call>...</minimax:tool_call>)
     let content = if let Some(start) = trimmed.find("<tool_call>") {
         let start_idx = start + "<tool_call>".len();
@@ -258,10 +258,10 @@ pub fn parse_tool_command(input: &str, tools: &[Tool]) -> Option<ToolCall> {
     } else {
         trimmed
     };
-    
+
     // Strip leading dash and whitespace (common in XML-wrapped format)
     let content = content.trim().trim_start_matches('-').trim();
-    
+
     // Handle space after slash by replacing "/ " with "/" in the content
     let content_normalized = if content.contains("/ ") {
         content.replace("/ ", "/")
@@ -269,14 +269,14 @@ pub fn parse_tool_command(input: &str, tools: &[Tool]) -> Option<ToolCall> {
         content.to_string()
     };
     let content = content_normalized.as_str();
-    
+
     // Normalize path-like prefixes (e.g., /../list_directory -> /list_directory)
     let content = if content.starts_with("/../") {
         &content[3..]
     } else {
         content
     };
-    
+
     // Try alternate format: /{"tool": "name", "params": {...}}
     if content.starts_with("/{") {
         let json_str = &content[1..]; // Remove leading /
@@ -300,7 +300,7 @@ pub fn parse_tool_command(input: &str, tools: &[Tool]) -> Option<ToolCall> {
             }
         }
     }
-    
+
     // Content should now start with the tool command (think blocks stripped by caller)
     if !content.starts_with('/') {
         return None;
@@ -331,23 +331,23 @@ fn parse_minimax_tool_format(content: &str, tools: &[Tool]) -> Option<ToolCall> 
     let tool_pattern = "{tool => ";
     let tool_start = content.find(tool_pattern)?;
     let tool_start = tool_start + tool_pattern.len();
-    
+
     // Find the tool name (quoted string)
     let tool_name_start = content[tool_start..].find('"')?;
     let tool_name_start = tool_start + tool_name_start + 1;
     let tool_name_end = content[tool_name_start..].find('"')?;
     let tool_name = &content[tool_name_start..tool_name_start + tool_name_end];
-    
+
     // Verify tool exists
     if !tools.iter().any(|t| t.name == tool_name) {
         return None;
     }
-    
+
     // Extract args: args => { ... }
     let args_pattern = "args => {";
     let args_start = content.find(args_pattern)?;
     let args_start = args_start + args_pattern.len();
-    
+
     // Find the closing brace for args
     let mut brace_count = 1;
     let mut args_end = args_start;
@@ -364,14 +364,14 @@ fn parse_minimax_tool_format(content: &str, tools: &[Tool]) -> Option<ToolCall> 
             _ => {}
         }
     }
-    
+
     let args_content = &content[args_start..args_end];
-    
+
     // Parse arguments - MiniMax format supports both:
     //   key => value       (arrow syntax)
     //   --key "value"      (flag syntax)
     let arguments = parse_minimax_args(args_content);
-    
+
     Some(ToolCall::new(tool_name, arguments))
 }
 
@@ -379,49 +379,53 @@ fn parse_minimax_tool_format(content: &str, tools: &[Tool]) -> Option<ToolCall> 
 fn parse_minimax_args(content: &str) -> HashMap<String, serde_json::Value> {
     let mut arguments = HashMap::new();
     let trimmed = content.trim();
-    
+
     if trimmed.is_empty() {
         return arguments;
     }
-    
+
     // First try the --key "value" format (most common from MiniMax)
     if trimmed.contains("--") {
         parse_minimax_flag_format(trimmed, &mut arguments);
     }
-    
+
     // Also try key => value format
     parse_minimax_arrow_format(trimmed, &mut arguments);
-    
+
     arguments
 }
 
 /// Parse --key "value" format
 fn parse_minimax_flag_format(content: &str, arguments: &mut HashMap<String, serde_json::Value>) {
     let mut chars = content.chars().peekable();
-    
+
     while chars.peek().is_some() {
         // Skip whitespace and newlines
         while chars.peek().map(|c| c.is_whitespace()).unwrap_or(false) {
             chars.next();
         }
-        
+
         // Check for -- prefix
         if chars.peek() == Some(&'-') {
             chars.next();
             if chars.peek() == Some(&'-') {
                 chars.next();
-                
+
                 // Read the key
                 let mut key = String::new();
-                while chars.peek().map(|c| !c.is_whitespace() && *c != '=').unwrap_or(false) {
+                while chars
+                    .peek()
+                    .map(|c| !c.is_whitespace() && *c != '=')
+                    .unwrap_or(false)
+                {
                     key.push(chars.next().unwrap());
                 }
-                
+
                 // Skip whitespace
                 while chars.peek().map(|c| c.is_whitespace()).unwrap_or(false) {
                     chars.next();
                 }
-                
+
                 // Read value (quoted or unquoted)
                 let mut value = String::new();
                 if chars.peek() == Some(&'"') {
@@ -432,14 +436,18 @@ fn parse_minimax_flag_format(content: &str, arguments: &mut HashMap<String, serd
                     chars.next(); // consume closing quote if present
                 } else {
                     // Unquoted value - read until whitespace or end
-                    while chars.peek().map(|c| !c.is_whitespace() && *c != '}').unwrap_or(false) {
+                    while chars
+                        .peek()
+                        .map(|c| !c.is_whitespace() && *c != '}')
+                        .unwrap_or(false)
+                    {
                         value.push(chars.next().unwrap());
                     }
                 }
-                
+
                 if !key.is_empty() {
                     let json_value = serde_json::from_str::<serde_json::Value>(&value)
-                        .unwrap_or_else(|_| serde_json::Value::String(value));
+                        .unwrap_or(serde_json::Value::String(value));
                     arguments.insert(key, json_value);
                 }
             }
@@ -456,14 +464,14 @@ fn parse_minimax_arrow_format(content: &str, arguments: &mut HashMap<String, ser
         if line.is_empty() || line == "--" {
             continue;
         }
-        
+
         if let Some(arrow_pos) = line.find("=>") {
             let key = line[..arrow_pos].trim().trim_start_matches('-').to_string();
             let value_str = line[arrow_pos + 2..].trim().trim_matches('"');
-            
+
             let value = serde_json::from_str::<serde_json::Value>(value_str)
                 .unwrap_or_else(|_| serde_json::Value::String(value_str.to_string()));
-            
+
             arguments.insert(key, value);
         }
     }
@@ -477,18 +485,20 @@ fn extract_code_block_tool_call(input: &str) -> Option<String> {
     while let Some(block_start) = input[start..].find("```") {
         let block_start = start + block_start + "```".len();
         // Skip language identifier if present
-        let content_start = input[block_start..].find('\n').map(|i| block_start + i + 1)?;
-        
+        let content_start = input[block_start..]
+            .find('\n')
+            .map(|i| block_start + i + 1)?;
+
         if let Some(block_end) = input[content_start..].find("```") {
             let block_end = content_start + block_end;
             let content = &input[content_start..block_end];
-            
+
             // Check if content looks like a tool call
             let trimmed = content.trim();
             if trimmed.starts_with('/') || trimmed.starts_with("/{") {
                 return Some(trimmed.to_string());
             }
-            
+
             start = block_end + "```".len();
         } else {
             break;
@@ -504,41 +514,41 @@ fn parse_xml_invoke_format(xml_content: &str, tools: &[Tool]) -> Option<ToolCall
     let name_start = invoke_start + "<invoke name=\"".len();
     let name_end = xml_content[name_start..].find("\"")?;
     let tool_name = &xml_content[name_start..name_start + name_end];
-    
+
     // Verify tool exists
     if !tools.iter().any(|tool| tool.name == tool_name) {
         return None;
     }
-    
+
     // Find the closing </invoke>
     let invoke_end = xml_content.find("</invoke>")?;
     let inner = &xml_content[name_start + name_end..invoke_end];
-    
+
     // Parse parameters (if any)
     let mut arguments = HashMap::new();
     let mut search_start = 0;
-    
+
     while let Some(param_start) = inner[search_start..].find("<parameter name=\"") {
         let param_name_start = search_start + param_start + "<parameter name=\"".len();
         let param_name_end = inner[param_name_start..].find("\"")?;
         let param_name = &inner[param_name_start..param_name_start + param_name_end];
-        
+
         // Find the closing > of the opening tag
         let value_start = param_name_start + param_name_end + 1;
         let value_start = inner[value_start..].find('>')? + value_start + 1;
-        
+
         // Find the closing </parameter>
         let value_end = inner[value_start..].find("</parameter>")?;
         let param_value = &inner[value_start..value_start + value_end];
-        
+
         arguments.insert(
             param_name.to_string(),
             serde_json::Value::String(param_value.to_string()),
         );
-        
+
         search_start = value_start + value_end + "</parameter>".len();
     }
-    
+
     Some(ToolCall::new(tool_name, arguments))
 }
 
@@ -1164,7 +1174,10 @@ mod tests {
         assert_eq!(call.name, "google_send_email");
         assert_eq!(call.arguments["to"], "harryzahn1@gmail.com");
         assert_eq!(call.arguments["subject"], "test 123");
-        assert_eq!(call.arguments["body"], "if you see this, I have done the impossible.");
+        assert_eq!(
+            call.arguments["body"],
+            "if you see this, I have done the impossible."
+        );
     }
 
     #[test]

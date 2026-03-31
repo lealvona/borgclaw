@@ -459,7 +459,11 @@ You are autonomous, helpful, and capable of complex multi-step tasks.",
                     "Tool '{}' executed. Result: {}",
                     tool_call.name, tool_result.output
                 );
-                tracing::info!("Tool result: success={}, output={}", tool_result.success, tool_result.output);
+                tracing::info!(
+                    "Tool result: success={}, output={}",
+                    tool_result.success,
+                    tool_result.output
+                );
                 let session =
                     self.ensure_session(&ctx.session_id, ctx.metadata.get("group_id").cloned());
                 session.add_message(Message::system(result_message));
@@ -658,7 +662,7 @@ fn strip_think_blocks(text: &str) -> String {
     while let Some(start) = cursor.find("<think>") {
         // Add content before the think block
         result.push_str(&cursor[..start]);
-        
+
         // Find the end of the think block
         let after_start = &cursor[start + "<think>".len()..];
         if let Some(end) = after_start.find("</think>") {
@@ -683,19 +687,19 @@ fn strip_think_blocks(text: &str) -> String {
 fn strip_tool_call_blocks(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut cursor = text;
-    
+
     // Handle XML tags and [TOOL_CALL] variants
     let patterns = [
-        ("<tool_call>", "</tool_call>"), 
+        ("<tool_call>", "</tool_call>"),
         ("<minimax:tool_call>", "</minimax:tool_call>"),
-        ("[TOOL_CALL]", "[/TOOL_CALL]")
+        ("[TOOL_CALL]", "[/TOOL_CALL]"),
     ];
 
     'outer: while !cursor.is_empty() {
         // Find the earliest opening tag
         let mut earliest_start = None;
         let mut earliest_end_tag = "";
-        
+
         for (open_tag, close_tag) in &patterns {
             if let Some(pos) = cursor.find(open_tag) {
                 if earliest_start.map_or(true, |earliest| pos < earliest) {
@@ -704,12 +708,12 @@ fn strip_tool_call_blocks(text: &str) -> String {
                 }
             }
         }
-        
+
         match earliest_start {
             Some(start) => {
                 // Add content before the tool call block
                 result.push_str(&cursor[..start]);
-                
+
                 // Find the end of the tool call block
                 let after_start = &cursor[start..];
                 if let Some(end) = after_start.find(earliest_end_tag) {
@@ -1080,6 +1084,9 @@ mod tests {
     #[test]
     fn strip_tool_call_blocks_removes_bracket_wrappers() {
         let text = "[TOOL_CALL]\n{tool => \"execute_command\", args => {}}\n[/TOOL_CALL]\nCommand executed successfully";
-        assert_eq!(strip_tool_call_blocks(text), "Command executed successfully");
+        assert_eq!(
+            strip_tool_call_blocks(text),
+            "Command executed successfully"
+        );
     }
 }

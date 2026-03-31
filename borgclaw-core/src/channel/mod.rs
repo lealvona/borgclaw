@@ -309,7 +309,7 @@ impl MessageRouter {
 
         let mut agent = self.agent.lock().await;
         let response = crate::agent::Agent::process(&mut *agent, &ctx).await;
-        
+
         // Choose payload type based on channel capabilities
         // WebSocket/web channels can render markdown; others get plain text
         let content = if Self::channel_supports_markdown(&msg.channel) {
@@ -317,7 +317,7 @@ impl MessageRouter {
         } else {
             MessagePayload::text(response.text.clone())
         };
-        
+
         let outbound = OutboundMessage {
             target: msg.sender.id.clone(),
             channel: msg.channel.clone(),
@@ -332,7 +332,7 @@ impl MessageRouter {
             outbound,
         })
     }
-    
+
     /// Check if a channel supports markdown rendering
     fn channel_supports_markdown(channel: &ChannelType) -> bool {
         matches!(channel.0.as_str(), "websocket" | "web" | "cli")

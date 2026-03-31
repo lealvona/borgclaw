@@ -320,35 +320,43 @@ pub async fn google_authenticate(
         .get("force")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    
+
     let client = google_client(runtime);
-    
+
     // Check if already authenticated and not forcing re-auth
-    if !force {
-        if let Ok(_) = client.auth().get_token().await {
-            return ToolResult::ok("Already authenticated with Google. Use force=true to re-authenticate.");
-        }
+    if !force && client.auth().get_token().await.is_ok() {
+        return ToolResult::ok(
+            "Already authenticated with Google. Use force=true to re-authenticate.",
+        );
     }
-    
+
     // Get the context information from runtime
-    let session_id = runtime.invocation.as_ref()
+    let session_id = runtime
+        .invocation
+        .as_ref()
         .map(|ctx| ctx.session_id.0.clone())
         .unwrap_or_else(|| "unknown".to_string());
-    
-    let user_id = runtime.invocation.as_ref()
+
+    let user_id = runtime
+        .invocation
+        .as_ref()
         .map(|ctx| ctx.sender.id.clone())
         .unwrap_or_else(|| "unknown".to_string());
-    
-    let channel = runtime.invocation.as_ref()
+
+    let channel = runtime
+        .invocation
+        .as_ref()
         .map(|ctx| ctx.sender.channel.clone())
         .unwrap_or_else(|| "cli".to_string());
-    
-    let group_id = runtime.invocation.as_ref()
+
+    let group_id = runtime
+        .invocation
+        .as_ref()
         .and_then(|ctx| ctx.metadata.get("group_id").cloned());
-    
+
     // Generate a unique state parameter
     let state = uuid::Uuid::new_v4().to_string();
-    
+
     // Store the OAuth state for later retrieval
     let oauth_state = crate::skills::google::OAuthState {
         session_id: session_id.clone(),
@@ -357,12 +365,16 @@ pub async fn google_authenticate(
         created_at: chrono::Utc::now(),
         group_id: group_id.clone(),
     };
-    
-    client.auth().pending_store().insert(state.clone(), oauth_state).await;
-    
+
+    client
+        .auth()
+        .pending_store()
+        .insert(state.clone(), oauth_state)
+        .await;
+
     // Build the auth URL with state
     let auth_url = client.auth().build_auth_url_with_state(&state);
-    
+
     // Return instructions and URL
     let message = format!(
         "Please authenticate with Google by visiting this URL:\n\n{}\n\n\
@@ -370,7 +382,7 @@ pub async fn google_authenticate(
         Once you complete the authentication, I'll be able to access your Gmail, Google Drive, and Calendar.",
         auth_url
     );
-    
+
     ToolResult::ok(message)
 }
 
