@@ -137,8 +137,13 @@ enum Commands {
 enum SecretAction {
     /// List secret keys (values are not shown)
     List,
-    /// Store or update a secret (prompts for value)
-    Set { key: String },
+    /// Store or update a secret (prompts for value, use --value to provide non-interactively)
+    Set {
+        key: String,
+        /// Secret value (if not provided, will prompt interactively)
+        #[arg(short, long)]
+        value: Option<String>,
+    },
     /// Delete a secret
     Delete { key: String },
     /// Check whether a secret exists
@@ -2287,12 +2292,17 @@ async fn secrets(config: AppConfig, action: SecretAction) {
                 }
             }
         }
-        SecretAction::Set { key } => {
-            let value = dialoguer::Password::new()
-                .with_prompt(format!("Enter value for '{}'", key))
-                .interact()
-                .unwrap_or_default();
-            match store.store(&key, &value).await {
+        SecretAction::Set { key, value } => {
+            let secret_value = match value {
+                Some(v) => v,
+                None => {
+                    dialoguer::Password::new()
+                        .with_prompt(format!("Enter value for '{}'", key))
+                        .interact()
+                        .unwrap_or_default()
+                }
+            };
+            match store.store(&key, &secret_value).await {
                 Ok(()) => println!("✓ Secret '{}' stored", key),
                 Err(e) => println!("✗ Failed to store secret: {}", e),
             }

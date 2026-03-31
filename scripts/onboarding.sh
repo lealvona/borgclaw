@@ -644,14 +644,26 @@ if [ "$QUICK_MODE" = false ]; then
     info "  • Create pull requests and comments"
     info "  • Search code across repositories"
     echo ""
-    warn "External Setup Required:"
-    warn "  1. Visit: https://github.com/settings/tokens"
-    warn "  2. Click 'Generate new token (classic)'"
-    warn "  3. Select scopes: repo, read:user, read:org"
-    warn "  4. Copy the token (starts with 'ghp_')"
-    echo ""
-    prompt "Configure GitHub integration? [y/N]: "
-    read -r setup_github
+    
+    # Check if already configured
+    if "$BORGCLAW_BIN" secrets check "GITHUB_TOKEN" &>/dev/null; then
+        log "✓ GitHub integration is already configured"
+        prompt "Reconfigure GitHub integration? [y/N]: "
+        read -r setup_github
+        if [[ ! "$setup_github" =~ ^[Yy]$ ]]; then
+            log "Keeping existing GitHub configuration"
+            ENABLE_GITHUB=true
+        fi
+    else
+        warn "External Setup Required:"
+        warn "  1. Visit: https://github.com/settings/tokens"
+        warn "  2. Click 'Generate new token (classic)'"
+        warn "  3. Select scopes: repo, read:user, read:org"
+        warn "  4. Copy the token (starts with 'ghp_')"
+        echo ""
+        prompt "Configure GitHub integration? [y/N]: "
+        read -r setup_github
+    fi
     
     if [[ "$setup_github" =~ ^[Yy]$ ]]; then
         while true; do
@@ -676,7 +688,7 @@ if [ "$QUICK_MODE" = false ]; then
             log "Testing GitHub token..."
             if test_github_token "$GITHUB_TOKEN"; then
                 log "✓ GitHub token is valid"
-                if echo "$GITHUB_TOKEN" | "$BORGCLAW_BIN" secrets set "GITHUB_TOKEN"; then
+                if "$BORGCLAW_BIN" secrets set "GITHUB_TOKEN" --value "$GITHUB_TOKEN"; then
                     log "✓ GitHub token stored"
                     ENABLE_GITHUB=true
                 fi
@@ -735,14 +747,26 @@ if [ "$QUICK_MODE" = false ]; then
     info "  • Receive messages from Telegram users"
     info "  • Send responses via Telegram"
     echo ""
-    warn "External Setup Required:"
-    warn "  1. Message @BotFather on Telegram"
-    warn "  2. Send /newbot command"
-    warn "  3. Follow instructions to create bot"
-    warn "  4. Copy the bot token (format: 123456789:ABCdefGHI..."
-    echo ""
-    prompt "Configure Telegram integration? [y/N]: "
-    read -r setup_telegram
+    
+    # Check if already configured
+    if "$BORGCLAW_BIN" secrets check "TELEGRAM_BOT_TOKEN" &>/dev/null; then
+        log "✓ Telegram integration is already configured"
+        prompt "Reconfigure Telegram integration? [y/N]: "
+        read -r setup_telegram
+        if [[ ! "$setup_telegram" =~ ^[Yy]$ ]]; then
+            log "Keeping existing Telegram configuration"
+            ENABLE_TELEGRAM=true
+        fi
+    else
+        warn "External Setup Required:"
+        warn "  1. Message @BotFather on Telegram"
+        warn "  2. Send /newbot command"
+        warn "  3. Follow instructions to create bot"
+        warn "  4. Copy the bot token (format: 123456789:ABCdefGHI..."
+        echo ""
+        prompt "Configure Telegram integration? [y/N]: "
+        read -r setup_telegram
+    fi
     
     if [[ "$setup_telegram" =~ ^[Yy]$ ]]; then
         while true; do
@@ -769,7 +793,7 @@ if [ "$QUICK_MODE" = false ]; then
             if echo "$BOT_INFO" | grep -q '"ok":true'; then
                 BOT_NAME=$(echo "$BOT_INFO" | grep -o '"username":"[^"]*"' | cut -d'"' -f4)
                 log "✓ Token valid! Bot: @$BOT_NAME"
-                if echo "$TELEGRAM_TOKEN" | "$BORGCLAW_BIN" secrets set "TELEGRAM_BOT_TOKEN"; then
+                if "$BORGCLAW_BIN" secrets set "TELEGRAM_BOT_TOKEN" --value "$TELEGRAM_TOKEN"; then
                     log "✓ Telegram token stored"
                     ENABLE_TELEGRAM=true
                 fi
