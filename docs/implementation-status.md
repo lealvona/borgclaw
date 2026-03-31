@@ -31,8 +31,8 @@ Audit note:
 | Skill registry lifecycle | `complete` | Local directory install, local `.tar.gz` install, GitHub-backed listing, archive-backed GitHub repo/registry installs, remote archive install-by-URL, packaging, publishing, inspection, version compatibility, and direct manifest installs with explicit `files:` support, adjacent `SKILL.files.json` sidecar discovery, or manifest-directory discovery are implemented. |
 | MCP client | `complete` | Documented transports (Stdio, SSE, WebSocket) and client API are aligned. |
 | GitHub skill client | `complete` | Core client surface, shared tool/runtime coverage, local shared-runtime happy-path coverage, and operational completeness are landed. |
-| Google skill client | `partial` | Gmail/Drive/Calendar facade and shared-runtime coverage are landed. Browser OAuth completion works, Telegram receives a direct callback notification, and active WebSocket sessions can now receive live OAuth completion events, but CLI delivery and per-user token scoping remain incomplete. |
-| Google OAuth callback routing | `partial` | Pending OAuth state now survives tool-runtime to gateway handoff. Telegram, browser `window.opener.postMessage`, and active WebSocket session delivery are landed, but CLI still does not receive a live in-band completion event. |
+| Google skill client | `complete` | Gmail/Drive/Calendar facade and shared-runtime coverage are landed. Browser OAuth completion works, Telegram receives a direct callback notification, active WebSocket sessions receive live completion events, CLI-originated flows receive a live in-band completion notice through the persisted completion store, and Google tokens are scoped per caller identity instead of one shared token path. |
+| Google OAuth callback routing | `complete` | Pending OAuth state now survives tool-runtime to gateway handoff. Telegram, browser `window.opener.postMessage`, active WebSocket sessions, and CLI-originated flows all receive completion signaling, with OAuth completions persisted by `state` for non-socket flows. |
 | Browser skill client | `complete` | Playwright/CDP surface, core shared runtime actions, local shared-runtime bridge coverage, and operational completeness are landed. |
 | STT/TTS/Image/QR/URL skills | `complete` | Typed config, shared runtime coverage, deeper integration coverage, and operational completeness are landed. |
 | Onboarding contract | `complete` | Provider registry, secure-store-backed integration setup, `.env` generation, operator UX, and live-auth flows are complete. |
@@ -112,8 +112,6 @@ Audit note:
 
 ## Temporary Limitations
 
-- Google OAuth callback completion is still incomplete for CLI-driven flows. Browser-originated flows receive `window.opener.postMessage`, Telegram gets a direct channel message, and active WebSocket sessions now receive a live gateway event.
-- Google OAuth tokens still persist through a shared token path rather than a per-user or per-session credential store, so the current implementation is not yet a clean multi-user Google integration model.
 - The gateway now has lightweight per-session outbound queues for live WebSocket callback delivery, but broader multi-session state inspection, persisted web-chat history, and non-WebSocket callback ownership are still thinner than the stronger upstream control-plane models.
 - Explicitly declined and not planned: AWS Bedrock provider support, Composio integration, and Slack approval UI/buttons.
 - Residual release risk: `sqlx-postgres v0.7.4` still emits a Rust future-incompatibility warning for a future toolchain bump.

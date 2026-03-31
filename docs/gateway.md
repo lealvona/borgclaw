@@ -268,14 +268,16 @@ Current behavior:
 - The callback validates the stored `state` token and exchanges the Google authorization code for tokens.
 - The browser window always receives the success or failure HTML response.
 - Browser-originated flows also emit `window.opener.postMessage(...)` so the originating page can react.
-- Telegram-originated OAuth flows now receive a direct completion message back through the Telegram channel.
-- Active WebSocket sessions can now receive a live `oauth_complete` event from the gateway once the callback succeeds.
+- Telegram-originated OAuth flows receive a direct completion message back through the Telegram channel.
+- Active WebSocket sessions receive a live `oauth_complete` event from the gateway once the callback succeeds.
+- CLI-originated flows now receive a live in-band completion notice by polling the persisted OAuth completion store keyed by the OAuth `state` token.
+- Google tokens are now written to a scoped path derived from channel, sender, and group identity instead of one shared token file.
 - Browser chat still relies on the popup window's `window.opener.postMessage(...)` notification path.
-- CLI sessions do not yet receive a live in-band completion event from the gateway.
 
 Operational note:
 
 - Pending OAuth requests are persisted alongside the configured Google token path so the tool-runtime request and the gateway callback can share state safely.
+- OAuth completions are also persisted alongside the configured Google token path so non-WebSocket flows can observe callback completion without a live gateway socket.
 - The dashboard now renders management endpoints inside modal inspectors instead of linking operators to raw JSON tabs, and chat responses can display structured payloads including markdown, HTML previews, media, files, tool calls, and metadata.
 - `authenticated` — Successful authentication
 - `response` — Agent reply

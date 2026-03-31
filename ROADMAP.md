@@ -17,14 +17,14 @@ Historical execution records remain in:
 
 ### Priority 1: OAuth And Session Delivery
 
-- Finish live OAuth completion routing for CLI and any future non-WebSocket sessions instead of relying on browser-only confirmation or manual retry.
 - Extend the new session-scoped outbound queue model beyond the current live WebSocket path so callback ownership is transport-agnostic.
-- Scope Google OAuth token persistence per user or per session instead of a shared token file.
 - Add black-box gateway coverage for the OAuth callback path, including persisted pending state and channel completion behavior.
+- Replace browser-popup-only completion ownership with a transport-agnostic model for browser chat and future remote clients.
+- Harden the persisted OAuth state/completion stores with clearer pruning, observability, and operator inspection.
 
 Why this matters:
-- This is the main remaining correctness gap in an otherwise landed Google integration.
-- Upstream projects are moving toward stronger hosted OAuth and session ownership patterns, and BorgClaw should not stop at "browser page says success."
+- The main correctness gaps in the landed Google integration are closed, but callback ownership is still uneven across browser-style clients.
+- Upstream projects are moving toward stronger hosted OAuth and session ownership patterns, and BorgClaw should not stop at popup-window confirmation.
 
 ### Priority 2: Multi-Tenant And Gateway Hardening
 

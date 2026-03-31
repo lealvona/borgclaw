@@ -41,8 +41,8 @@ Key features:
 - Gateway `/oauth/callback` endpoint - Handles Google redirect, validates state, exchanges code
 - Token exchange via `GoogleAuth::exchange_code()`
 - Success/failure HTML responses with postMessage support
-
-**⚠️ KNOWN LIMITATION:** OAuth callback needs channel notification system (see "Pending Work")
+- Direct completion delivery now exists for Telegram, active WebSocket sessions, and CLI-originated flows
+- Google token persistence is now scoped by caller identity instead of one shared token file
 
 ### TICKET-116: Tool Parser Fix (#282)
 - Strip `<think>` blocks before parsing tool commands
@@ -112,11 +112,13 @@ borgclaw-gateway ──┘
 ### 1. OAuth Callback Routing And Token Scoping (PRIORITY)
 **Locations:** `borgclaw-gateway/src/main.rs`, `borgclaw-core/src/skills/google.rs`
 
-The March 31 follow-up repaired the broken callback-state handoff by persisting pending OAuth state next to the Google token path, and the gateway now sends a direct completion message back to Telegram when the originating channel is Telegram.
+The March 31 follow-up repaired the broken callback-state handoff by persisting pending OAuth state next to the Google token path, and the later OAuth completion pass closed the remaining CLI delivery and token-scoping gaps.
 
-**Still open:**
-- CLI-originated OAuth flows still do not get a live in-band callback message
-- Google tokens are still persisted to a shared token path rather than being scoped per user/session for multi-user operation
+**Current status:**
+- Telegram-originated OAuth flows get a direct completion message
+- Active WebSocket sessions get a live `oauth_complete` event
+- CLI-originated OAuth flows wait on a persisted completion store keyed by OAuth `state`
+- Google tokens are persisted to caller-scoped token paths derived from channel, sender, and group identity
 - Browser chat still relies on popup `postMessage`, not a transport-agnostic callback delivery path
 
 ### 2. Password-Gated Secret Store Unlock (PRODUCT GOAL)
@@ -251,7 +253,8 @@ cargo clippy
 1. Look at `oauth_callback_handler()` in `borgclaw-gateway/src/main.rs`
 2. The `OAuthState` struct has `session_id`, `user_id`, `channel`, `group_id`
 3. Pending OAuth state is now stored in a deterministic `.pending-oauth.json` file alongside the configured Google token path
-4. Remaining work is live callback delivery for non-Telegram channels plus per-user token scoping
+4. OAuth completions are now persisted in a sibling `.oauth-completions.json` file keyed by OAuth `state`
+5. Google tokens are now scoped per caller identity; the remaining OAuth follow-up is transport-agnostic browser callback ownership beyond popup `postMessage`
 
 ### If Adding New Features
 - Follow existing patterns in `borgclaw-core/src/agent/tools/`

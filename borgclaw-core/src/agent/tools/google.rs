@@ -383,7 +383,15 @@ pub async fn google_authenticate(
         auth_url
     );
 
-    ToolResult::ok(message)
+    let mut result = ToolResult::ok(message)
+        .with_metadata("response_mode", "direct")
+        .with_metadata("google_oauth_state", state)
+        .with_metadata("google_oauth_channel", channel)
+        .with_metadata("google_oauth_session_id", session_id);
+    if let Some(group_id) = group_id {
+        result = result.with_metadata("google_oauth_group_id", group_id);
+    }
+    result
 }
 
 pub async fn google_list_messages(
