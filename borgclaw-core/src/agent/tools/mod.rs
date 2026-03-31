@@ -218,6 +218,23 @@ pub fn parse_tool_command(input: &str, tools: &[Tool]) -> Option<ToolCall> {
         }
     }
     
+    // Check for [/!tool_invocation] format
+    if trimmed.contains("[/!tool_invocation]") {
+        if let Some(end) = trimmed.find("[/!tool_invocation]") {
+            let before_end = &trimmed[..end];
+            if let Some(tool_call) = parse_tool_command(before_end, tools) {
+                return Some(tool_call);
+            }
+        }
+    }
+    
+    // Check for tool calls in markdown code blocks
+    if let Some(code_block) = extract_code_block_tool_call(trimmed) {
+        if let Some(tool_call) = parse_tool_command(&code_block, tools) {
+            return Some(tool_call);
+        }
+    }
+    
     // Check for XML-wrapped tool calls (e.g., <minimax:tool_call>...</minimax:tool_call>)
     let content = if let Some(start) = trimmed.find("<tool_call>") {
         let start_idx = start + "<tool_call>".len();
@@ -229,7 +246,12 @@ pub fn parse_tool_command(input: &str, tools: &[Tool]) -> Option<ToolCall> {
     } else if let Some(start) = trimmed.find("<minimax:tool_call>") {
         let start_idx = start + "<minimax:tool_call>".len();
         if let Some(end) = trimmed.find("</minimax:tool_call>") {
-            &trimmed[start_idx..end]
+            let xml_content = &trimmed[start_idx..end];
+            // Try to parse XML invoke format first
+            if let Some(tool_call) = parse_xml_invoke_format(xml_content, tools) {
+                return Some(tool_call);
+            }
+            xml_content
         } else {
             &trimmed[start_idx..]
         }
@@ -239,6 +261,21 @@ pub fn parse_tool_command(input: &str, tools: &[Tool]) -> Option<ToolCall> {
     
     // Strip leading dash and whitespace (common in XML-wrapped format)
     let content = content.trim().trim_start_matches('-').trim();
+    
+    // Handle space after slash by replacing "/ " with "/" in the content
+    let content_normalized = if content.contains("/ ") {
+        content.replace("/ ", "/")
+    } else {
+        content.to_string()
+    };
+    let content = content_normalized.as_str();
+    
+    // Normalize path-like prefixes (e.g., /../list_directory -> /list_directory)
+    let content = if content.starts_with("/../") {
+        &content[3..]
+    } else {
+        content
+    };
     
     // Try alternate format: /{"tool": "name", "params": {...}}
     if content.starts_with("/{") {
@@ -429,6 +466,79 @@ fn parse_minimax_arrow_format(content: &str, arguments: &mut HashMap<String, ser
             arguments.insert(key, value);
         }
     }
+}
+
+/// Extract tool call from markdown code block if present
+/// Looks for ```/tool_name {...}``` or just tool commands inside ``` ```
+fn extract_code_block_tool_call(input: &str) -> Option<String> {
+    // Find triple backtick code blocks
+    let mut start = 0;
+    while let Some(block_start) = input[start..].find("```") {
+        let block_start = start + block_start + "```".len();
+        // Skip language identifier if present
+        let content_start = input[block_start..].find('\n').map(|i| block_start + i + 1)?;
+        
+        if let Some(block_end) = input[content_start..].find("```") {
+            let block_end = content_start + block_end;
+            let content = &input[content_start..block_end];
+            
+            // Check if content looks like a tool call
+            let trimmed = content.trim();
+            if trimmed.starts_with('/') || trimmed.starts_with("/{") {
+                return Some(trimmed.to_string());
+            }
+            
+            start = block_end + "```".len();
+        } else {
+            break;
+        }
+    }
+    None
+}
+
+/// Parse XML invoke format: <invoke name="tool_name"><parameter name="key">value</parameter>...</invoke>
+fn parse_xml_invoke_format(xml_content: &str, tools: &[Tool]) -> Option<ToolCall> {
+    // Look for <invoke name="...">
+    let invoke_start = xml_content.find("<invoke name=\"")?;
+    let name_start = invoke_start + "<invoke name=\"".len();
+    let name_end = xml_content[name_start..].find("\"")?;
+    let tool_name = &xml_content[name_start..name_start + name_end];
+    
+    // Verify tool exists
+    if !tools.iter().any(|tool| tool.name == tool_name) {
+        return None;
+    }
+    
+    // Find the closing </invoke>
+    let invoke_end = xml_content.find("</invoke>")?;
+    let inner = &xml_content[name_start + name_end..invoke_end];
+    
+    // Parse parameters (if any)
+    let mut arguments = HashMap::new();
+    let mut search_start = 0;
+    
+    while let Some(param_start) = inner[search_start..].find("<parameter name=\"") {
+        let param_name_start = search_start + param_start + "<parameter name=\"".len();
+        let param_name_end = inner[param_name_start..].find("\"")?;
+        let param_name = &inner[param_name_start..param_name_start + param_name_end];
+        
+        // Find the closing > of the opening tag
+        let value_start = param_name_start + param_name_end + 1;
+        let value_start = inner[value_start..].find('>')? + value_start + 1;
+        
+        // Find the closing </parameter>
+        let value_end = inner[value_start..].find("</parameter>")?;
+        let param_value = &inner[value_start..value_start + value_end];
+        
+        arguments.insert(
+            param_name.to_string(),
+            serde_json::Value::String(param_value.to_string()),
+        );
+        
+        search_start = value_start + value_end + "</parameter>".len();
+    }
+    
+    Some(ToolCall::new(tool_name, arguments))
 }
 
 pub async fn execute_tool(call: &ToolCall, runtime: &ToolRuntime) -> ToolResult {
@@ -985,6 +1095,126 @@ mod tests {
         let call = parse_tool_command(input, &tools).unwrap();
         assert_eq!(call.name, "execute_command");
         assert_eq!(call.arguments["command"], "ls -la");
+    }
+
+    #[test]
+    fn parses_xml_invoke_format() {
+        let tools = builtin_tools();
+        let input = r#"<minimax:tool_call>
+<invoke name="read_file">
+<parameter name="path">README.md</parameter>
+</invoke>
+</minimax:tool_call>"#;
+        let call = parse_tool_command(input, &tools).unwrap();
+        assert_eq!(call.name, "read_file");
+        assert_eq!(call.arguments["path"], "README.md");
+    }
+
+    #[test]
+    fn parses_xml_invoke_format_with_multiple_params() {
+        let tools = builtin_tools();
+        let input = r#"<minimax:tool_call>
+<invoke name="google_send_email">
+<parameter name="to">test@example.com</parameter>
+<parameter name="subject">Hello</parameter>
+<parameter name="body">Test message</parameter>
+</invoke>
+</minimax:tool_call>"#;
+        let call = parse_tool_command(input, &tools).unwrap();
+        assert_eq!(call.name, "google_send_email");
+        assert_eq!(call.arguments["to"], "test@example.com");
+        assert_eq!(call.arguments["subject"], "Hello");
+        assert_eq!(call.arguments["body"], "Test message");
+    }
+
+    #[test]
+    fn parses_xml_invoke_without_parameters() {
+        let tools = builtin_tools();
+        // LLM might output invoke without any parameters
+        let input = r#"<minimax:tool_call>
+<invoke name="list_directory">
+</invoke>
+</minimax:tool_call>"#;
+        let call = parse_tool_command(input, &tools).unwrap();
+        assert_eq!(call.name, "list_directory");
+        // No arguments should be present
+        assert!(call.arguments.is_empty());
+    }
+
+    #[test]
+    fn parses_tool_call_in_markdown_code_block() {
+        let tools = builtin_tools();
+        let input = r#"I'll read the file for you:
+
+```
+/read_file {"path": "README.md"}
+```"#;
+        let call = parse_tool_command(input, &tools).unwrap();
+        assert_eq!(call.name, "read_file");
+        assert_eq!(call.arguments["path"], "README.md");
+    }
+
+    #[test]
+    fn parses_google_send_email_tool_command() {
+        let tools = builtin_tools();
+        let input = r#"/google_send_email {"to": "harryzahn1@gmail.com", "subject": "test 123", "body": "if you see this, I have done the impossible."}"#;
+        let call = parse_tool_command(input, &tools).unwrap();
+        assert_eq!(call.name, "google_send_email");
+        assert_eq!(call.arguments["to"], "harryzahn1@gmail.com");
+        assert_eq!(call.arguments["subject"], "test 123");
+        assert_eq!(call.arguments["body"], "if you see this, I have done the impossible.");
+    }
+
+    #[test]
+    fn parses_tool_command_with_single_quotes() {
+        let tools = builtin_tools();
+        // Test with single quotes in the content
+        let input = r#"/message {"text": "It's working!"}"#;
+        let call = parse_tool_command(input, &tools).unwrap();
+        assert_eq!(call.name, "message");
+        assert_eq!(call.arguments["text"], "It's working!");
+    }
+
+    #[test]
+    fn parses_list_directory_with_wrong_param_name() {
+        let tools = builtin_tools();
+        // LLM might use "dir" instead of "path"
+        let input = r#"/list_directory {"dir": "."}"#;
+        let call = parse_tool_command(input, &tools).unwrap();
+        assert_eq!(call.name, "list_directory");
+        // The arg should still be parsed even if parameter name is wrong
+        assert_eq!(call.arguments["dir"], ".");
+    }
+
+    #[test]
+    fn parses_tool_with_path_prefix_normalization() {
+        let tools = builtin_tools();
+        // MiniMax sometimes outputs /../tool instead of /tool
+        let input = r#"/../list_directory {"path": "."}"#;
+        let call = parse_tool_command(input, &tools).unwrap();
+        assert_eq!(call.name, "list_directory");
+        assert_eq!(call.arguments["path"], ".");
+    }
+
+    #[test]
+    fn parses_tool_with_space_after_slash() {
+        let tools = builtin_tools();
+        // MiniMax sometimes outputs "/ execute_command" instead of "/execute_command"
+        let input = r#"/ execute_command {"command": "ls -la"}"#;
+        let call = parse_tool_command(input, &tools).unwrap();
+        assert_eq!(call.name, "execute_command");
+        assert_eq!(call.arguments["command"], "ls -la");
+    }
+
+    #[test]
+    fn parses_tool_with_tool_invocation_tag() {
+        let tools = builtin_tools();
+        // MiniMax sometimes outputs with [/!tool_invocation] closing tag
+        let input = r#"/execute_command {"command": "ls"}
+[/!tool_invocation]"#;
+        let call = parse_tool_command(input, &tools).unwrap();
+        assert_eq!(call.name, "execute_command");
+        assert_eq!(call.arguments["command"], "ls");
     }
 
     #[test]

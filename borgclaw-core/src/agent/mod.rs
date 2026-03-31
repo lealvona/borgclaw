@@ -435,7 +435,9 @@ You are autonomous, helpful, and capable of complex multi-step tasks.",
             let response_text = response.text.clone();
 
             // Check if response contains tool commands
+            tracing::debug!("Checking for tool commands in: {}", &response_text);
             if let Some(tool_call) = parse_tool_command(&response_text, &self.tools) {
+                tracing::info!("Executing tool: {}", tool_call.name);
                 // Execute the tool
                 let runtime = self.ensure_tool_runtime().await?;
                 let runtime = runtime.with_context(ctx);
