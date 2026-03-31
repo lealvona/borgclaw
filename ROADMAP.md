@@ -49,12 +49,13 @@ Why this matters:
 ### Priority 4: Operator Workflow And Release Ergonomics
 
 - Add first-class install/uninstall helpers for local binary and launcher integration.
-- Decide whether password-gated secret-store unlock is a real product goal; if yes, promote it from an abandoned plan into an explicit execution track.
+- Implement password-gated secret-store unlock as a first-class operator flow, not just file-key-backed encryption hidden behind bootstrap state.
+- Define the unlock lifecycle clearly across bootstrap, onboarding, CLI commands, scripts, and automation-safe non-interactive paths.
 - Standardize provider/integration credential shapes where possible (`api_key`, `oauth_token`, profile id) to reduce per-provider drift.
 - Add explicit nightly/release automation documentation and implementation when the operator workflow is stable enough to freeze.
 
 Why this matters:
-- Setup and release ergonomics are now the main non-runtime polish gap.
+- Setup, unlock, and release ergonomics are now the main non-runtime polish gap.
 
 ## Explicit Non-Goals
 
