@@ -208,6 +208,7 @@ async fn main() {
         .route("/api/subagents", get(api_subagents))
         .route("/api/mcp/servers", get(api_mcp_servers))
         .route("/api/doctor", get(api_doctor))
+        .route("/api/identity", get(api_identity).post(api_identity_post))
         .layer(cors.clone())
         .with_state(state.clone());
     let webhook_app = Router::new()
@@ -1633,6 +1634,7 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
             <div class="modal-body">
                 <div id="config-tabs" class="config-tabs">
                     <button class="tab-btn active" onclick="showConfigTab('agent')">Agent</button>
+                    <button class="tab-btn" onclick="showConfigTab('identity')">Identity</button>
                     <button class="tab-btn" onclick="showConfigTab('channels')">Channels</button>
                     <button class="tab-btn" onclick="showConfigTab('security')">Security</button>
                     <button class="tab-btn" onclick="showConfigTab('memory')">Memory</button>
@@ -1677,6 +1679,36 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                         <div class="form-group">
                             <label>System Prompt</label>
                             <textarea id="cfg-system-prompt" class="form-control" rows="4" placeholder="Optional system prompt..."></textarea>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Identity Tab -->
+                <div id="tab-identity" class="config-tab-content">
+                    <div class="config-form">
+                        <div class="form-group">
+                            <label>Identity Document Path</label>
+                            <input type="text" id="cfg-identity-path" class="form-control" readonly>
+                            <small>Path to your agent's soul/identity file</small>
+                        </div>
+                        <div class="form-group">
+                            <label>Identity Format</label>
+                            <select id="cfg-identity-format" class="form-control">
+                                <option value="auto">Auto (detect from extension)</option>
+                                <option value="markdown">Markdown</option>
+                                <option value="aieos">AIEOS (JSON)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Identity Content <span id="identity-status" class="text-muted"></span></label>
+                            <textarea id="cfg-identity-content" class="form-control" rows="20" placeholder="# Agent Identity
+
+Define your agent's personality, directives, and behavior here..."></textarea>
+                            <small>Edit your agent's soul document directly. This defines how the agent presents itself and approaches tasks.</small>
+                        </div>
+                        <div class="form-group">
+                            <button type="button" class="btn btn-secondary" onclick="loadIdentity()">🔄 Reload from Disk</button>
+                            <button type="button" class="btn btn-primary" onclick="saveIdentity()">💾 Save Identity</button>
                         </div>
                     </div>
                 </div>
@@ -2628,6 +2660,9 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 document.getElementById('cfg-soul-path').value = config.agent.soul_path || '(not configured)';
             }
             
+            // Load identity document
+            loadIdentity();
+            
             // Channels tab
             if (config.channels) {
                 const ws = config.channels.websocket || {};
@@ -2914,6 +2949,57 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
                 hideInspector();
             }
         });
+        
+        // Identity management functions
+        async function loadIdentity() {
+            try {
+                const res = await fetch('/api/identity');
+                if (res.ok) {
+                    const data = await res.json();
+                    document.getElementById('cfg-identity-path').value = data.config?.soul_path || '.borgclaw/soul.md';
+                    document.getElementById('cfg-identity-format').value = data.config?.identity_format || 'auto';
+                    if (data.document?.exists) {
+                        document.getElementById('cfg-identity-content').value = data.document.content || '';
+                        document.getElementById('identity-status').textContent = '(loaded)';
+                    } else {
+                        document.getElementById('identity-status').textContent = '(not created - will be created on save)';
+                    }
+                } else {
+                    document.getElementById('identity-status').textContent = '(error loading)';
+                }
+            } catch (err) {
+                document.getElementById('identity-status').textContent = '(error: ' + err.message + ')';
+            }
+        }
+        
+        async function saveIdentity() {
+            const content = document.getElementById('cfg-identity-content').value;
+            const format = document.getElementById('cfg-identity-format').value;
+            
+            try {
+                const res = await fetch('/api/identity', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: content })
+                });
+                
+                const result = await res.json();
+                if (result.success) {
+                    document.getElementById('identity-status').textContent = '(saved)';
+                    showConfigStatus('Identity document saved successfully', 'success');
+                    
+                    // Also update the identity format if changed
+                    const currentFormat = document.getElementById('cfg-identity-format').value;
+                    // The format will be saved with the main config save
+                } else {
+                    document.getElementById('identity-status').textContent = '(save failed)';
+                    showConfigStatus('Error saving identity: ' + (result.error || 'Unknown error'), 'error');
+                }
+            } catch (err) {
+                document.getElementById('identity-status').textContent = '(save error)';
+                showConfigStatus('Failed to save identity: ' + err.message, 'error');
+            }
+        }
         
         // Fetch and display live runtime version
         fetch('/api/version')
@@ -4823,6 +4909,90 @@ async fn api_doctor(State(state): State<GatewayState>) -> impl IntoResponse {
         "status": if all_ok { "healthy" } else { "unhealthy" },
         "checks": checks,
     }))
+}
+
+/// Get identity/soul document content and metadata
+async fn api_identity(State(state): State<GatewayState>) -> impl IntoResponse {
+    let soul_path = state.config.agent.soul_path.clone()
+        .or_else(|| Some(PathBuf::from(".borgclaw/soul.md")))
+        .filter(|p| p.exists());
+    
+    let (content, exists) = match &soul_path {
+        Some(path) => {
+            match tokio::fs::read_to_string(path).await {
+                Ok(content) => (content, true),
+                Err(_) => ("".to_string(), false),
+            }
+        }
+        None => ("".to_string(), false),
+    };
+    
+    let response = serde_json::json!({
+        "config": {
+            "soul_path": state.config.agent.soul_path,
+            "identity_format": state.config.agent.identity_format,
+        },
+        "document": {
+            "exists": exists,
+            "path": soul_path,
+            "content": content,
+        }
+    });
+    
+    (
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        serde_json::to_string_pretty(&response).unwrap_or_default(),
+    )
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct IdentityUpdateRequest {
+    content: String,
+}
+
+/// Update identity/soul document content
+async fn api_identity_post(
+    State(state): State<GatewayState>,
+    axum::Json(payload): axum::Json<IdentityUpdateRequest>,
+) -> impl IntoResponse {
+    let soul_path = state.config.agent.soul_path.clone()
+        .unwrap_or_else(|| PathBuf::from(".borgclaw/soul.md"));
+    
+    // Create parent directory if needed
+    if let Some(parent) = soul_path.parent() {
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                serde_json::json!({
+                    "success": false,
+                    "error": format!("Failed to create directory: {}", e)
+                }).to_string(),
+            );
+        }
+    }
+    
+    // Write the content
+    match tokio::fs::write(&soul_path, &payload.content).await {
+        Ok(_) => (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            serde_json::json!({
+                "success": true,
+                "message": "Identity document updated",
+                "path": soul_path,
+            }).to_string(),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            serde_json::json!({
+                "success": false,
+                "error": format!("Failed to write file: {}", e)
+            }).to_string(),
+        ),
+    }
 }
 
 #[cfg(test)]
