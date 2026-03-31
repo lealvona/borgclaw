@@ -211,12 +211,40 @@ List active WebSocket connections:
     {
       "client_id": "uuid-here",
       "connected_at": "2026-03-26T12:00:00Z",
+      "session_id": "session-123",
+      "session_state": "idle",
       "authenticated": true,
       "messages_received": 10,
-      "messages_sent": 8
+      "messages_sent": 8,
+      "last_event_at": "2026-03-26T12:05:00Z"
     }
   ],
-  "count": 1
+  "count": 1,
+  "session_states": {
+    "idle": 1
+  }
+}
+```
+
+**GET /api/oauth/stores**
+Inspect OAuth store health and growth:
+
+```json
+{
+  "pending": {
+    "kind": "pending",
+    "path": "/path/to/google_token.json.pending-oauth.json",
+    "exists": true,
+    "bytes": 512,
+    "entries": 2
+  },
+  "completion": {
+    "kind": "completion",
+    "path": "/path/to/google_token.json.oauth-completions.json",
+    "exists": true,
+    "bytes": 256,
+    "entries": 1
+  }
 }
 ```
 
@@ -272,12 +300,13 @@ Current behavior:
 - Active WebSocket sessions receive a live `oauth_complete` event from the gateway once the callback succeeds.
 - CLI-originated flows now receive a live in-band completion notice by polling the persisted OAuth completion store keyed by the OAuth `state` token.
 - Google tokens are now written to a scoped path derived from channel, sender, and group identity instead of one shared token file.
-- Browser chat still relies on the popup window's `window.opener.postMessage(...)` notification path.
+- Browser chat now also polls `GET /api/oauth/completion?state=<state>` so completion can be delivered even when popup message delivery is unavailable.
 
 Operational note:
 
 - Pending OAuth requests are persisted alongside the configured Google token path so the tool-runtime request and the gateway callback can share state safely.
 - OAuth completions are also persisted alongside the configured Google token path so non-WebSocket flows can observe callback completion without a live gateway socket.
+- The gateway runs periodic OAuth store maintenance that prunes expired pending/completion entries.
 - The dashboard now renders management endpoints inside modal inspectors instead of linking operators to raw JSON tabs, and chat responses can display structured payloads including markdown, HTML previews, media, files, tool calls, and metadata.
 - `authenticated` — Successful authentication
 - `response` — Agent reply

@@ -153,12 +153,22 @@ impl OAuthPendingStore {
         removed
     }
 
+    pub fn path(&self) -> Option<PathBuf> {
+        self.path.clone()
+    }
+
+    pub async fn entry_count(&self) -> usize {
+        self.requests.read().await.len()
+    }
+
     /// Clean up expired requests (older than 10 minutes)
-    pub async fn cleanup_expired(&self) {
+    pub async fn cleanup_expired(&self) -> usize {
         let mut requests = self.requests.write().await;
         let now = Utc::now();
+        let before = requests.len();
         requests.retain(|_, info| now.signed_duration_since(info.created_at).num_minutes() < 10);
         persist_pending_requests(self.path.as_ref(), &requests);
+        before.saturating_sub(requests.len())
     }
 }
 
@@ -205,6 +215,27 @@ impl OAuthCompletionStore {
         let removed = entries.remove(state);
         persist_oauth_completions(self.path.as_ref(), &entries);
         removed
+    }
+
+    pub fn path(&self) -> Option<PathBuf> {
+        self.path.clone()
+    }
+
+    pub async fn entry_count(&self) -> usize {
+        self.entries.read().await.len()
+    }
+
+    pub async fn cleanup_expired(&self, max_age_minutes: i64) -> usize {
+        let mut entries = self.entries.write().await;
+        let now = Utc::now();
+        let before = entries.len();
+        entries.retain(|_, completion| {
+            now.signed_duration_since(completion.completed_at)
+                .num_minutes()
+                < max_age_minutes
+        });
+        persist_oauth_completions(self.path.as_ref(), &entries);
+        before.saturating_sub(entries.len())
     }
 }
 
@@ -1869,6 +1900,49 @@ mod tests {
         let completion = reloaded.take("session-1").await.unwrap();
         assert_eq!(completion.channel, "cli");
         assert!(completion.success);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn oauth_completion_store_cleanup_removes_expired_entries() {
+        let root = std::env::temp_dir().join(format!(
+            "borgclaw_google_oauth_completion_cleanup_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let store =
+            OAuthCompletionStore::with_path(root.join("google_token.json.oauth-completions.json"));
+        store
+            .insert(
+                "stale".to_string(),
+                OAuthCompletion {
+                    session_id: "session-stale".to_string(),
+                    channel: "cli".to_string(),
+                    success: true,
+                    message: "done".to_string(),
+                    completed_at: Utc::now() - chrono::Duration::minutes(90),
+                },
+            )
+            .await;
+        store
+            .insert(
+                "fresh".to_string(),
+                OAuthCompletion {
+                    session_id: "session-fresh".to_string(),
+                    channel: "cli".to_string(),
+                    success: true,
+                    message: "done".to_string(),
+                    completed_at: Utc::now(),
+                },
+            )
+            .await;
+
+        let removed = store.cleanup_expired(60).await;
+        assert_eq!(removed, 1);
+        assert!(store.take("stale").await.is_none());
+        assert!(store.take("fresh").await.is_some());
 
         std::fs::remove_dir_all(root).unwrap();
     }
