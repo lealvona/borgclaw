@@ -3028,6 +3028,25 @@ async fn websocket_handler(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
+    // Enforce per-gateway connection limit (configurable via channels.websocket.extra.max_connections)
+    let max_connections = state
+        .config
+        .channels
+        .get("websocket")
+        .and_then(|ch| ch.extra.get("max_connections"))
+        .and_then(|v| v.as_integer())
+        .map(|n| n as u64)
+        .unwrap_or(50);
+    let active = state.metrics.connections_active.load(Ordering::SeqCst);
+    if active >= max_connections {
+        warn!(
+            "WebSocket connection limit reached ({}/{}), rejecting new connection",
+            active, max_connections
+        );
+        state.metrics.increment_auth_failure();
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
+
     ws.on_upgrade(|socket| handle_socket(socket, state))
 }
 
