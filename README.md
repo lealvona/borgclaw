@@ -160,9 +160,9 @@ Current skill lifecycle status:
 | OpenAI | ✅ Assimilated | `OPENAI_API_KEY` |
 | Anthropic | ✅ Assimilated | `ANTHROPIC_API_KEY` |
 | Google | ✅ Assimilated | `GOOGLE_API_KEY` |
-| **Kimi** | 🆕 New | `KIMI_API_KEY` |
-| **MiniMax** | 🆕 New | `MINIMAX_API_KEY` |
-| **Z.ai** | 🆕 New | `Z_API_KEY` |
+| Kimi | ✅ Assimilated | `KIMI_API_KEY` |
+| MiniMax | ✅ Assimilated | `MINIMAX_API_KEY` |
+| Z.ai | ✅ Assimilated | `Z_API_KEY` |
 | Ollama | ✅ Local node | Local |
 
 Provider credentials can also be managed as encrypted named provider profiles. The active profile is referenced from `agent.provider_profile`, which keeps secrets out of `config.toml`.
@@ -227,6 +227,8 @@ start http://localhost:3000  # Windows
 borgclaw providers list                    # Show configured provider profiles
 borgclaw processes list                    # Inspect persisted background command processes
 ./scripts/install-docker-sandbox.sh        # Build the optional base + remote Docker sandbox images
+./scripts/install.sh                       # Install borgclaw + borgclaw-gateway to ~/.local/bin
+./scripts/uninstall.sh                     # Remove installed binaries and PATH entries
 ```
 
 Use the `with-build-env` wrappers for manual Cargo commands. They keep temporary files under `.local/cache/tmp`, reuse the shared `target/` tree, and trim oversized incremental caches before they consume the machine.

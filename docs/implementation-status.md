@@ -4,7 +4,7 @@ This document tracks BorgClaw against the current README and `docs/` contract.
 
 It is additive status only. It does not narrow the documented feature set.
 
-Last reviewed: March 31, 2026, with code verification against the current CLI/runtime surfaces.
+Last reviewed: April 1, 2026, with code verification against the current CLI/runtime surfaces.
 
 Audit note:
 
@@ -36,6 +36,10 @@ Audit note:
 | Browser skill client | `complete` | Playwright/CDP surface, core shared runtime actions, local shared-runtime bridge coverage, and operational completeness are landed. |
 | STT/TTS/Image/QR/URL skills | `complete` | Typed config, shared runtime coverage, deeper integration coverage, and operational completeness are landed. |
 | Onboarding contract | `complete` | Provider registry, secure-store-backed integration setup, `.env` generation, operator UX, and live-auth flows are complete. |
+| Per-channel proxy URL (Telegram) | `complete` | `proxy_url` in `ChannelConfig` is validated and applied when building the Telegram reqwest client. Signal is explicitly N/A (subprocess transport). |
+| WebSocket connection limit | `complete` | Gateway rejects new WebSocket upgrades when `connections_active` exceeds `channels.websocket.extra.max_connections` (default 50) and returns HTTP 429. |
+| Compaction lifecycle notification | `complete` | `AgentResponse.metadata` carries `compacted: "true"` and `compaction_pass: "N"` when a session compaction is triggered, and the event is logged at INFO level. |
+| Install/uninstall helpers | `complete` | `scripts/install.sh` copies binaries to `~/.local/bin` and updates PATH. `scripts/uninstall.sh` removes binaries, PATH entries, and optionally config/state (`--purge`). |
 
 ## Completed Features Summary
 
@@ -109,13 +113,34 @@ Audit note:
 - ✅ Explicit memory backend selection with SQLite, PostgreSQL + pgvector, and in-memory modes
 - ✅ PostgreSQL hybrid recall with native full-text search, pgvector distance queries, and reciprocal-rank fusion
 - ✅ Foreground PTY command execution plus persisted background command runtime with operator list/show/cancel surfaces
+- ✅ Compaction lifecycle notification via `AgentResponse.metadata` (`compacted`, `compaction_pass`) and INFO log
+- ✅ WebSocket connection limit enforced at gateway upgrade (HTTP 429 when limit exceeded)
+- ✅ Per-channel `proxy_url` validated and applied for Telegram; documented as N/A for Signal
+- ✅ User-level install (`scripts/install.sh`) and uninstall (`scripts/uninstall.sh`) helpers
 
-## Temporary Limitations
+## Known Gaps (audited April 1, 2026)
 
-- The gateway now has lightweight per-session outbound queues for live WebSocket callback delivery, but broader multi-session state inspection, persisted web-chat history, and non-WebSocket callback ownership are still thinner than the stronger upstream control-plane models.
-- Explicitly declined and not planned: AWS Bedrock provider support, Composio integration, and Slack approval UI/buttons.
-- Residual release risk: `sqlx-postgres v0.7.4` still emits a Rust future-incompatibility warning for a future toolchain bump.
-- Final verification record: [FINAL_SHIPPABILITY_AUDIT_2026-03-30](FINAL_SHIPPABILITY_AUDIT_2026-03-30.md).
+The following items are tracked accurately against the code. None narrow the documented feature set — they are known incomplete areas.
+
+| Gap | Detail |
+|---|---|
+| Web-chat session history persistence | Sessions are in-memory only; gateway restart loses all active sessions. Tracked in roadmap Priority 1. |
+| Gateway HTTP rate limiting | Per-webhook-trigger rate limits exist. A per-connection WebSocket limit is now enforced via `channels.websocket.extra.max_connections` (default 50). Global per-IP HTTP rate limiting is not yet implemented. Tracked in roadmap Priority 2. |
+| Gateway authentication depth | Authentication is pairing-based. No bearer token or per-request API key validation on individual HTTP requests. Tracked in roadmap Priority 2. |
+| Compaction lifecycle notifications | Compaction events are now surfaced in `AgentResponse.metadata` (`compacted: "true"`, `compaction_pass: "N"`) and logged at INFO level. Operator-facing notification endpoints are not yet implemented. |
+| `proxy_url` for Signal channel | Architecturally N/A: Signal uses the `signal-cli` subprocess for all network I/O; there is no reqwest client to configure. `proxy_url` is honoured for Telegram. |
+| Unified approval-callback ownership | OAuth callbacks notify the originating channel, but approvals are tool-scoped rather than session-scoped. |
+| Password-gated secret-store unlock | Secret store is key-file backed. Interactive password-gated unlock is not yet implemented. Tracked in roadmap Priority 4. |
+
+## Explicitly Declined
+
+Not planned: AWS Bedrock provider support, Composio integration, Slack approval UI/buttons.
+
+## Residual Release Risk
+
+`sqlx-postgres v0.7.4` emits a Rust future-incompatibility warning for a future toolchain bump.
+
+Final verification record: [FINAL_SHIPPABILITY_AUDIT_2026-03-30](FINAL_SHIPPABILITY_AUDIT_2026-03-30.md).
 
 ## Historical Note
 
