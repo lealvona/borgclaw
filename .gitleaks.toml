@@ -1,0 +1,16 @@
+# gitleaks config — extend the default ruleset, allowlist known false positives.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Vendored deps + WebSocket protocol header (not real secrets)"
+# Vendored third-party source is not our code / not our secrets.
+paths = [
+  '''third_party/''',
+]
+# 'Sec-WebSocket-Key' is a WebSocket handshake header, not a credential.
+# Match the whole source line, not the extracted secret value.
+regexTarget = "line"
+regexes = [
+  '''(?i)sec-websocket-key''',
+]
