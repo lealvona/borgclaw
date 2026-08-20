@@ -356,6 +356,10 @@ impl Channel for SignalChannel {
             self.data_path = PathBuf::from(path);
         }
 
+        // proxy_url is not applicable for Signal: all network I/O is handled by the
+        // signal-cli subprocess, which manages its own transport. There is no reqwest
+        // client to configure here.
+
         self.allowed_users = config.allow_from.clone();
 
         std::fs::create_dir_all(&self.data_path).map_err(|e| {

@@ -563,6 +563,8 @@ impl Agent for SimpleAgent {
         }
         session.add_message(Message::user(message.clone()));
 
+        let mut compaction_occurred = false;
+        let mut compaction_pass_after: u32 = 0;
         {
             let memory_config = self.memory_config.clone();
             let model = self.config.model.clone();
@@ -621,6 +623,8 @@ impl Agent for SimpleAgent {
 
                 let session = self.ensure_session(&session_id, group_id);
                 session.apply_compaction(summary, keep_recent, keep_important);
+                compaction_occurred = true;
+                compaction_pass_after = session.compaction_pass;
             }
         }
         // Run the agent loop: get LLM response, execute tools if needed, get final response
@@ -638,6 +642,24 @@ impl Agent for SimpleAgent {
         if matches!(self.state, AgentState::Processing) {
             self.state = AgentState::Idle;
         }
+
+        if compaction_occurred {
+            tracing::info!(
+                "Session compacted (pass {}): context window trimmed for session {}",
+                compaction_pass_after,
+                ctx.session_id.0
+            );
+            let mut response = final_response;
+            response
+                .metadata
+                .insert("compacted".to_string(), "true".to_string());
+            response.metadata.insert(
+                "compaction_pass".to_string(),
+                compaction_pass_after.to_string(),
+            );
+            return response;
+        }
+
         final_response
     }
 

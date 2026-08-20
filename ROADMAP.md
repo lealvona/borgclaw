@@ -2,11 +2,18 @@
 
 ## Status
 
-As of March 31, 2026, the original contract-repair roadmap is effectively complete. BorgClaw now has the documented shared runtime, memory/scheduler/sub-agent persistence, skill lifecycle, provider profiles, Docker command sandbox, and gateway/control-plane baseline.
+As of April 1, 2026, the original contract-repair roadmap is complete and a second pass of partial-implementation gaps has been closed. The baseline now includes:
 
-The roadmap is no longer about "make the README true." It is now about improving implementation quality, multi-user correctness, and operator ergonomics on top of the landed baseline.
+- Shared runtime, memory/scheduler/sub-agent persistence, skill lifecycle, provider profiles, Docker command sandbox, gateway/control-plane baseline (March 2026)
+- Compaction lifecycle notifications surfaced in `AgentResponse.metadata`
+- WebSocket connection limit at the gateway upgrade path (HTTP 429)
+- Per-channel `proxy_url` validated and applied for Telegram; documented as N/A for Signal
+- User-level install and uninstall scripts (`scripts/install.sh`, `scripts/uninstall.sh`)
+- All 7 LLM providers (OpenAI, Anthropic, Google, Kimi, MiniMax, Z.ai, Ollama) fully integrated
 
-Historical execution records remain in:
+The roadmap is now focused on multi-user correctness, session delivery completeness, and operator ergonomics.
+
+Historical execution records:
 
 - `docs/IMPLEMENTATION_AUDIT_2026-03-29.md`
 - `docs/IMPLEMENTATION_PLAN_2026-03-30.md`
@@ -28,34 +35,37 @@ Why this matters:
 
 ### Priority 2: Multi-Tenant And Gateway Hardening
 
-- Tighten gateway authentication and rate limiting for remote/operator-facing surfaces.
-- Make session state explicit and inspectable (`idle`, `running`, `waiting`, `error`) instead of inferring everything from scattered metrics.
-- Strengthen channel/session ownership so approvals, callbacks, and background completions all route back through one authoritative session model.
-- Continue reducing shell-mediated gateway/control-plane operations in favor of typed internal paths.
+- Session state machine (`idle`, `running`, `waiting`, `error`) is now explicit in the gateway WebSocket handler. ✅
+- WebSocket connection limit (HTTP 429) is now enforced at the gateway upgrade path. ✅
+- Remaining: per-IP HTTP rate limiting for all gateway endpoints (not just WebSocket).
+- Remaining: per-request authentication beyond pairing (bearer token or API key validation on individual requests).
+- Remaining: session-scoped approval ownership so approvals, callbacks, and background completions route through one authoritative session model.
+- Shell-mediated gateway operations: no shell interpolation was found; operations are type-safe. ✅
 
 Why this matters:
-- The current gateway now has a better operator surface and live callback routing, but it is still thinner than the stronger control-plane and multi-tenant models visible upstream.
+- The gateway now has an explicit session state machine and a connection limit, but per-request auth and per-IP rate limiting are still absent for the HTTP API surface.
 
 ### Priority 3: Context And Execution Discipline
 
-- Enforce stricter bounds on history forwarded into isolated command/container execution contexts.
-- Keep compaction and memory continuity transparent to operators with clearer lifecycle notifications and failure-state summaries.
-- Extend regression coverage around tool-call recovery, context overflow, and long-running session behavior.
-- Keep PTY/background execution behavior aligned with the same policy and audit guarantees already used elsewhere.
+- Hard caps on history forwarded into sessions are enforced via `max_messages` and `session_max_entries`. ✅
+- Compaction lifecycle notifications are now surfaced in `AgentResponse.metadata` and logged at INFO. ✅
+- Remaining: operator-facing endpoint or event stream for compaction events (current notification is metadata-only).
+- Remaining: regression coverage for tool-call recovery, context overflow, and long-running session behavior.
+- PTY support and background execution are landed with host-only restriction documented. ✅
 
 Why this matters:
-- The platform already supports a lot of runtime surface area; the next gains come from making that surface more predictable under pressure.
+- Compaction is now observable. The remaining gap is surfacing it to operators through the gateway event stream.
 
 ### Priority 4: Operator Workflow And Release Ergonomics
 
-- Add first-class install/uninstall helpers for local binary and launcher integration.
-- Implement password-gated secret-store unlock as a first-class operator flow, not just file-key-backed encryption hidden behind bootstrap state.
-- Define the unlock lifecycle clearly across bootstrap, onboarding, CLI commands, scripts, and automation-safe non-interactive paths.
-- Standardize provider/integration credential shapes where possible (`api_key`, `oauth_token`, profile id) to reduce per-provider drift.
-- Add explicit nightly/release automation documentation and implementation when the operator workflow is stable enough to freeze.
+- Install and uninstall helpers are now first-class scripts (`scripts/install.sh`, `scripts/uninstall.sh`). ✅
+- Provider credential shapes are standardized via `ProviderProfile` (`api_key`, `env_key`, `model`). ✅
+- Remaining: password-gated secret-store unlock as a first-class operator flow (currently file-key-backed only).
+- Remaining: clear unlock lifecycle documented across bootstrap, onboarding, CLI, and automation-safe non-interactive paths.
+- Remaining: explicit nightly/release automation documentation.
 
 Why this matters:
-- Setup, unlock, and release ergonomics are now the main non-runtime polish gap.
+- Install/uninstall ergonomics are closed. The main remaining gap is the secret-store unlock flow.
 
 ## Explicit Non-Goals
 
